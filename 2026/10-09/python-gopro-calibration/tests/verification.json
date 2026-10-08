@@ -1,0 +1,38 @@
+{
+  "opencv": "4.14.0",
+  "numpy": "2.5.3",
+  "seed": 42,
+  "generated_calibration_images": 24,
+  "detected_images": 21,
+  "calibration_rms_px": 0.16563508270120586,
+  "held_out_projection_rms_px": 0.7012698553994757,
+  "focal_relative_error": 0.0014728242483950105,
+  "line_rms_before_px": 0.7986356163465043,
+  "line_rms_after_px": 0.004844271068730267,
+  "corrected_image_line_rms_px": 0.10877524316310883,
+  "input_checks": 13,
+  "true_K": [
+    [
+      490.0,
+      0.0,
+      477.0
+    ],
+    [
+      0.0,
+      495.0,
+      359.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "true_D": [
+    -0.12,
+    0.025,
+    -0.004,
+    0.0005
+  ],
+  "note": "同じ魚眼モデルでの動作検証です。実機への適合性は未検証です。"
+}
