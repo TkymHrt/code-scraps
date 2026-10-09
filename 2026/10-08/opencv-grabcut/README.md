@@ -11,6 +11,7 @@
 | `ex03_outline.py` | `result_03.png` | フル解像度で GrabCut、最大輪郭を赤縁で描く |
 | `ex04_side_edges.py` | `result_04.png` | 半分縮小で GrabCut、左右端だけ赤線で描く |
 | `ex05_side_lengths.py` | `result_05.png` / `result_05.csv` | 半分縮小で GrabCut、左右端の長さと合計を計測 |
+| `ex06_mask.py` | `result_06_initial.png` / `result_06_mask.png` / `result_06.png` | 先頭の数値を変えて、マスクだけを試す独立スクリプト |
 
 元 `main.py` は `ex03_outline.py` にリネーム。番号と出力を一致させて比べやすくした。
 
@@ -21,6 +22,7 @@ uv sync
 uv run ex03_outline.py
 uv run ex04_side_edges.py
 uv run ex05_side_lengths.py
+uv run ex06_mask.py
 # input.png を読んで各番号の result_*.png を書く。ex05 は CSV も書く
 ```
 
@@ -32,6 +34,36 @@ uv run ex05_side_lengths.py
 mm に換算するには、元画像の `1 px あたり何 mm か` が別途必要です。
 半分縮小による細部の省略や、マスクを拡大した際の階段状の境界が計測値に影響します。
 折り返した裂け目など、同じ行に複数の境界がある部分は最外側の端で代表します。
+
+## マスクだけ試す（ex06）
+
+`ex06_mask.py` は、初期範囲を作ってGrabCutを動かし、画像を保存するだけの独立スクリプトです。
+先頭の数値を直接変更して実行します。
+
+```python
+LEFT = 0.30
+RIGHT = 0.75
+TOP = 0.00
+BOTTOM = 1.00
+```
+
+0は左端・上端、1は右端・下端です。画像の幅・高さから位置を計算するので、縦長・横長のどちらでも使えます。
+板全体が入るように範囲を指定し、範囲の外には背景を残してください。
+
+```sh
+uv run ex06_mask.py
+```
+
+| 出力 | 見るもの |
+| --- | --- |
+| `result_06_initial.png` | 初期の板候補の矩形。範囲外を黒く表示 |
+| `result_06_mask.png` | GrabCut後の白黒マスク。白が前景、黒が背景 |
+| `result_06.png` | マスクを使って背景を黒くした抽出画像 |
+
+比較を残すときは `OUTPUT_PREFIX = "result_06_a"` のように出力名を変えます。
+`INPUT_PATH` は入力名、`SCALE` は処理時の縮小倍率、`ITERATIONS` はGrabCutの繰り返し回数です。
+GUI・引数・長さ計測・自動候補選び・輪郭の加工は入れていません。
+詳しい数値の意味は `GUIDE.md` の8章にまとめています。
 
 ## チェック（2026-10-09 時点で全部通過）
 
@@ -46,6 +78,7 @@ uvx ty check .
 - 依存: `numpy 2.5.3`, `opencv-python 5.0.0.93`
 - `uv sync` 不要でも `uvx` ならそのまま動く（ty は型解決のために `.venv` を使う）
 - `ex05` は実画像で実行確認し、幅の違う長方形で上辺・下辺を含まないこと、斜めの側辺で斜めの距離を含むこと、CSVと表示の一致、板が見つからない場合のエラーを確認
+- `ex06` は元画像、縦長の画像、板が横向きの縦長画像で、出力サイズとマスクの保存を確認
 
 ## 元コードからの差分（通過のための修正）
 
