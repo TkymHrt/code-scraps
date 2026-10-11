@@ -1,9 +1,13 @@
 """GrabCut フル解像度で板抽出、最大輪郭を赤縁で描く."""
 
+from pathlib import Path
+
 import cv2 as cv
 import numpy as np
 
-image = cv.imread("input.png")
+directory = Path(__file__).resolve().parent
+output_directory = directory / "results"
+image = cv.imread(str(directory / "input.png"))
 if image is None:
     msg = "input.png が見つかりません"
     raise FileNotFoundError(msg)
@@ -28,4 +32,5 @@ largest = max(contours, key=cv.contourArea)
 result = image.copy()
 cv.drawContours(result, [largest], -1, (0, 0, 255), 2)
 
-cv.imwrite("result_03.png", result)
+output_directory.mkdir(parents=True, exist_ok=True)
+cv.imwrite(str(output_directory / "result_03.png"), result)

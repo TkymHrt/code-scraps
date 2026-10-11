@@ -2,11 +2,14 @@
 
 import csv
 import sys
+from pathlib import Path
 
 import cv2 as cv
 import numpy as np
 
-image = cv.imread("input.png")
+directory = Path(__file__).resolve().parent
+output_directory = directory / "results"
+image = cv.imread(str(directory / "input.png"))
 if image is None:
     msg = "input.png が見つかりません"
     raise FileNotFoundError(msg)
@@ -97,11 +100,14 @@ for row, (label, length, color) in enumerate(measurements):
         lineType=cv.LINE_AA,
     )
 
-if not cv.imwrite("result_05.png", result):
+output_directory.mkdir(parents=True, exist_ok=True)
+if not cv.imwrite(str(output_directory / "result_05.png"), result):
     msg = "result_05.png を保存できません"
     raise OSError(msg)
 
-with open("result_05.csv", "w", encoding="utf-8", newline="") as output:
+with (output_directory / "result_05.csv").open(
+    "w", encoding="utf-8", newline=""
+) as output:
     writer = csv.writer(output)
     writer.writerow(("edge", "length_px"))
     for label, length, _ in measurements:

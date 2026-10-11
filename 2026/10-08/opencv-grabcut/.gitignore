@@ -1,1 +1,4 @@
 **/*.png
+!/experiments/input_ai.png
+/practical/results/
+/experiments/results/
