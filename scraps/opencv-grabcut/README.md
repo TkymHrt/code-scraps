@@ -5,6 +5,9 @@
 
 実際に使うコードはこのフォルダの直下、抽出方法の試作は `sandbox/`、自動検証は `tests/` にあります。
 
+現在の段階別の成果・未実装の部分と、録画映像の連続処理・位置追跡・リアルタイム解析までの工程は
+[PROGRESS.md](PROGRESS.md) にまとめています。
+
 | スクリプト | 用途 |
 | --- | --- |
 | `outline.py` | 元の解像度で外側の輪郭を描く |
@@ -58,6 +61,7 @@ AI画像や合成画像の確認は、実試料での抽出精度を保証する
 
 ```powershell
 uv run python -m unittest discover -s tests
+uv run tests/verify_stages.py --with-local-inputs --out tests/results/stages_new
 uv run ruff check .
 uv run ruff format --check .
 uv run ty check .
