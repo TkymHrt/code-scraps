@@ -5,6 +5,7 @@
 | フォルダ | 用途 | 手順 |
 | --- | --- | --- |
 | `practical/` | ex03〜05をフル解像度・同一抽出条件で使う | [実践用ガイド](practical/GUIDE.md) |
+| `practical/quantitative/` | 複数画像の計測、基準との差分、間隔への感度、幅を別々に比較する | [定量比較の使い方・検証結果](practical/quantitative/README.md) |
 | `experiments/` | 旧縮小版、マスク調整、AI画像での反射除去を比較する | [比較試験の一覧](experiments/README.md) |
 
 ```text
@@ -14,6 +15,7 @@ opencv-grabcut/
 │  ├─ ex04_side_edges.py      左右の端
 │  ├─ ex05_side_lengths.py    左右側辺の長さ、画像・CSV
 │  ├─ GUIDE.md
+│  ├─ quantitative/           一括計測と独立した3種類の定量比較
 │  └─ results/                実画像での結果（実行時に作成）
 ├─ experiments/
 │  ├─ ex03〜ex10              旧方式と独立した比較試験
@@ -74,6 +76,16 @@ uv run experiments/ex10_reflection_refine.py
 
 試験用コードはそれぞれ単独で動き、入力は `experiments/`、出力は `experiments/results/` が基準です。
 AI生成画像での動作確認は、実画像での抽出精度を保証するものではありません。
+
+## 複数画像を定量比較する
+
+追加の4本は [practical/quantitative/](practical/quantitative/README.md) にあります。
+画像一覧CSVを使って左右長と点列を保存し、基準からの増減、測る間隔の影響、高さごとの幅を別々に確認できます。
+既知の形状で4本を試す場合は、次のコマンドで合成画像と比較CSVを作れます。
+
+```sh
+uv run experiments/verify_quantitative.py
+```
 
 ## チェック
 

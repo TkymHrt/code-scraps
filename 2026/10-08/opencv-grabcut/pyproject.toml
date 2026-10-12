@@ -21,6 +21,8 @@ package = false
 [tool.ruff]
 target-version = "py314"
 line-length = 88
+# 検証で保存したスクリプトのコピーは、元コードと二重にチェックしない。
+extend-exclude = ["experiments/results", "practical/**/results"]
 
 [tool.ruff.lint]
 select = [
@@ -62,3 +64,6 @@ all = "error"
 
 [tool.ty.environment]
 python-version = "3.14"
+
+[tool.ty.src]
+exclude = ["experiments/results", "practical/**/results"]
