@@ -1,0 +1,6 @@
+**/*.png
+!/sandbox/input_ai.png
+/results/
+/samples.csv
+/sandbox/results/
+/tests/results/
