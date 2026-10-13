@@ -35,6 +35,11 @@ def capture(root, path):
     root.attributes("-alpha", 1)
     root.lift()
     root.update()
+    # Windows側の描画が反映されてからウィンドウを撮る。
+    painted = tk.BooleanVar(master=root, value=False)
+    root.after(100, painted.set, True)
+    root.wait_variable(painted)
+    root.update()
     # 表示倍率による論理座標と画素座標のずれを避け、ウィンドウを直接撮る。
     ImageGrab.grab(window=root.winfo_id()).save(path)
     root.attributes("-alpha", 0)
@@ -429,23 +434,45 @@ def exercise_comparison(project, output, root, screenshots):
 def exercise_length_comparison(project, output, root, screenshots):
     gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
     errors = []
-    sources = project / "tests/results/shape_pipeline_20261013"
-    baseline_path = output / "専用 基準.csv"
-    target_path = output / "専用 比較対象.csv"
-    baseline_path.write_bytes(
-        (sources / "original/results/03_side_lengths.csv").read_bytes()
-    )
-    target_path.write_bytes(
-        (sources / "added_notch/results/03_side_lengths.csv").read_bytes()
-    )
-    original_bytes = (baseline_path.read_bytes(), target_path.read_bytes())
+    paths = []
+    original_bytes = []
+    for index, lengths in enumerate(
+        (
+            (120, 122, 242),
+            (123, 121, 244),
+            (121, 124, 245),
+            (126, 125, 251),
+            (125, 127, 252),
+        )
+    ):
+        path = output / "撮影試験" / f"{index + 1:02d}" / "03_side_lengths.csv"
+        path.parent.mkdir(parents=True)
+        with path.open("w", encoding="utf-8-sig", newline="") as target:
+            writer = csv.writer(target)
+            writer.writerow(("edge", "length_px", "start_y", "end_y"))
+            for edge, length in zip(("left", "right", "total"), lengths):
+                writer.writerow((edge, f"{length:.2f}", 20, 140))
+        paths.append(path)
+        original_bytes.append(path.read_bytes())
 
     def exercise():
         root.deiconify()
         root.update()
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
-        table = next(w for w in widgets if isinstance(w, ttk.Treeview))
+        tables = [w for w in widgets if isinstance(w, ttk.Treeview)]
+        input_table, lengths_table, delta_table, previous_table = tables
+        notebook = next(w for w in widgets if isinstance(w, ttk.Notebook))
+        editor = next(
+            w
+            for w in widgets
+            if isinstance(w, ttk.Entry) and str(w.cget("state")) == "normal"
+        )
+        path_entry = next(
+            w
+            for w in widgets
+            if isinstance(w, ttk.Entry) and str(w.cget("state")) == "readonly"
+        )
         status_label = root.winfo_children()[-1]
 
         def status_text():
@@ -455,33 +482,84 @@ def exercise_length_comparison(project, output, root, screenshots):
             buttons[name].invoke()
             root.update()
 
-        def select(name, path):
-            with patch.object(filedialog, "askopenfilename", return_value=str(path)):
-                invoke(name)
+        def add(items):
+            with patch.object(
+                filedialog,
+                "askopenfilenames",
+                return_value=tuple(str(path) for path in items),
+            ):
+                invoke("CSVを追加")
 
-        assert buttons["比較CSVを保存"].instate(["disabled"])
-        invoke("比較する")
-        assert "両方" in status_text()
-        select("基準CSVを選ぶ", baseline_path)
-        select("比較対象CSVを選ぶ", target_path)
-        assert not table.get_children()
-        invoke("比較する")
-        expected = (
-            ("左", "1262.34", "1420.36", "+158.02"),
-            ("右", "1298.14", "1297.55", "-0.59"),
-            ("合計", "2560.48", "2717.91", "+157.43"),
-        )
+        def select(*indices):
+            input_table.selection_set(tuple(str(index) for index in indices))
+            input_table.event_generate("<<TreeviewSelect>>")
+            root.update()
 
-        def table_values():
+        def values(table):
             return tuple(
                 tuple(table.item(item, "values")) for item in table.get_children()
             )
 
-        assert table_values() == expected, table_values()
+        assert buttons["比較CSVを保存"].instate(["disabled"])
+        invoke("比較する")
+        assert "2枚以上" in status_text()
+        add(paths[:1])
+        invoke("比較する")
+        assert "2枚以上" in status_text()
+        add(paths)
+        assert len(input_table.get_children()) == 5
+        invoke("比較する")
+        assert values(lengths_table) == (
+            ("撮影01", "120.00", "122.00", "242.00"),
+            ("撮影02", "123.00", "121.00", "244.00"),
+            ("撮影03", "121.00", "124.00", "245.00"),
+            ("撮影04", "126.00", "125.00", "251.00"),
+            ("撮影05", "125.00", "127.00", "252.00"),
+        )
+        assert values(previous_table)[0] == ("撮影01", "—", "—", "—")
+        assert values(previous_table)[1] == ("撮影02", "+3.00", "-1.00", "+2.00")
+        before = values(lengths_table)
+        add(paths)
+        add(())
+        assert values(lengths_table) == before and len(input_table.get_children()) == 5
         assert buttons["比較CSVを保存"].instate(["!disabled"])
+
+        select(2)
+        assert path_entry.get() == str(paths[2])
+        invoke("選択を基準にする")
+        assert not lengths_table.get_children()
+        assert input_table.item("2", "values")[1] == "基準"
+        root.setvar(str(editor.cget("textvariable")), "中間撮影")
+        invoke("撮影名を変更")
+        assert input_table.item("2", "values")[2] == "中間撮影"
+        invoke("比較する")
+        assert values(delta_table) == (
+            ("撮影01", "-1.00", "-2.00", "-3.00"),
+            ("撮影02", "+2.00", "-3.00", "-1.00"),
+            ("中間撮影", "+0.00", "+0.00", "+0.00"),
+            ("撮影04", "+5.00", "+1.00", "+6.00"),
+            ("撮影05", "+4.00", "+3.00", "+7.00"),
+        )
+        root.setvar(str(editor.cget("textvariable")), "撮影02")
+        invoke("撮影名を変更")
+        assert "重複" in status_text() and len(lengths_table.get_children()) == 5
+        select(2)
+        invoke("比較する")
+        assert "baseline" in delta_table.item(delta_table.get_children()[2], "tags")
         if screenshots:
-            capture(root, output / "length_comparison.png")
-        root.geometry("760x430")
+            for index, filename in enumerate(
+                (
+                    "length_comparison.png",
+                    "length_baseline_delta.png",
+                    "length_previous_delta.png",
+                )
+            ):
+                notebook.select(index)
+                root.update()
+                capture(root, output / filename)
+            notebook.select(0)
+            root.update()
+        root.geometry("1000x700")
         root.update()
         for name, button in buttons.items():
             assert button.winfo_ismapped(), name
@@ -491,46 +569,126 @@ def exercise_length_comparison(project, output, root, screenshots):
                 button.winfo_rooty() + button.winfo_height()
                 <= root.winfo_rooty() + root.winfo_height()
             ), name
-        for name, suffix in (("比較CSVを保存", ".csv"), ("左右のグラフを保存", ".png")):
-            path = output / f"専用 長さ比較{suffix}"
+
+        for name, suffix in (("比較CSVを保存", ".csv"), ("推移グラフを保存", ".png")):
+            path = output / f"撮影 推移{suffix}"
             with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
                 invoke(name)
             assert path.is_file()
-        with (output / "専用 長さ比較.csv").open(
-            encoding="utf-8-sig", newline=""
-        ) as source:
-            saved = list(csv.DictReader(source))
-        assert [row["delta_px"] for row in saved] == ["158.02", "-0.59", "157.43"]
-        with patch.object(
-            filedialog, "asksaveasfilename", return_value=str(baseline_path)
-        ):
-            invoke("比較CSVを保存")
-        assert "入力CSV" in status_text()
+        with (output / "撮影 推移.csv").open(encoding="utf-8-sig", newline="") as saved:
+            rows = list(csv.DictReader(saved))
+        assert len(rows) == 5 and all(row["baseline_id"] == "中間撮影" for row in rows)
+        assert rows[0]["previous_delta_total_px"] == ""
+        assert (
+            rows[-1]["delta_total_px"] == "7.00"
+            and rows[-1]["previous_delta_total_px"] == "1.00"
+        )
+        invoke("推移グラフを表示")
+        preview = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
+        assert preview.winfo_ismapped()
+        assert (
+            preview.winfo_rooty() + preview.winfo_height() <= root.winfo_screenheight()
+        )
+        invoke("推移グラフを表示")
+        assert (
+            len([w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]) == 1
+        )
+        if screenshots:
+            capture(preview, output / "length_graph_preview.png")
+        close_command = preview.protocol("WM_DELETE_WINDOW")
+        preview.tk.call(close_command)
+        root.update()
+        assert not preview.winfo_exists()
+        invoke("推移グラフを表示")
+        preview = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
+        for path in paths:
+            with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
+                invoke("比較CSVを保存")
+            assert "入力CSV" in status_text()
         with patch.object(filedialog, "asksaveasfilename", return_value=""):
             invoke("比較CSVを保存")
-        with patch.object(filedialog, "askopenfilename", return_value=""):
-            invoke("比較対象CSVを選ぶ")
-        assert table_values() == expected
-        assert buttons["比較CSVを保存"].instate(["!disabled"])
-        select("比較対象CSVを選ぶ", baseline_path)
-        assert not table.get_children()
-        assert buttons["比較CSVを保存"].instate(["disabled"])
+        assert len(lengths_table.get_children()) == 5
+
+        select(4)
+        invoke("上へ")
+        assert not preview.winfo_exists(), "撮影順変更後も古いグラフが残っています"
+        assert not previous_table.get_children() and buttons["比較CSVを保存"].instate(
+            ["disabled"]
+        )
+        assert input_table.item("2", "values")[1] == "基準"
         invoke("比較する")
-        assert "別々" in status_text()
-        select("比較対象CSVを選ぶ", target_path)
+        assert values(previous_table)[3] == ("撮影05", "+4.00", "+3.00", "+7.00")
+        assert values(previous_table)[4] == ("撮影04", "+1.00", "-2.00", "-1.00")
+        invoke("下へ")
         invoke("比較する")
-        target_path.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
+        assert values(previous_table)[4] == ("撮影05", "-1.00", "+2.00", "+1.00")
+
+        bad = output / "不正.csv"
+        bad.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
+        extra = output / "有効.csv"
+        extra.write_bytes(original_bytes[0])
+        add((extra, bad))
+        assert (
+            len(input_table.get_children()) == 5
+            and len(lengths_table.get_children()) == 5
+        )
+        assert "03_side_lengths.csv" in status_text(), status_text()
+
+        paths[4].write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
         invoke("比較する")
-        assert not table.get_children() and "03_side_lengths.csv" in status_text()
-        assert buttons["左右のグラフを保存"].instate(["disabled"])
+        assert (
+            not lengths_table.get_children() and "03_side_lengths.csv" in status_text()
+        )
+        assert buttons["推移グラフを保存"].instate(["disabled"])
         with patch.object(filedialog, "asksaveasfilename") as picker:
             invoke("比較CSVを保存")
             picker.assert_not_called()
-        target_path.write_bytes(original_bytes[1])
-        assert (baseline_path.read_bytes(), target_path.read_bytes()) == original_bytes
+        paths[4].write_bytes(original_bytes[4])
+        invoke("比較する")
+        select(1, 3)
+        invoke("選択を削除")
+        assert len(input_table.get_children()) == 3
+        invoke("比較する")
+        assert [row[0] for row in values(lengths_table)] == [
+            "撮影01",
+            "中間撮影",
+            "撮影05",
+        ]
+        select(1)
+        invoke("選択を削除")
+        invoke("比較する")
+        assert "基準" in status_text() and not delta_table.get_children()
+        select(0)
+        invoke("選択を基準にする")
+        invoke("比較する")
+        assert len(delta_table.get_children()) == 2
+        select(0, 1)
+        invoke("選択を削除")
+        assert not input_table.get_children() and buttons["比較CSVを保存"].instate(
+            ["disabled"]
+        )
+
+        # 画面より多い撮影でも、一覧と結果の最後の行までたどれる。
+        many_paths = []
+        for index in range(12):
+            path = output / f"追加撮影{index + 1:02d}.csv"
+            path.write_bytes(original_bytes[0])
+            many_paths.append(path)
+        add(many_paths)
+        invoke("比較する")
+        assert len(lengths_table.get_children()) == 12
+        for table in tables:
+            last = table.get_children()[-1]
+            if table is not input_table:
+                notebook.select(table.master)
+            root.update()
+            table.see(last)
+            root.update()
+            assert table.bbox(last), f"最後の撮影までスクロールできません: {table}"
+        assert [path.read_bytes() for path in paths] == original_bytes
         assert not errors, errors
         print(
-            "長さ専用GUI: 2枚選択・表示・差分・CSV/PNG保存・キャンセル・結果更新・入力保護を確認"
+            "長さ専用GUI: 複数追加・撮影順・基準変更・撮影名・3表・推移プレビュー・複数削除・結果更新・保存・入力保護を確認"
         )
 
     with (
