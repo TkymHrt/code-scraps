@@ -17,7 +17,7 @@ import numpy as np
 
 class SubmissionTests(unittest.TestCase):
     def submission_source(self, filename: str, **overrides: object) -> str:
-        """コピーの設定だけを合成画像用に替え、手元の実画像設定を使わない."""
+        """コピーの設定だけを合成画像用に替え、手元の生成画像設定を使わない."""
         path = Path(__file__).resolve().parents[1] / "submissions" / filename
         source = path.read_text(encoding="utf-8")
         stem = path.stem
@@ -138,10 +138,10 @@ class SubmissionTests(unittest.TestCase):
             self.assertIsNotNone(mask)
             np.testing.assert_array_equal(mask, expected)
 
-    def test_real_side_edges_match_known_shapes_and_overlay(self) -> None:
-        """実際のGrabCutで5形状を抽出し、全行の座標と赤線を照合する."""
+    def test_real_edges_match_known_shapes_and_overlay(self) -> None:
+        """実際のGrabCutで5形状を抽出し、全行の内部座標と赤線を照合する."""
         project = Path(__file__).resolve().parents[1]
-        filename = "03_side_edges.py"
+        filename = "03_side_lengths.py"
         source = self.submission_source(filename)
         with self.temporary_directory() as temporary:
             for shape in (
@@ -186,14 +186,10 @@ class SubmissionTests(unittest.TestCase):
                         0,
                         completed.stderr.decode(errors="replace"),
                     )
-                    with (directory / "results/03_side_edges.csv").open(
-                        encoding="utf-8", newline=""
-                    ) as output:
-                        reader = csv.reader(output)
-                        self.assertEqual(next(reader), ["y", "left_x", "right_x"])
-                        actual = [tuple(map(int, row)) for row in reader]
+                    values = runpy.run_path(str(script))
+                    actual = values["edge_rows"]
                     self.assertEqual(actual, expected)
-                    overlay = cv.imread(str(directory / "results/03_side_edges.png"))
+                    overlay = cv.imread(str(directory / "results/03_side_lengths.png"))
                     if overlay is None:
                         self.fail("左右端の重ね画像を読み込めません")
                     self.assertEqual(overlay.shape, image.shape)
@@ -204,8 +200,8 @@ class SubmissionTests(unittest.TestCase):
                     for y, x in ((20, 70), (140, 70), (10, 53)):
                         np.testing.assert_array_equal(overlay[y, x], image[y, x])
 
-    def test_real_side_lengths_match_known_lengths_and_coordinate_csv(self) -> None:
-        """7形状で既知の長さと、独立実行した03の点列からの長さを照合する."""
+    def test_real_side_lengths_match_known_lengths(self) -> None:
+        """7形状で既知の側辺長と、単独実行した03の長さCSVを照合する."""
         project = Path(__file__).resolve().parents[1]
         with self.temporary_directory() as temporary:
             for shape in (
@@ -242,8 +238,8 @@ class SubmissionTests(unittest.TestCase):
                     image[mask > 0] = 200
                     self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
 
-                    # 04は03がない状態で実行し、前段階への依存がないことを確認。
-                    for filename in ("04_side_lengths.py", "03_side_edges.py"):
+                    # 03だけをコピーし、前段階への依存がないことを確認。
+                    for filename in ("03_side_lengths.py",):
                         script = directory / filename
                         script.write_text(
                             self.submission_source(filename),
@@ -276,7 +272,7 @@ class SubmissionTests(unittest.TestCase):
                         "right": f"{right_length:.2f}",
                         "total": f"{left_length + right_length:.2f}",
                     }
-                    with (directory / "results/04_side_lengths.csv").open(
+                    with (directory / "results/03_side_lengths.csv").open(
                         encoding="utf-8", newline=""
                     ) as output:
                         reader = csv.DictReader(output)
@@ -292,20 +288,6 @@ class SubmissionTests(unittest.TestCase):
                     for row in rows:
                         self.assertEqual((row["start_y"], row["end_y"]), ("0", "159"))
 
-                    with (directory / "results/03_side_edges.csv").open(
-                        encoding="utf-8", newline=""
-                    ) as output:
-                        points = list(csv.DictReader(output))
-                    for edge in ("left", "right"):
-                        length_from_csv = sum(
-                            math.hypot(
-                                int(after[f"{edge}_x"]) - int(before[f"{edge}_x"]),
-                                int(after["y"]) - int(before["y"]),
-                            )
-                            for before, after in zip(points, points[1:])
-                        )
-                        self.assertEqual(lengths[edge], f"{length_from_csv:.2f}")
-
     def test_side_lengths_reject_empty_and_single_row_without_saving(self) -> None:
         """側辺長が成立しない抽出結果で、ゼロ長のCSVを保存しない."""
         with self.temporary_directory() as temporary:
@@ -318,7 +300,7 @@ class SubmissionTests(unittest.TestCase):
                     directory.mkdir()
                     image = np.full((100, 100, 3), 100, np.uint8)
                     self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
-                    filename = "04_side_lengths.py"
+                    filename = "03_side_lengths.py"
                     script = directory / filename
                     script.write_text(
                         self.submission_source(filename),
@@ -338,43 +320,11 @@ class SubmissionTests(unittest.TestCase):
                     ):
                         runpy.run_path(str(script))
                     self.assertFalse(
-                        (directory / "results/04_side_lengths.csv").exists()
+                        (directory / "results/03_side_lengths.csv").exists()
                     )
                     self.assertFalse(
-                        (directory / "results/04_side_lengths.png").exists()
+                        (directory / "results/03_side_lengths.png").exists()
                     )
-
-    def test_side_edges_save_single_row_points(self) -> None:
-        """1行だけの抽出結果でも、CSVと同じ端の画素を表示する."""
-        with self.temporary_directory() as temporary:
-            directory = Path(temporary)
-            image = np.full((100, 100, 3), 100, np.uint8)
-            self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
-            filename = "03_side_edges.py"
-            script = directory / filename
-            script.write_text(self.submission_source(filename), encoding="utf-8")
-
-            def single_row(
-                image: np.ndarray, labels: np.ndarray, *unused: object
-            ) -> None:
-                labels[:] = cv.GC_BGD
-                labels[50, 40:61] = cv.GC_PR_FGD
-
-            with patch.object(cv, "grabCut", side_effect=single_row):
-                runpy.run_path(str(script))
-            with (directory / "results/03_side_edges.csv").open(
-                encoding="utf-8", newline=""
-            ) as output:
-                self.assertEqual(
-                    list(csv.reader(output)),
-                    [["y", "left_x", "right_x"], ["50", "40", "60"]],
-                )
-            overlay = cv.imread(str(directory / "results/03_side_edges.png"))
-            if overlay is None:
-                self.fail("左右端の重ね画像を読み込めません")
-            self.assertEqual(overlay[50, 40].tolist(), [0, 0, 255])
-            self.assertEqual(overlay[50, 60].tolist(), [0, 0, 255])
-            np.testing.assert_array_equal(overlay[50, 50], image[50, 50])
 
     def test_real_measurement_range_excludes_irregular_end_faces(self) -> None:
         """斜めで不規則な端面を除外し、元座標・長さ・確認画像を照合する."""
@@ -390,7 +340,7 @@ class SubmissionTests(unittest.TestCase):
             image = np.full((160, 140, 3), 35, np.uint8)
             image[mask > 0] = 200
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
-            for filename in ("04_side_lengths.py", "03_side_edges.py"):
+            for filename in ("03_side_lengths.py",):
                 source = self.submission_source(filename)
                 source = source.replace("START_Y = 0", "START_Y = 40")
                 source = source.replace("END_Y = None", "END_Y = 120")
@@ -407,14 +357,10 @@ class SubmissionTests(unittest.TestCase):
                 )
 
             expected = [(y, 60 if 75 <= y < 90 else 50, 90) for y in range(40, 121)]
-            with (directory / "results/03_side_edges.csv").open(
-                encoding="utf-8", newline=""
-            ) as output:
-                actual = [
-                    tuple(map(int, row.values())) for row in csv.DictReader(output)
-                ]
+            values = runpy.run_path(str(script))
+            actual = values["edge_rows"]
             self.assertEqual(actual, expected)
-            with (directory / "results/04_side_lengths.csv").open(
+            with (directory / "results/03_side_lengths.csv").open(
                 encoding="utf-8", newline=""
             ) as output:
                 rows = list(csv.DictReader(output))
@@ -429,12 +375,10 @@ class SubmissionTests(unittest.TestCase):
             )
             for row in rows:
                 self.assertEqual((row["start_y"], row["end_y"]), ("40", "120"))
-            overlay = cv.imread(str(directory / "results/03_side_edges.png"))
-            length_image = cv.imread(str(directory / "results/04_side_lengths.png"))
-            if overlay is None or length_image is None:
+            overlay = cv.imread(str(directory / "results/03_side_lengths.png"))
+            if overlay is None:
                 self.fail("計測範囲の確認画像を読み込めません")
             self.assertEqual(overlay.shape, image.shape)
-            np.testing.assert_array_equal(overlay, length_image)
             for y, left_x, right_x in expected:
                 self.assertEqual(overlay[y, left_x].tolist(), [0, 0, 255])
                 self.assertEqual(overlay[y, right_x].tolist(), [0, 0, 255])
@@ -450,7 +394,7 @@ class SubmissionTests(unittest.TestCase):
     def test_measurement_range_rejects_invalid_and_empty_selections(self) -> None:
         """範囲の誤り・試料なし・長さを測れない1行を保存前に検出する."""
         with self.temporary_directory() as temporary:
-            for filename in ("03_side_edges.py", "04_side_lengths.py"):
+            for filename in ("03_side_lengths.py",):
                 for name, start, end in (
                     ("negative", -1, 80),
                     ("reversed", 80, 40),
@@ -458,8 +402,6 @@ class SubmissionTests(unittest.TestCase):
                     ("empty", 0, 10),
                     ("single_row", 50, 50),
                 ):
-                    if filename == "03_side_edges.py" and name == "single_row":
-                        continue
                     with self.subTest(filename=filename, selection=name):
                         directory = Path(temporary) / f"{Path(filename).stem}_{name}"
                         directory.mkdir()
@@ -490,37 +432,13 @@ class SubmissionTests(unittest.TestCase):
                             (directory / "results" / f"{prefix}.csv").exists()
                         )
 
-    def test_side_edges_reject_empty_extraction_without_saving(self) -> None:
-        """抽出領域がない場合に、空の座標CSVや結果画像を保存しない."""
-        with self.temporary_directory() as temporary:
-            directory = Path(temporary)
-            image = np.full((100, 100, 3), 100, np.uint8)
-            self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
-            filename = "03_side_edges.py"
-            script = directory / filename
-            script.write_text(self.submission_source(filename), encoding="utf-8")
-
-            def empty_mask(
-                image: np.ndarray, labels: np.ndarray, *unused: object
-            ) -> None:
-                labels[:] = cv.GC_BGD
-
-            with (
-                patch.object(cv, "grabCut", side_effect=empty_mask),
-                self.assertRaisesRegex(ValueError, "試料の領域が見つかりません"),
-            ):
-                runpy.run_path(str(script))
-            self.assertFalse((directory / "results/03_side_edges.png").exists())
-            self.assertFalse((directory / "results/03_side_edges.csv").exists())
-
     def test_unicode_paths_with_spaces_relative_and_absolute(self) -> None:
         """日本語・空白・絶対/相対パスで、独立実行とPNG・CSV保存を確認する."""
         project = Path(__file__).resolve().parents[1]
         filenames = (
             "01_initial_regions.py",
             "02_grabcut_mask.py",
-            "03_side_edges.py",
-            "04_side_lengths.py",
+            "03_side_lengths.py",
         )
         with self.temporary_directory() as temporary:
             workspace = Path(temporary) / "日本語 フォルダ"
@@ -589,14 +507,7 @@ class SubmissionTests(unittest.TestCase):
                             np.testing.assert_array_equal(output, expected_mask)
                         else:
                             self.assertEqual(output.shape, image.shape)
-                        if filename == "03_side_edges.py":
-                            with output_csv.open(encoding="utf-8", newline="") as saved:
-                                self.assertEqual(
-                                    list(csv.reader(saved)),
-                                    [["y", "left_x", "right_x"]]
-                                    + [[str(y), "50", "90"] for y in range(20, 141)],
-                                )
-                        elif filename == "04_side_lengths.py":
+                        if filename == "03_side_lengths.py":
                             with output_csv.open(encoding="utf-8", newline="") as saved:
                                 self.assertEqual(
                                     list(csv.reader(saved)),
@@ -608,6 +519,30 @@ class SubmissionTests(unittest.TestCase):
                                     ],
                                 )
             self.assertEqual(input_path.read_bytes(), original_bytes)
+
+    def test_side_lengths_output_paths_protect_input(self) -> None:
+        """番号変更後も入力と同じ保存先や出力同士の衝突を拒否する."""
+        with self.temporary_directory() as temporary:
+            directory = Path(temporary)
+            image = np.full((100, 100, 3), 100, np.uint8)
+            input_path = directory / "input.png"
+            self.assertTrue(cv.imwrite(str(input_path), image))
+            original_bytes = input_path.read_bytes()
+            for settings in (
+                {"OUTPUT_IMAGE_PATH": "input.png"},
+                {"OUTPUT_CSV_PATH": "results/../input.png"},
+                {"OUTPUT_CSV_PATH": "results/03_side_lengths.png"},
+            ):
+                with self.subTest(settings=settings):
+                    script = directory / "03_side_lengths.py"
+                    script.write_text(
+                        self.submission_source("03_side_lengths.py", **settings),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "別々のパス"):
+                        runpy.run_path(str(script))
+                    self.assertEqual(input_path.read_bytes(), original_bytes)
+                    self.assertFalse((directory / "results").exists())
 
 
 if __name__ == "__main__":

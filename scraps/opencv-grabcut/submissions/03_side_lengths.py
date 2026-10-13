@@ -1,15 +1,16 @@
-"""元画像から試料の左右端を取得し、重ね画像と座標CSVを保存する."""
+"""指定範囲の左右側辺長を測り、確認画像と左・右・合計のCSVを保存する."""
 
 import csv
+import math
 from pathlib import Path
 
 import cv2 as cv
 import numpy as np
 
 # パスはこのスクリプトのフォルダが基準。
-INPUT_PATH = r"input.png"
-OUTPUT_IMAGE_PATH = r"results/03_side_edges.png"
-OUTPUT_CSV_PATH = r"results/03_side_edges.csv"
+INPUT_PATH = r"input\赤茶色の床と剥離した金属帯.png"
+OUTPUT_IMAGE_PATH = r"results/03_side_lengths.png"
+OUTPUT_CSV_PATH = r"results/03_side_lengths.csv"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
@@ -19,9 +20,12 @@ START_Y = 0
 END_Y = None
 
 # 左・上・右・下を、画像全体に対する0〜1の割合で指定する。
-CANDIDATE_RECT = (0.34, 0.0, 0.705, 1.0)
-BACKGROUND_RECTS = ((0.0, 0.0, 0.33, 1.0), (0.72, 0.0, 1.0, 1.0))
-FOREGROUND_RECTS = ((0.48, 0.4, 0.56, 0.6),)
+CANDIDATE_RECT = (0.30522088353413657, 0.0017825311942959, 0.6974564926372155, 1.0)
+BACKGROUND_RECTS = (
+    (0.0, 0.0, 0.30120481927710846, 1.0),
+    (0.7028112449799196, 0.0017825311942959, 1.0, 1.0),
+)
+FOREGROUND_RECTS = ((0.4002677376171352, 0.0, 0.6010709504685409, 1.0),)
 
 directory = Path(__file__).resolve().parent
 input_path = (directory / INPUT_PATH).resolve()
@@ -74,8 +78,7 @@ cv.grabCut(
 )
 raw_mask = np.isin(labels, (cv.GC_FGD, cv.GC_PR_FGD)).astype(np.uint8) * 255
 
-# 最大の外側輪郭を試料として選び、その内部を塗りつぶす。
-# 離れた小領域を除き、内部の穴は外形の左右端に含めない。
+# 最大外側輪郭を選び、内部を塗りつぶす。
 contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 if not contours:
     raise ValueError("試料の領域が見つかりません。初期指定を確認してください")
@@ -89,39 +92,51 @@ for y in range(START_Y, end_y + 1):
     xs = np.flatnonzero(mask[y])
     if len(xs) > 0:
         edge_rows.append((y, int(xs[0]), int(xs[-1])))
-if not edge_rows:
-    raise ValueError("指定した計測範囲に試料がありません。範囲を確認してください")
+if len(edge_rows) < 2:
+    raise ValueError("指定した計測範囲で長さを測るには、試料が2行以上必要です")
 
-# CSVと同じ点を赤い線で結ぶ。上下辺は結ばない。
-left_edge = np.array([(left_x, y) for y, left_x, right_x in edge_rows], np.int32)
-right_edge = np.array([(right_x, y) for y, left_x, right_x in edge_rows], np.int32)
+# 隣り合う点の距離 sqrt(dx**2 + dy**2) を、左・右別々に足す。
+# 点列を閉じず、上端・下端の横方向の長さは含めない。
+left_length = 0.0
+right_length = 0.0
+for (y0, left_x0, right_x0), (y1, left_x1, right_x1) in zip(edge_rows, edge_rows[1:]):
+    left_length += math.hypot(left_x1 - left_x0, y1 - y0)
+    right_length += math.hypot(right_x1 - right_x0, y1 - y0)
+total_length = left_length + right_length
+
+# 範囲外を灰色で薄くし、上下の境界を黄色、計測した端を赤で示す。
 result = image.copy()
-# 範囲外を灰色で薄くし、上下の境界を黄色で示す。
 for area in (result[:START_Y], result[end_y + 1 :]):
     if area.size > 0:
         area[:] = cv.addWeighted(area, 0.4, np.full_like(area, 220), 0.6, 0)
 for y in (START_Y, end_y):
     cv.line(result, (0, y), (width - 1, y), (0, 255, 255), thickness=1)
-# 境界行でも、実際に取得した端の画素が赤く見えるよう最後に描く。
-if len(edge_rows) == 1:
-    y, left_x, right_x = edge_rows[0]
-    result[y, [left_x, right_x]] = (0, 0, 255)
-else:
-    cv.polylines(
-        result, [left_edge, right_edge], isClosed=False, color=(0, 0, 255), thickness=2
-    )
-
+left_edge = np.array([(left_x, y) for y, left_x, right_x in edge_rows], np.int32)
+right_edge = np.array([(right_x, y) for y, left_x, right_x in edge_rows], np.int32)
+cv.polylines(
+    result, [left_edge, right_edge], isClosed=False, color=(0, 0, 255), thickness=2
+)
 output_image_path.parent.mkdir(parents=True, exist_ok=True)
 success, encoded = cv.imencode(output_image_path.suffix, result)
 if not success:
     raise OSError(f"画像を保存できません: {output_image_path}")
 output_image_path.write_bytes(encoded.tobytes())
+
+# 単位はpx。合計は丸める前に計算し、CSVには小数第2位まで保存する。
 output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 with output_csv_path.open("w", encoding="utf-8", newline="") as output:
     writer = csv.writer(output)
-    writer.writerow(("y", "left_x", "right_x"))
-    writer.writerows(edge_rows)
+    writer.writerow(("edge", "length_px", "start_y", "end_y"))
+    for edge, length in (
+        ("left", left_length),
+        ("right", right_length),
+        ("total", total_length),
+    ):
+        writer.writerow((edge, f"{length:.2f}", START_Y, end_y))
 
-print(f"左右端の重ね画像: {output_image_path}")
-print(f"左右端の座標CSV: {output_csv_path}")
+print(f"Left: {left_length:.2f} px")
+print(f"Right: {right_length:.2f} px")
+print(f"Total: {total_length:.2f} px")
 print(f"計測範囲: y={START_Y}〜{end_y}（両端を含む）")
+print(f"計測範囲と左右端の確認画像: {output_image_path}")
+print(f"左右側辺の長さCSV: {output_csv_path}")

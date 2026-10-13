@@ -1,23 +1,23 @@
-"""指定範囲の左右側辺長を測り、確認画像と左・右・合計のCSVを保存する."""
+"""指定範囲の全行の幅を、CSVと折れ線グラフに保存する."""
 
 import csv
-import math
 from pathlib import Path
 
 import cv2 as cv
 import numpy as np
+from matplotlib import pyplot as plt
 
 # パスはこのスクリプトのフォルダが基準。
 INPUT_PATH = r"input\赤茶色の床と剥離した金属帯.png"
-OUTPUT_IMAGE_PATH = r"results/04_side_lengths.png"
-OUTPUT_CSV_PATH = r"results/04_side_lengths.csv"
+OUTPUT_IMAGE_PATH = r"results/05_widths.png"
+OUTPUT_CSV_PATH = r"results/05_widths.csv"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
 # 元画像のy座標で計測範囲を指定する。終了行も含む。Noneは画像の最終行。
-# 初期値は画像全体。上下端面を避ける位置へ、人が変更する。
-START_Y = 0
-END_Y = None
+# 仮入力の画像で上下端付近を除く設定。使う画像に合わせて変更する。
+START_Y = 80
+END_Y = 1000
 
 # 左・上・右・下を、画像全体に対する0〜1の割合で指定する。
 CANDIDATE_RECT = (0.30522088353413657, 0.0017825311942959, 0.6974564926372155, 1.0)
@@ -47,7 +47,7 @@ end_y = height - 1 if END_Y is None else END_Y
 if not (0 <= START_Y <= end_y < height):
     raise ValueError("計測範囲は画像内で、0 <= START_Y <= END_Yにしてください")
 
-# 01〜03と同じ初期指定を、この1本の中で作る。
+# 01・02と同じ初期指定を、この1本の中で作る。
 labels = np.full((height, width), cv.GC_PR_BGD, np.uint8)
 for label, rectangles in (
     (cv.GC_PR_FGD, (CANDIDATE_RECT,)),
@@ -78,7 +78,7 @@ cv.grabCut(
 )
 raw_mask = np.isin(labels, (cv.GC_FGD, cv.GC_PR_FGD)).astype(np.uint8) * 255
 
-# 03と同じ最大外側輪郭を選び、内部を塗りつぶす。
+# 最大外側輪郭を選び、内部を塗りつぶす。
 contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 if not contours:
     raise ValueError("試料の領域が見つかりません。初期指定を確認してください")
@@ -86,57 +86,48 @@ contour = max(contours, key=cv.contourArea)
 mask = np.zeros((height, width), np.uint8)
 cv.drawContours(mask, [contour], -1, 255, thickness=-1)
 
-# 指定した範囲だけを調べ、元画像の座標のまま左右端を集める。
-edge_rows = []
+# 幅は左右の画素中心のx差。試料がない行は空欄にし、0pxとは扱わない。
+width_rows = []
+y_values = []
+width_values = []
+measured_widths = []
 for y in range(START_Y, end_y + 1):
     xs = np.flatnonzero(mask[y])
-    if len(xs) > 0:
-        edge_rows.append((y, int(xs[0]), int(xs[-1])))
-if len(edge_rows) < 2:
-    raise ValueError("指定した計測範囲で長さを測るには、試料が2行以上必要です")
+    if len(xs) == 0:
+        width_rows.append((y, "", "", ""))
+        width_values.append(float("nan"))
+    else:
+        left_x = int(xs[0])
+        right_x = int(xs[-1])
+        width_px = right_x - left_x
+        width_rows.append((y, left_x, right_x, width_px))
+        width_values.append(float(width_px))
+        measured_widths.append(width_px)
+    y_values.append(y)
 
-# 隣り合う点の距離 sqrt(dx**2 + dy**2) を、左・右別々に足す。
-# 点列を閉じず、上端・下端の横方向の長さは含めない。
-left_length = 0.0
-right_length = 0.0
-for (y0, left_x0, right_x0), (y1, left_x1, right_x1) in zip(edge_rows, edge_rows[1:]):
-    left_length += math.hypot(left_x1 - left_x0, y1 - y0)
-    right_length += math.hypot(right_x1 - right_x0, y1 - y0)
-total_length = left_length + right_length
+if not measured_widths:
+    raise ValueError("指定した計測範囲に試料がありません")
 
-# 範囲外を灰色で薄くし、上下の境界を黄色、計測した端を赤で示す。
-result = image.copy()
-for area in (result[:START_Y], result[end_y + 1 :]):
-    if area.size > 0:
-        area[:] = cv.addWeighted(area, 0.4, np.full_like(area, 220), 0.6, 0)
-for y in (START_Y, end_y):
-    cv.line(result, (0, y), (width - 1, y), (0, 255, 255), thickness=1)
-left_edge = np.array([(left_x, y) for y, left_x, right_x in edge_rows], np.int32)
-right_edge = np.array([(right_x, y) for y, left_x, right_x in edge_rows], np.int32)
-cv.polylines(
-    result, [left_edge, right_edge], isClosed=False, color=(0, 0, 255), thickness=2
-)
+plt.switch_backend("Agg")
+figure, axes = plt.subplots(figsize=(9, 5), layout="constrained")
+axes.plot(y_values, width_values)
+axes.set_xlabel("Image y (px)")
+axes.set_ylabel("Width between pixel centers (px)")
+axes.set_title(f"Measurement range: y={START_Y}..{end_y}")
+axes.grid(alpha=0.3)
 output_image_path.parent.mkdir(parents=True, exist_ok=True)
-success, encoded = cv.imencode(output_image_path.suffix, result)
-if not success:
-    raise OSError(f"画像を保存できません: {output_image_path}")
-output_image_path.write_bytes(encoded.tobytes())
+figure.savefig(output_image_path, dpi=160)
+plt.close(figure)
 
-# 単位はpx。合計は丸める前に計算し、CSVには小数第2位まで保存する。
 output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 with output_csv_path.open("w", encoding="utf-8", newline="") as output:
     writer = csv.writer(output)
-    writer.writerow(("edge", "length_px", "start_y", "end_y"))
-    for edge, length in (
-        ("left", left_length),
-        ("right", right_length),
-        ("total", total_length),
-    ):
-        writer.writerow((edge, f"{length:.2f}", START_Y, end_y))
+    writer.writerow(("y", "left_x", "right_x", "width_px"))
+    writer.writerows(width_rows)
 
-print(f"Left: {left_length:.2f} px")
-print(f"Right: {right_length:.2f} px")
-print(f"Total: {total_length:.2f} px")
-print(f"計測範囲: y={START_Y}〜{end_y}（両端を含む）")
-print(f"計測範囲と左右端の確認画像: {output_image_path}")
-print(f"左右側辺の長さCSV: {output_csv_path}")
+print(
+    f"幅: 最小{min(measured_widths):.2f} / 平均{np.mean(measured_widths):.2f} / 最大{max(measured_widths):.2f} px"
+)
+print(f"全{len(width_rows)}行 / 計測できた行{len(measured_widths)}行")
+print(f"全行の幅CSV: {output_csv_path}")
+print(f"幅の折れ線グラフ: {output_image_path}")

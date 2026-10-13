@@ -1,4 +1,4 @@
-"""前処理の比較用スクリプトを単独実行し、04との一致と組み合わせを確認する."""
+"""前処理の比較用スクリプトを単独実行し、03との一致と組み合わせを確認する."""
 
 import ast
 import csv
@@ -16,9 +16,9 @@ import numpy as np
 
 class PreprocessComparisonTests(unittest.TestCase):
     def script_source(self, filename: str, **overrides: object) -> str:
-        """コピーの設定だけを合成画像用に替え、手元の実画像設定を使わない."""
+        """コピーの設定だけを合成画像用に替え、手元の生成画像設定を使わない."""
         project = Path(__file__).resolve().parents[1]
-        if filename == "04_side_lengths.py":
+        if filename == "03_side_lengths.py":
             path = project / "submissions" / filename
         else:
             path = project / "sandbox" / filename
@@ -57,8 +57,8 @@ class PreprocessComparisonTests(unittest.TestCase):
             raise ValueError("検証用の一時領域が試験結果フォルダ外にあります")
         return temporary
 
-    def test_preprocessing_original_matches_04_at_original_resolution(self) -> None:
-        """比較用スクリプト単独で全ケースを実行し、無処理の長さと端線を04と照合する."""
+    def test_preprocessing_original_matches_03_at_original_resolution(self) -> None:
+        """比較用スクリプト単独で全ケースを実行し、無処理の長さと端線を03と照合する."""
         project = Path(__file__).resolve().parents[1]
         cases = [
             "original",
@@ -82,7 +82,7 @@ class PreprocessComparisonTests(unittest.TestCase):
             self.assertTrue(success)
             input_path.write_bytes(encoded.tobytes())
             original_bytes = input_path.read_bytes()
-            for filename in ("preprocess_comparison.py", "04_side_lengths.py"):
+            for filename in ("preprocess_comparison.py", "03_side_lengths.py"):
                 script = directory / filename
                 script.write_text(
                     self.script_source(
@@ -109,7 +109,7 @@ class PreprocessComparisonTests(unittest.TestCase):
             ) as saved:
                 rows = list(csv.DictReader(saved))
             self.assertEqual([row["case"] for row in rows], cases)
-            with (directory / "results/04_side_lengths.csv").open(
+            with (directory / "results/03_side_lengths.csv").open(
                 encoding="utf-8", newline=""
             ) as saved:
                 expected = {
@@ -156,7 +156,7 @@ class PreprocessComparisonTests(unittest.TestCase):
             )
             expected_overlay = cv.imdecode(
                 np.frombuffer(
-                    (directory / "results/04_side_lengths.png").read_bytes(), np.uint8
+                    (directory / "results/03_side_lengths.png").read_bytes(), np.uint8
                 ),
                 cv.IMREAD_COLOR,
             )

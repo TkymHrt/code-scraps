@@ -11,8 +11,10 @@
 
 現在の成果・確認した要件と、静止画のパス間比較から録画処理・位置追跡・リアルタイム解析までの工程は
 [PROGRESS.md](PROGRESS.md) にまとめています。
+実装の範囲は [PLAN.md](PLAN.md)、提出版01〜09の初期指定・長さ・幅・凹み候補・大きさ・比較と検証結果は [submissions/README.md](submissions/README.md) を参照してください。
 短いコードで段階ごとに提出する版は [submissions/README.md](submissions/README.md) にあります。
-01の別バージョンとして、初期指定を画像上で作成・確認するGUIも、同じREADMEに操作手順をまとめています。
+初期指定の01 GUIに加え、計測範囲・正常部分・候補条件を決める画像設定GUIと、比較CSV・基準・保存先を選ぶ比較設定GUIがあります。
+起動と操作は [提出版README](submissions/README.md#guiで計測パラメータを決める) にまとめています。
 [前処理の比較用スクリプト](sandbox/README.md#前処理の比較)は `sandbox/preprocess_comparison.py` にあります。単独・組み合わせを、抽出画像・端線と側辺長のCSVで比較できます。
 実画像の撮影条件、GoProの設定、画像ごとの調整・実行手順は [CAPTURE.md](CAPTURE.md) にまとめています。
 
@@ -31,7 +33,7 @@
 
 ## 動かす
 
-Python 3.14以降、NumPy、OpenCVを使います。**このフォルダから**実行します。
+Python 3.14以降、NumPy、OpenCVを使います。提出版04・05・09のグラフにはMatplotlibを使います。**このフォルダから**実行します。
 
 ```powershell
 uv sync
@@ -70,6 +72,7 @@ AI画像や合成画像の確認は、実試料での抽出精度を保証する
 ```powershell
 uv run python -m unittest discover -s tests
 uv run tests/verify_stages.py --with-local-inputs --out tests/results/stages_new
+uv run tests/verify_shape_stages.py --out tests/results/shape_pipeline_new
 uv run ruff check .
 uv run ruff format --check .
 uv run ty check .
@@ -77,11 +80,19 @@ uv run ty check .
 
 自動試験は、独立実行、3本の抽出条件とマスクの一致、上下辺を含めない長さ、
 細い突起の保持、基準・左右差・mm換算・測定間隔・幅の補間など13件です。
-加えて、提出版の初期指定の一致・GrabCut直後のマスク・左右端の座標と表示・側辺長・計測範囲・日本語パスを確認する10件があります。
-試作の前処理比較を確認する5件と、GUIの確認画像・初期指定の一致・矩形の妥当性を確認する2件を加え、合計30件です。
+加えて、提出版の初期指定・GrabCut直後のマスク・内部の端座標と表示・側辺長・計測範囲・日本語パス・入力保護を確認する9件、
+提出版04の差分・棒グラフ・日本語パス・入力不備と入力保護を確認する5件があります。
+試作の前処理比較5件と、01 GUI2件、提出版05〜09の検証13件、設定GUIの数値・コピー・入力保護6件を加え、合計53件です。
 GUIの縮小表示上のドラッグ・保存などは `uv run tests/verify_mask_gui.py` で確認できます（Tkを起動できる環境で実行）。
+画像設定・比較設定GUIの操作は `uv run tests/verify_parameter_guis.py --out tests/results/parameter_guis_new` で確認できます。
 Ruffは構文・未使用名・インポート順だけをチェックします。
 計測条件は実画像に合わせて設定し、入力・保存先と生成物の更新を運用で確認します。
 
 2026-10-12の配置変更後に、自動試験、Lint・format、型チェックと合成画像の定量比較を再確認しました。
+2026-10-13に提出版を03の計測・04の比較へ整理し、全34件、Lint・format・型チェックを確認しました。
+同日の継続作業で05〜09を追加し、生成画像の仮算出まで実行しました。全47件、Lint・format・型チェックが通りました。
+元の生成画像は指定範囲で幅428.00〜520.00px、凹み候補9個・最大内向き偏差39.21pxでした。仮の正常部分・しきい値による値です。
+人工的な凹みを加えた比較画像と、正解の分かる形状も `tests/verify_shape_stages.py` で確認し、成果を保存しています。
+`submissions/input/` はテスト用の生成画像で、本番画像ではありません。旧04と新03の端座標・確認画像・長さCSVが一致することを確認しています。
 実試料での抽出精度は、この検証の対象に含みません。
+2026-10-14に計測と比較の設定GUIを追加し、全53件と実際のTkでの操作、Lint・format・型チェックを確認しました。

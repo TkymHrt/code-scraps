@@ -15,7 +15,7 @@ RANDOM_SEED = 0
 START_Y = 0
 END_Y = None
 
-# 04と比較するときは、入力・初期指定・計測範囲を揃える。
+# 03と比較するときは、入力・初期指定・計測範囲を揃える。
 CANDIDATE_RECT = (0.30522088353413657, 0.0017825311942959, 0.6974564926372155, 1.0)
 BACKGROUND_RECTS = (
     (0.0, 0.0, 0.30120481927710846, 1.0),
@@ -134,7 +134,7 @@ for case, steps in CASES.items():
     )
     raw_mask = np.isin(labels, (cv.GC_FGD, cv.GC_PR_FGD)).astype(np.uint8) * 255
 
-    # 04と同じ最大外側輪郭を選び、内部を塗りつぶして計測する。
+    # 03と同じ最大外側輪郭を選び、内部を塗りつぶして計測する。
     contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     if not contours:
         raise ValueError(f"{case}: 試料の領域が見つかりません")
