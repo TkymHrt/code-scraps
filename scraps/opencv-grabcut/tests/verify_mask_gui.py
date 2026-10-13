@@ -4,7 +4,7 @@ import runpy
 import tempfile
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import ttk
 from unittest.mock import patch
 
 import cv2 as cv
@@ -20,13 +20,19 @@ def main() -> None:
         if not directory.is_relative_to(results.resolve()):
             raise ValueError("検証用の一時領域が試験結果フォルダ外にあります")
         script = directory / "01_initial_regions_gui.py"
-        script.write_text(
-            (project / "submissions/01_initial_regions_gui.py").read_text(
-                encoding="utf-8"
-            ),
-            encoding="utf-8",
+        source = (project / "submissions/01_initial_regions_gui.py").read_text(
+            encoding="utf-8"
         )
+        source = source.replace(
+            'INPUT_PATH = "input.png"', 'INPUT_PATH = "日本語の入力.png"'
+        )
+        source = source.replace(
+            'OUTPUT_PATH = "results/01_initial_regions_gui.png"',
+            'OUTPUT_PATH = "results/日本語の確認.png"',
+        )
+        script.write_text(source, encoding="utf-8")
         gui = runpy.run_path(str(script))
+        output_path = directory / gui["OUTPUT_PATH"]
         expected = np.zeros((800, 700), np.uint8)
         expected[100:701, 250:451] = 255
         expected[250:325, 275:305] = 0
@@ -47,7 +53,6 @@ def main() -> None:
             clipboard = root.clipboard_get()
         except tk.TclError:
             clipboard = None
-        errors = []
 
         def descendants(widget: tk.Misc) -> list[tk.Misc]:
             found: list[tk.Misc] = []
@@ -75,8 +80,6 @@ def main() -> None:
                 buttons[name].invoke()
                 root.update()
 
-            assert buttons["確認画像を保存"].instate(["disabled"])
-            invoke("画像を開く")
             assert region_list.size() == 4
             assert canvas.find_all(), "プレビューを表示できません"
             root.geometry("900x650")
@@ -87,9 +90,7 @@ def main() -> None:
                     f"操作が隠れています: {name}"
                 )
             invoke("確認画像を保存")
-            overlay = cv.imdecode(
-                np.fromfile(directory / "初期指定.png", np.uint8), cv.IMREAD_COLOR
-            )
+            overlay = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
             regions = {
                 cv.GC_PR_FGD: [gui["CANDIDATE_RECT"]],
                 cv.GC_BGD: list(gui["BACKGROUND_RECTS"]),
@@ -156,9 +157,7 @@ def main() -> None:
             )
             # 編集直後に保存でき、保存画像はコピーした指定と一致する。
             invoke("確認画像を保存")
-            edited = cv.imdecode(
-                np.fromfile(directory / "編集後.png", np.uint8), cv.IMREAD_COLOR
-            )
+            edited = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
             edited_regions = {
                 cv.GC_PR_FGD: [copied["CANDIDATE_RECT"]],
                 cv.GC_BGD: list(copied["BACKGROUND_RECTS"]),
@@ -176,8 +175,15 @@ def main() -> None:
             assert region_list.size() == 3
             invoke("既定の矩形に戻す")
             assert region_list.size() == 4
-            invoke("確認画像を保存")
-            assert len(errors) == 1 and "入力画像" in errors[-1]
+            # 入力画像と同じ保存先は、GUIを起動する前に拒否する。
+            gui["main"].__globals__["OUTPUT_PATH"] = str(input_path)
+            with patch.object(tk, "Tk", side_effect=AssertionError("Unexpected GUI")):
+                try:
+                    gui["main"]()
+                except ValueError as error:
+                    assert "入力画像" in str(error)
+                else:
+                    raise AssertionError("入力画像と同じ保存先を許可しました")
             assert input_path.read_bytes() == original_bytes
             print(
                 "01 GUI smoke passed: preview, scaled drag, copy, delete, reset, save, input protection; no GrabCut"
@@ -187,23 +193,6 @@ def main() -> None:
             with (
                 patch.object(tk, "Tk", return_value=root),
                 patch.object(root, "mainloop", side_effect=exercise),
-                patch.object(
-                    filedialog, "askopenfilename", return_value=str(input_path)
-                ),
-                patch.object(
-                    filedialog,
-                    "asksaveasfilename",
-                    side_effect=[
-                        str(directory / "初期指定.png"),
-                        str(directory / "編集後.png"),
-                        str(input_path),
-                    ],
-                ),
-                patch.object(
-                    messagebox,
-                    "showerror",
-                    side_effect=lambda title, message, **kwargs: errors.append(message),
-                ),
                 patch.object(
                     cv, "grabCut", side_effect=AssertionError("Unexpected GrabCut")
                 ),

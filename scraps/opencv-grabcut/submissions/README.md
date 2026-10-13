@@ -36,8 +36,9 @@ GrabCutは画素ごとに指定できるため、初期マスクは矩形に限�
 
 [01_initial_regions_gui.py](01_initial_regions_gui.py) は、01の別バージョンです。
 画像上で矩形を描いて初期マスクを作り、元画像へ色を重ねた確認画像を保存します。
-画像選択・初期指定の編集・確認画像の保存まで、この1本で動きます。GrabCutによる抽出は02が担当します。
+入力画像の読み込み・初期指定の編集・確認画像の保存まで、この1本で動きます。GrabCutによる抽出は02が担当します。
 題材の `opencv-grabcut` フォルダから起動します。OpenCV・NumPyに加えてPythonのTkinterを使います。
+入力と保存先は、01と同じく冒頭の `INPUT_PATH`・`OUTPUT_PATH` で指定します。保存先はPNG画像にしてください。
 
 ```powershell
 uv run submissions/01_initial_regions_gui.py
@@ -45,18 +46,20 @@ uv run submissions/01_initial_regions_gui.py
 
 この環境で `uv` が呼び出せない場合は、同じフォルダから `.\.venv\Scripts\python.exe submissions/01_initial_regions_gui.py` で起動できます。
 
-1. 「画像を開く」で元画像を選びます。`submissions/input.png` があれば起動時に開きます。
+1. 元画像を `submissions/input.png` に置き、入力・保存先を確認して起動します。別の画像には `INPUT_PATH` を変更します。
 2. 前景候補（橙）・確実な背景（青）・確実な前景（緑）を選び、初期指定の表示上でドラッグします。
    前景候補は1つで、描き直すと置き換わります。背景・前景は複数追加できます。
 3. 矩形一覧から選ぶと黄色の枠で位置を確認でき、「選択した矩形を削除」で消せます。
-   「既定の矩形に戻す」は01〜04と同じ初期値に戻します。別の画像を開いたときも既定値に戻ります。
+   「既定の矩形に戻す」は01〜04と同じ初期値に戻します。
 4. 「元画像」と「初期指定」を切り替えて照合し、「確認画像を保存」を押します。
-   保存先とファイル名はダイアログで選び、既存ファイルへの上書きは確認します。
+   `OUTPUT_PATH` へ保存し、同じファイルがあれば上書きします。残したい結果は実行前に移動してください。
 
 表示だけをウィンドウに合わせて縮小し、指定と保存は元の解像度で行います。
 初期マスクのラベル・優先順位・重ねる色は01と同じです。
 保存する成果は指定を示す確認画像で、既定の保存名は `01_initial_regions_gui.png` です。
 矩形を変更すると表示も更新され、そのまま確認画像を保存できます。
+読み書きや設定に失敗した場合はターミナルのエラーを確認し、入力・設定・保存先を直して再実行します。
+入力画像と同じ保存先、画像外や1画素未満の矩形など、誤った結果やデータ破壊につながる指定はチェックします。
 
 後段の02〜04でも同じ指定を使うときは、「初期指定の設定をコピー」を押します。
 入力画像の絶対パスと `CANDIDATE_RECT`・`BACKGROUND_RECTS`・`FOREGROUND_RECTS` の4項目をコピーできます。
@@ -70,7 +73,7 @@ GrabCutの反復回数・乱数シードは02〜04側、計測範囲の `START_Y
 | スクリプト | その1本の成果 | 保存先 |
 | --- | --- | --- |
 | [01_initial_regions.py](01_initial_regions.py) | 初期指定を元画像へ重ねた確認画像 | `results/01_initial_regions.png` |
-| [01_initial_regions_gui.py](01_initial_regions_gui.py) | GUIで作った初期指定を元画像へ重ねた確認画像（01の別版） | ダイアログで指定（既定名 `01_initial_regions_gui.png`） |
+| [01_initial_regions_gui.py](01_initial_regions_gui.py) | GUIで作った初期指定を元画像へ重ねた確認画像（01の別版） | `results/01_initial_regions_gui.png` |
 | [02_grabcut_mask.py](02_grabcut_mask.py) | GrabCut直後の2値マスク画像 | `results/02_grabcut_mask.png` |
 | [03_side_edges.py](03_side_edges.py) | 指定範囲の左右端の重ね画像と座標CSV | `results/03_side_edges.png` / `results/03_side_edges.csv` |
 | [04_side_lengths.py](04_side_lengths.py) | 計測範囲の確認画像と左・右・合計の側辺長CSV（px） | `results/04_side_lengths.png` / `results/04_side_lengths.csv` |
@@ -223,8 +226,11 @@ CSVの `start_y`・`end_y` は指定した計測範囲です。上の例はy=20�
 
 2026-10-13に01のGUI版へ整理し、既存22件とGUI関連3件の合計25件、RuffのLint・format、tyの型チェックを確認しました。
 GUIの確認画像が01と元の解像度で一致し、コピーした初期指定が02へ渡す初期マスクとも一致することを確認しています。
-`tests/verify_mask_gui.py` では非表示のTkウィンドウを使い、画像選択、日本語パスでの読み書き、縮小表示上の逆向きドラッグ、
+入力と保存先を冒頭の設定へ集め、ファイル選択・保存先のダイアログ、未読込時の状態管理、例外のまとめ捕捉を削減しました。
+結果の保管とエラー時の修正・再実行は運用で扱います。
+`tests/verify_mask_gui.py` では非表示のTkウィンドウを使い、起動時の画像読み込み、日本語パスでの読み書き、縮小表示上の逆向きドラッグ、
 矩形の選択・削除・既定値への復帰、編集直後のPNG保存、初期指定4項目のコピー、入力画像の保護を確認しました。
+同じ保存先への上書きでも、保存画像とコピーした初期指定が一致することを確認しています。
 GUIの各操作でGrabCutが呼ばれないことも確認しています。
 900×650のウィンドウでも操作ボタンが表示されることを確認しています。
 

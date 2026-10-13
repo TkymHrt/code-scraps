@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import ttk
 
 import cv2 as cv
 import numpy as np
@@ -61,7 +61,14 @@ def settings_text(input_path: Path, regions: dict[int, list[Rect]]) -> str:
 def main() -> None:
     directory = Path(__file__).resolve().parent
     input_path = (directory / INPUT_PATH).resolve()
-    image: np.ndarray | None = None
+    output_path = (directory / OUTPUT_PATH).resolve()
+    if output_path == input_path:
+        raise ValueError("保存先を入力画像とは別のパスにしてください")
+    # 日本語のパスにも対応するため、画像のバイト列を読み込む。
+    image = cv.imdecode(np.fromfile(input_path, np.uint8), cv.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"入力画像を読み込めません: {input_path}")
+    height, width = image.shape[:2]
     regions: dict[int, list[Rect]] = {}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
@@ -74,17 +81,11 @@ def main() -> None:
     root.minsize(900, 650)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
     view = tk.StringVar(value="initial")
-    path_text = tk.StringVar(value="画像を開いてください")
     status = tk.StringVar(value="種類を選び、画像上をドラッグして矩形を指定します。")
 
-    toolbar = ttk.Frame(root, padding=8)
-    toolbar.pack(fill="x")
-    ttk.Button(toolbar, text="画像を開く", command=lambda: open_image()).pack(
-        side="left"
-    )
-    ttk.Label(toolbar, textvariable=path_text, wraplength=720).pack(
-        side="left", padx=12
-    )
+    ttk.Label(
+        root, text=f"{input_path}  ({width} × {height} px)", padding=8, wraplength=850
+    ).pack(fill="x")
     body = ttk.Frame(root, padding=(8, 0, 8, 8))
     body.pack(fill="both", expand=True)
     sidebar = ttk.Frame(body)
@@ -105,52 +106,39 @@ def main() -> None:
     canvas.pack(fill="both", expand=True)
 
     ttk.Label(sidebar, text="矩形の種類").pack(anchor="w")
-    edit_widgets: list[ttk.Widget | tk.Listbox] = []
     for label, name in REGION_NAMES.items():
-        radio = ttk.Radiobutton(
+        ttk.Radiobutton(
             sidebar,
             text=name,
             variable=mode,
             value=label,
             command=lambda: show_initial(),
-        )
-        radio.pack(anchor="w", pady=3)
-        edit_widgets.append(radio)
+        ).pack(anchor="w", pady=3)
     ttk.Label(
         sidebar,
         text="前景候補は描き直すと置き換わります。\n背景・前景は複数追加できます。\n灰色は未指定の背景候補です。\n重なると橙 → 青 → 緑の順に優先。",
     ).pack(anchor="w", pady=8)
     region_list = tk.Listbox(sidebar, width=32, height=7, exportselection=False)
     region_list.pack(fill="x")
-    edit_widgets.append(region_list)
     for name, action in (
         ("選択した矩形を削除", lambda: delete_region()),
         ("既定の矩形に戻す", lambda: reset_regions()),
         ("確認画像を保存", lambda: save_image()),
         ("初期指定の設定をコピー", lambda: copy_settings()),
     ):
-        button = ttk.Button(sidebar, text=name, command=action)
-        button.pack(fill="x", pady=4)
-        edit_widgets.append(button)
+        ttk.Button(sidebar, text=name, command=action).pack(fill="x", pady=4)
     ttk.Label(
         sidebar, text="表示だけ縮小し、確認画像は\n元の解像度で保存します。"
     ).pack(anchor="w", pady=8)
     ttk.Label(root, textvariable=status, padding=8, wraplength=850).pack(fill="x")
 
-    def update_controls() -> None:
-        for widget in edit_widgets:
-            widget.configure({"state": "normal" if image is not None else "disabled"})
-
     def refresh_regions() -> None:
         region_rows.clear()
-        # 無効状態のListboxは内容も変更できないため、更新中は有効にする。
-        region_list.configure(state="normal")
         region_list.delete(0, tk.END)
         for label, name in REGION_NAMES.items():
             for index in range(len(regions[label])):
                 region_rows.append((label, index))
                 region_list.insert(tk.END, f"{name} {index + 1}")
-        update_controls()
         show_initial()
         status.set(
             "初期指定を変更しました。元画像と照合して確認画像を保存してください。"
@@ -166,63 +154,19 @@ def main() -> None:
         view.set("initial")
         render()
 
-    def open_image(path: Path | None = None) -> None:
-        nonlocal image, input_path
-        if path is None:
-            selected = filedialog.askopenfilename(
-                parent=root,
-                title="元画像を選ぶ",
-                initialdir=input_path.parent,
-                filetypes=[
-                    ("画像", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
-                    ("すべて", "*.*"),
-                ],
-            )
-            if not selected:
-                return
-            path = Path(selected)
-        try:
-            # 日本語のパスにも対応するため、画像のバイト列を読み込む。
-            loaded = cv.imdecode(np.fromfile(path, np.uint8), cv.IMREAD_COLOR)
-            if loaded is None:
-                raise ValueError(f"入力画像を読み込めません: {path}")
-        except (OSError, ValueError, cv.error) as error:
-            messagebox.showerror("画像を開けません", str(error), parent=root)
-            return
-        image = loaded
-        input_path = path.resolve()
-        height, width = image.shape[:2]
-        path_text.set(f"{input_path}  ({width} × {height} px)")
-        reset_regions()
-
     def render() -> None:
         nonlocal photo, display_bounds, drag_start
         drag_start = None
         canvas.delete("all")
-        if image is None:
-            canvas.create_text(
-                canvas.winfo_width() // 2,
-                canvas.winfo_height() // 2,
-                text="「画像を開く」から元画像を選んでください",
-                fill="white",
-            )
-            return
-        shown = image
-        if view.get() == "initial":
-            try:
-                shown = initial_overlay(image, regions)
-            except ValueError as error:
-                status.set(str(error))
-        height, width = shown.shape[:2]
+        shown = initial_overlay(image, regions) if view.get() == "initial" else image
         scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
         display_width = max(1, int(width * scale))
         display_height = max(1, int(height * scale))
         small = cv.resize(
             shown, (display_width, display_height), interpolation=cv.INTER_NEAREST
         )
-        rgb = cv.cvtColor(small, cv.COLOR_BGR2RGB)
-        header = f"P6\n{display_width} {display_height}\n255\n".encode("ascii")
-        photo = tk.PhotoImage(master=root, data=header + rgb.tobytes(), format="PPM")
+        _, encoded = cv.imencode(".png", small)
+        photo = tk.PhotoImage(master=root, data=encoded.tobytes(), format="PNG")
         x = (canvas.winfo_width() - display_width) // 2
         y = (canvas.winfo_height() - display_height) // 2
         display_bounds = (x, y, x + display_width, y + display_height)
@@ -249,7 +193,7 @@ def main() -> None:
 
     def start_draw(event: tk.Event) -> None:
         nonlocal drag_start
-        if image is None or view.get() != "initial":
+        if view.get() != "initial":
             return
         x0, y0, x1, y1 = display_bounds
         if x0 <= event.x <= x1 and y0 <= event.y <= y1:
@@ -274,14 +218,13 @@ def main() -> None:
 
     def end_draw(event: tk.Event) -> None:
         nonlocal drag_start
-        if drag_start is None or image is None:
+        if drag_start is None:
             return
         x, y = image_point(event)
         left, right = sorted((drag_start[0], x))
         top, bottom = sorted((drag_start[1], y))
         drag_start = None
         canvas.delete("drag")
-        height, width = image.shape[:2]
         if int(width * left) >= int(width * right) or int(height * top) >= int(
             height * bottom
         ):
@@ -303,47 +246,16 @@ def main() -> None:
             refresh_regions()
 
     def save_image() -> None:
-        if image is None:
-            return
-        try:
-            output = initial_overlay(image, regions)
-            default_path = directory / OUTPUT_PATH
-            selected = filedialog.asksaveasfilename(
-                parent=root,
-                title="確認画像の保存先を選ぶ",
-                initialdir=default_path.parent
-                if default_path.parent.exists()
-                else directory,
-                initialfile=default_path.name,
-                defaultextension=".png",
-                filetypes=[("PNG画像", "*.png")],
-                confirmoverwrite=True,
-            )
-            if not selected:
-                return
-            output_path = Path(selected).resolve()
-            if output_path == input_path:
-                raise ValueError("保存先を入力画像とは別のパスにしてください")
-            if output_path.suffix.lower() != ".png":
-                raise ValueError("保存先の拡張子は .png にしてください")
-            success, encoded = cv.imencode(".png", output)
-            if not success:
-                raise OSError("PNG画像を作成できません")
-            encoded.tofile(output_path)
-        except (OSError, ValueError, cv.error) as error:
-            messagebox.showerror("保存できません", str(error), parent=root)
-            return
+        # 同じ保存先へ上書きする。残す結果は実行前に人が移動する。
+        success, encoded = cv.imencode(".png", initial_overlay(image, regions))
+        if not success:
+            raise OSError("PNG画像を作成できません")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        encoded.tofile(output_path)
         status.set(f"確認画像を保存しました: {output_path}")
 
     def copy_settings() -> None:
-        if image is None:
-            return
-        try:
-            make_labels(image, regions)
-            text = settings_text(input_path, regions)
-        except ValueError as error:
-            messagebox.showerror("設定をコピーできません", str(error), parent=root)
-            return
+        text = settings_text(input_path, regions)
         root.clipboard_clear()
         root.clipboard_append(text)
         status.set(
@@ -355,9 +267,7 @@ def main() -> None:
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
     region_list.bind("<<ListboxSelect>>", lambda event: show_initial())
-    update_controls()
-    if input_path.is_file():
-        root.after(0, lambda: open_image(input_path))
+    reset_regions()
     root.mainloop()
 
 
