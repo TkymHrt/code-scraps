@@ -1,10 +1,10 @@
-"""非表示のTkウィンドウで、01のGUI版の矩形指定・確認画像保存を確認する."""
+"""非表示のTkウィンドウで、01のGUI版の読み込み・矩形指定・保存を確認する."""
 
 import runpy
 import tempfile
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 from unittest.mock import patch
 
 import cv2 as cv
@@ -23,16 +23,9 @@ def main() -> None:
         source = (project / "submissions/01_initial_regions_gui.py").read_text(
             encoding="utf-8"
         )
-        source = source.replace(
-            'INPUT_PATH = "input.png"', 'INPUT_PATH = "日本語の入力.png"'
-        )
-        source = source.replace(
-            'OUTPUT_PATH = "results/01_initial_regions_gui.png"',
-            'OUTPUT_PATH = "results/日本語の確認.png"',
-        )
         script.write_text(source, encoding="utf-8")
         gui = runpy.run_path(str(script))
-        output_path = directory / gui["OUTPUT_PATH"]
+        output_path = directory / "日本語の確認.png"
         expected = np.zeros((800, 700), np.uint8)
         expected[100:701, 250:451] = 255
         expected[250:325, 275:305] = 0
@@ -81,7 +74,25 @@ def main() -> None:
                 buttons[name].invoke()
                 root.update()
 
+            open_dialog.assert_not_called()
+            assert not canvas.find_all(), "起動時に画像が読み込まれています"
             assert region_list.size() == 0, "起動時に矩形が配置されています"
+            invoke("確認画像を保存")
+            save_dialog.assert_not_called()
+            canvas.event_generate("<ButtonPress-1>", x=0, y=0)
+            canvas.event_generate("<ButtonRelease-1>", x=1, y=1)
+            root.update()
+            assert region_list.size() == 0, "未読込の画面に矩形が追加されています"
+            with patch.object(filedialog, "askopenfilename", return_value=""):
+                invoke("画像を読み込む")
+            assert root.winfo_exists() and not canvas.find_all()
+            invoke("画像を読み込む")
+            open_dialog.assert_called_once()
+            assert region_list.size() == 0
+            # 保存先の選択をキャンセルした場合はファイルを作らない。
+            with patch.object(filedialog, "asksaveasfilename", return_value=""):
+                invoke("確認画像を保存")
+            assert not output_path.exists()
             invoke("初期指定の設定をコピー")
             assert len(callback_errors) == 1 and isinstance(
                 callback_errors[0], ValueError
@@ -163,6 +174,10 @@ def main() -> None:
                 (start_x - x0) / width,
                 (start_y - y0) / height,
             )
+            # 読み込みをキャンセルしても、現在の画像と矩形を保つ。
+            with patch.object(filedialog, "askopenfilename", return_value=""):
+                invoke("画像を読み込む")
+            assert root.winfo_exists() and region_list.size() == 3
             # 編集直後に保存でき、保存画像はコピーした指定と一致する。
             invoke("確認画像を保存")
             edited = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
@@ -192,25 +207,58 @@ def main() -> None:
             assert candidate_only["FOREGROUND_RECTS"] == ()
             invoke("矩形をすべて削除")
             assert region_list.size() == 0
-            # 入力画像と同じ保存先は、GUIを起動する前に拒否する。
-            gui["main"].__globals__["OUTPUT_PATH"] = str(input_path)
-            with patch.object(tk, "Tk", side_effect=AssertionError("Unexpected GUI")):
-                try:
-                    gui["main"]()
-                except ValueError as error:
-                    assert "入力画像" in str(error)
-                else:
-                    raise AssertionError("入力画像と同じ保存先を許可しました")
+            # 保存先として入力画像を選んでも、元画像は上書きしない。
+            with patch.object(
+                filedialog, "asksaveasfilename", return_value=str(input_path)
+            ):
+                invoke("確認画像を保存")
+            assert len(callback_errors) == 2 and "入力画像" in str(callback_errors[-1])
             assert input_path.read_bytes() == original_bytes
-            assert len(callback_errors) == 1, callback_errors
+            invalid_path = directory / "確認.jpg"
+            with patch.object(
+                filedialog, "asksaveasfilename", return_value=str(invalid_path)
+            ):
+                invoke("確認画像を保存")
+            assert not invalid_path.exists()
+            assert len(callback_errors) == 3 and ".png" in str(callback_errors[-1])
+            # 別の画像を読み込むと矩形を消し、新しい解像度で保存する。
+            canvas.event_generate("<ButtonPress-1>", x=start_x, y=start_y)
+            canvas.event_generate("<ButtonRelease-1>", x=end_x, y=end_y)
+            root.update()
+            assert region_list.size() == 1
+            second_image = np.full((120, 200, 3), (40, 80, 160), np.uint8)
+            second_path = directory / "別の入力.png"
+            success, encoded = cv.imencode(".png", second_image)
+            assert success
+            encoded.tofile(second_path)
+            with patch.object(
+                filedialog, "askopenfilename", return_value=str(second_path)
+            ):
+                invoke("画像を読み込む")
+            assert region_list.size() == 0
+            invoke("確認画像を保存")
+            reloaded = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
+            np.testing.assert_array_equal(
+                reloaded, gui["initial_overlay"](second_image, regions)
+            )
+            assert save_dialog.call_args.kwargs["initialfile"] == (
+                "別の入力_initial_regions.png"
+            )
+            assert len(callback_errors) == 3, callback_errors
             print(
-                "01 GUI smoke passed: empty start, manual rectangles, scaled drag, rectangle-only copy, delete, clear, save, input protection; no GrabCut"
+                "01 GUI smoke passed: load button, native file dialogs, cancellation, reload, empty start, manual rectangles, scaled drag, rectangle-only copy, delete, clear, save, input protection; no GrabCut"
             )
 
         try:
             with (
                 patch.object(tk, "Tk", return_value=root),
                 patch.object(root, "mainloop", side_effect=exercise),
+                patch.object(
+                    filedialog, "askopenfilename", return_value=str(input_path)
+                ) as open_dialog,
+                patch.object(
+                    filedialog, "asksaveasfilename", return_value=str(output_path)
+                ) as save_dialog,
                 patch.object(
                     root,
                     "report_callback_exception",

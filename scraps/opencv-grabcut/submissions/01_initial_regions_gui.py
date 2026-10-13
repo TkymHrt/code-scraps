@@ -2,14 +2,10 @@
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 import cv2 as cv
 import numpy as np
-
-# パスはこのスクリプトのフォルダが基準。矩形はGUIで手動指定する。
-INPUT_PATH = "input.png"
-OUTPUT_PATH = "results/01_initial_regions_gui.png"
 
 type Rect = tuple[float, float, float, float]
 
@@ -41,32 +37,30 @@ def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.nda
 
 def main() -> None:
     directory = Path(__file__).resolve().parent
-    input_path = (directory / INPUT_PATH).resolve()
-    output_path = (directory / OUTPUT_PATH).resolve()
-    if output_path == input_path:
-        raise ValueError("保存先を入力画像とは別のパスにしてください")
-    # 日本語のパスにも対応するため、画像のバイト列を読み込む。
-    image = cv.imdecode(np.fromfile(input_path, np.uint8), cv.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"入力画像を読み込めません: {input_path}")
-    height, width = image.shape[:2]
+    root = tk.Tk()
+    input_path: Path | None = None
+    image: np.ndarray | None = None
+    height = width = 1
     regions: dict[int, list[Rect]] = {label: [] for label in REGION_NAMES}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
     display_bounds = (0, 0, 1, 1)
     drag_start: tuple[float, float] | None = None
 
-    root = tk.Tk()
     root.title("01 — 初期指定の作成・確認")
     root.geometry("1000x700")
     root.minsize(900, 650)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
     view = tk.StringVar(value="initial")
     status = tk.StringVar()
+    file_text = tk.StringVar(value="未読込")
 
-    ttk.Label(root, text=f"{input_path.name}  ({width} × {height} px)", padding=8).pack(
-        fill="x"
+    file_toolbar = ttk.Frame(root, padding=8)
+    file_toolbar.pack(fill="x")
+    ttk.Button(file_toolbar, text="画像を読み込む", command=lambda: load_image()).pack(
+        side="left"
     )
+    ttk.Label(file_toolbar, textvariable=file_text).pack(side="left", padx=8)
     body = ttk.Frame(root, padding=(8, 0, 8, 8))
     body.pack(fill="both", expand=True)
     sidebar = ttk.Frame(body)
@@ -106,6 +100,29 @@ def main() -> None:
         ttk.Button(sidebar, text=name, command=action).pack(fill="x", pady=4)
     ttk.Label(root, textvariable=status, padding=8, wraplength=850).pack(fill="x")
 
+    def load_image() -> None:
+        nonlocal image, input_path, height, width
+        selected = filedialog.askopenfilename(
+            parent=root,
+            title="入力画像を選ぶ",
+            initialdir=directory,
+            filetypes=[
+                ("画像", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+                ("すべて", "*.*"),
+            ],
+        )
+        if not selected:
+            return
+        # 日本語のパスにも対応するため、画像のバイト列を読み込む。
+        loaded = cv.imdecode(np.fromfile(selected, np.uint8), cv.IMREAD_COLOR)
+        if loaded is None:
+            raise ValueError(f"入力画像を読み込めません: {selected}")
+        image = loaded
+        input_path = Path(selected).resolve()
+        height, width = image.shape[:2]
+        file_text.set(f"{input_path.name}  ({width} × {height} px)")
+        clear_regions()
+
     def refresh_regions() -> None:
         region_rows.clear()
         region_list.delete(0, tk.END)
@@ -129,6 +146,8 @@ def main() -> None:
         nonlocal photo, display_bounds, drag_start
         drag_start = None
         canvas.delete("all")
+        if image is None:
+            return
         shown = initial_overlay(image, regions) if view.get() == "initial" else image
         scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
         display_width = max(1, int(width * scale))
@@ -164,7 +183,7 @@ def main() -> None:
 
     def start_draw(event: tk.Event) -> None:
         nonlocal drag_start
-        if view.get() != "initial":
+        if image is None or view.get() != "initial":
             return
         x0, y0, x1, y1 = display_bounds
         if x0 <= event.x <= x1 and y0 <= event.y <= y1:
@@ -217,11 +236,27 @@ def main() -> None:
             refresh_regions()
 
     def save_image() -> None:
-        # 同じ保存先へ上書きする。残す結果は実行前に人が移動する。
+        if image is None or input_path is None:
+            return
+        selected = filedialog.asksaveasfilename(
+            parent=root,
+            title="確認画像の保存先を選ぶ",
+            initialdir=input_path.parent,
+            initialfile=f"{input_path.stem}_initial_regions.png",
+            defaultextension=".png",
+            filetypes=[("PNG画像", "*.png")],
+            confirmoverwrite=True,
+        )
+        if not selected:
+            return
+        output_path = Path(selected).resolve()
+        if output_path == input_path:
+            raise ValueError("保存先を入力画像とは別のパスにしてください")
+        if output_path.suffix.lower() != ".png":
+            raise ValueError("保存先の拡張子は .png にしてください")
         success, encoded = cv.imencode(".png", initial_overlay(image, regions))
         if not success:
             raise OSError("PNG画像を作成できません")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         encoded.tofile(output_path)
         status.set(f"保存しました: {output_path.name}")
 
