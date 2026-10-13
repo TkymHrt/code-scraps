@@ -1,7 +1,8 @@
-"""設定GUIのドラッグ・再計算・コピー・保存・CSV選択を、実際のTkで確認する."""
+"""設定GUIと長さ専用GUIの選択・計算・表示・保存を、実際のTkで確認する."""
 
 import argparse
 import ast
+import csv
 import hashlib
 import runpy
 import tkinter as tk
@@ -425,6 +426,125 @@ def exercise_comparison(project, output, root, screenshots):
         gui["main"]()
 
 
+def exercise_length_comparison(project, output, root, screenshots):
+    gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+    errors = []
+    sources = project / "tests/results/shape_pipeline_20261013"
+    baseline_path = output / "専用 基準.csv"
+    target_path = output / "専用 比較対象.csv"
+    baseline_path.write_bytes(
+        (sources / "original/results/03_side_lengths.csv").read_bytes()
+    )
+    target_path.write_bytes(
+        (sources / "added_notch/results/03_side_lengths.csv").read_bytes()
+    )
+    original_bytes = (baseline_path.read_bytes(), target_path.read_bytes())
+
+    def exercise():
+        root.deiconify()
+        root.update()
+        widgets = descendants(root)
+        buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
+        table = next(w for w in widgets if isinstance(w, ttk.Treeview))
+        status_label = root.winfo_children()[-1]
+
+        def status_text():
+            return str(root.getvar(str(status_label.cget("textvariable"))))
+
+        def invoke(name):
+            buttons[name].invoke()
+            root.update()
+
+        def select(name, path):
+            with patch.object(filedialog, "askopenfilename", return_value=str(path)):
+                invoke(name)
+
+        assert buttons["比較CSVを保存"].instate(["disabled"])
+        invoke("比較する")
+        assert "両方" in status_text()
+        select("基準CSVを選ぶ", baseline_path)
+        select("比較対象CSVを選ぶ", target_path)
+        assert not table.get_children()
+        invoke("比較する")
+        expected = (
+            ("左", "1262.34", "1420.36", "+158.02"),
+            ("右", "1298.14", "1297.55", "-0.59"),
+            ("合計", "2560.48", "2717.91", "+157.43"),
+        )
+
+        def table_values():
+            return tuple(
+                tuple(table.item(item, "values")) for item in table.get_children()
+            )
+
+        assert table_values() == expected, table_values()
+        assert buttons["比較CSVを保存"].instate(["!disabled"])
+        if screenshots:
+            capture(root, output / "length_comparison.png")
+        root.geometry("760x430")
+        root.update()
+        for name, button in buttons.items():
+            assert button.winfo_ismapped(), name
+            assert button.winfo_height() >= button.winfo_reqheight(), name
+            assert button.winfo_width() >= button.winfo_reqwidth(), name
+            assert (
+                button.winfo_rooty() + button.winfo_height()
+                <= root.winfo_rooty() + root.winfo_height()
+            ), name
+        for name, suffix in (("比較CSVを保存", ".csv"), ("左右のグラフを保存", ".png")):
+            path = output / f"専用 長さ比較{suffix}"
+            with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
+                invoke(name)
+            assert path.is_file()
+        with (output / "専用 長さ比較.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as source:
+            saved = list(csv.DictReader(source))
+        assert [row["delta_px"] for row in saved] == ["158.02", "-0.59", "157.43"]
+        with patch.object(
+            filedialog, "asksaveasfilename", return_value=str(baseline_path)
+        ):
+            invoke("比較CSVを保存")
+        assert "入力CSV" in status_text()
+        with patch.object(filedialog, "asksaveasfilename", return_value=""):
+            invoke("比較CSVを保存")
+        with patch.object(filedialog, "askopenfilename", return_value=""):
+            invoke("比較対象CSVを選ぶ")
+        assert table_values() == expected
+        assert buttons["比較CSVを保存"].instate(["!disabled"])
+        select("比較対象CSVを選ぶ", baseline_path)
+        assert not table.get_children()
+        assert buttons["比較CSVを保存"].instate(["disabled"])
+        invoke("比較する")
+        assert "別々" in status_text()
+        select("比較対象CSVを選ぶ", target_path)
+        invoke("比較する")
+        target_path.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
+        invoke("比較する")
+        assert not table.get_children() and "03_side_lengths.csv" in status_text()
+        assert buttons["左右のグラフを保存"].instate(["disabled"])
+        with patch.object(filedialog, "asksaveasfilename") as picker:
+            invoke("比較CSVを保存")
+            picker.assert_not_called()
+        target_path.write_bytes(original_bytes[1])
+        assert (baseline_path.read_bytes(), target_path.read_bytes()) == original_bytes
+        assert not errors, errors
+        print(
+            "長さ専用GUI: 2枚選択・表示・差分・CSV/PNG保存・キャンセル・結果更新・入力保護を確認"
+        )
+
+    with (
+        patch.object(tk, "Tk", return_value=root),
+        patch.object(root, "mainloop", side_effect=exercise),
+        patch.object(
+            root,
+            "report_callback_exception",
+            side_effect=lambda kind, error, trace: errors.append(error),
+        ),
+    ):
+        gui["main"]()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -442,7 +562,11 @@ def main():
     output.mkdir(parents=True)
     input_path = project / "submissions/input/赤茶色の床と剥離した金属帯.png"
     original_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
-    for exercise in (exercise_measurement, exercise_comparison):
+    for exercise in (
+        exercise_measurement,
+        exercise_comparison,
+        exercise_length_comparison,
+    ):
         root = tk.Tk()
         root.withdraw()
         root.attributes("-alpha", 0)

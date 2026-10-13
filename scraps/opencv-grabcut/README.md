@@ -14,6 +14,7 @@
 実装の範囲は [PLAN.md](PLAN.md)、提出版01〜09の初期指定・長さ・幅・凹み候補・大きさ・比較と検証結果は [submissions/README.md](submissions/README.md) を参照してください。
 短いコードで段階ごとに提出する版は [submissions/README.md](submissions/README.md) にあります。
 初期指定の01 GUIに加え、計測範囲・正常部分・候補条件を決める画像設定GUIと、比較CSV・基準・保存先を選ぶ比較設定GUIがあります。
+長さだけを先に確認するには、[長さ専用GUI](submissions/README.md#長さだけを2枚で比較するgui)で03のCSVを2枚選び、差を表示してCSV・棒グラフを保存できます。
 起動と操作は [提出版README](submissions/README.md#guiで計測パラメータを決める) にまとめています。
 [前処理の比較用スクリプト](sandbox/README.md#前処理の比較)は `sandbox/preprocess_comparison.py` にあります。単独・組み合わせを、抽出画像・端線と側辺長のCSVで比較できます。
 実画像の撮影条件、GoProの設定、画像ごとの調整・実行手順は [CAPTURE.md](CAPTURE.md) にまとめています。
@@ -82,9 +83,9 @@ uv run ty check .
 細い突起の保持、基準・左右差・mm換算・測定間隔・幅の補間など13件です。
 加えて、提出版の初期指定・GrabCut直後のマスク・内部の端座標と表示・側辺長・計測範囲・日本語パス・入力保護を確認する9件、
 提出版04の差分・棒グラフ・日本語パス・入力不備と入力保護を確認する5件があります。
-試作の前処理比較5件と、01 GUI2件、提出版05〜09の検証13件、設定GUIの数値・コピー・入力保護6件を加え、合計53件です。
+試作の前処理比較5件と、01 GUI2件、提出版05〜09の検証13件、設定GUIの数値・コピー・入力保護6件、長さ専用GUI4件を加え、合計57件です。
 GUIの縮小表示上のドラッグ・保存などは `uv run tests/verify_mask_gui.py` で確認できます（Tkを起動できる環境で実行）。
-画像設定・比較設定GUIの操作は `uv run tests/verify_parameter_guis.py --out tests/results/parameter_guis_new` で確認できます。
+画像設定・比較設定・長さ専用GUIの操作は `uv run tests/verify_parameter_guis.py --out tests/results/parameter_guis_new` で確認できます。
 Ruffは構文・未使用名・インポート順だけをチェックします。
 計測条件は実画像に合わせて設定し、入力・保存先と生成物の更新を運用で確認します。
 
@@ -96,3 +97,4 @@ Ruffは構文・未使用名・インポート順だけをチェックします�
 `submissions/input/` はテスト用の生成画像で、本番画像ではありません。旧04と新03の端座標・確認画像・長さCSVが一致することを確認しています。
 実試料での抽出精度は、この検証の対象に含みません。
 2026-10-14に計測と比較の設定GUIを追加し、全53件と実際のTkでの操作、Lint・format・型チェックを確認しました。
+同日に2枚の長さだけを表示・保存するGUIを追加し、全57件と3つのGUI操作、Lint・format・型チェックを確認しました。
