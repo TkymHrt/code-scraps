@@ -7,12 +7,9 @@ from tkinter import ttk
 import cv2 as cv
 import numpy as np
 
-# パスはこのスクリプトのフォルダが基準。01と同じ初期指定で始める。
+# パスはこのスクリプトのフォルダが基準。矩形はGUIで手動指定する。
 INPUT_PATH = "input.png"
 OUTPUT_PATH = "results/01_initial_regions_gui.png"
-CANDIDATE_RECT = (0.34, 0.0, 0.705, 1.0)
-BACKGROUND_RECTS = ((0.0, 0.0, 0.33, 1.0), (0.72, 0.0, 1.0, 1.0))
-FOREGROUND_RECTS = ((0.48, 0.4, 0.56, 0.6),)
 
 type Rect = tuple[float, float, float, float]
 
@@ -27,7 +24,7 @@ REGION_NAMES = {
 }
 
 
-def make_labels(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
+def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
     height, width = image.shape[:2]
     labels = np.full((height, width), cv.GC_PR_BGD, np.uint8)
     for label in REGION_NAMES:
@@ -39,23 +36,7 @@ def make_labels(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray
             if x0 == x1 or y0 == y1:
                 raise ValueError("矩形が1画素未満です。指定範囲を広げてください")
             labels[y0:y1, x0:x1] = label
-    return labels
-
-
-def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
-    return cv.addWeighted(image, 0.65, PALETTE[make_labels(image, regions)], 0.35, 0)
-
-
-def settings_text(input_path: Path, regions: dict[int, list[Rect]]) -> str:
-    if len(regions[cv.GC_PR_FGD]) != 1:
-        raise ValueError("設定をコピーするには、前景候補の矩形を1つ描いてください")
-    # 丸めずにコピーし、提出版でも同じ画素を指定する。
-    return (
-        f"INPUT_PATH = {input_path.as_posix()!r}\n"
-        f"CANDIDATE_RECT = {regions[cv.GC_PR_FGD][0]!r}\n"
-        f"BACKGROUND_RECTS = {tuple(regions[cv.GC_BGD])!r}\n"
-        f"FOREGROUND_RECTS = {tuple(regions[cv.GC_FGD])!r}\n"
-    )
+    return cv.addWeighted(image, 0.65, PALETTE[labels], 0.35, 0)
 
 
 def main() -> None:
@@ -69,7 +50,7 @@ def main() -> None:
     if image is None:
         raise ValueError(f"入力画像を読み込めません: {input_path}")
     height, width = image.shape[:2]
-    regions: dict[int, list[Rect]] = {}
+    regions: dict[int, list[Rect]] = {label: [] for label in REGION_NAMES}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
     display_bounds = (0, 0, 1, 1)
@@ -81,11 +62,11 @@ def main() -> None:
     root.minsize(900, 650)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
     view = tk.StringVar(value="initial")
-    status = tk.StringVar(value="種類を選び、画像上をドラッグして矩形を指定します。")
+    status = tk.StringVar()
 
-    ttk.Label(
-        root, text=f"{input_path}  ({width} × {height} px)", padding=8, wraplength=850
-    ).pack(fill="x")
+    ttk.Label(root, text=f"{input_path.name}  ({width} × {height} px)", padding=8).pack(
+        fill="x"
+    )
     body = ttk.Frame(root, padding=(8, 0, 8, 8))
     body.pack(fill="both", expand=True)
     sidebar = ttk.Frame(body)
@@ -114,22 +95,15 @@ def main() -> None:
             value=label,
             command=lambda: show_initial(),
         ).pack(anchor="w", pady=3)
-    ttk.Label(
-        sidebar,
-        text="前景候補は描き直すと置き換わります。\n背景・前景は複数追加できます。\n灰色は未指定の背景候補です。\n重なると橙 → 青 → 緑の順に優先。",
-    ).pack(anchor="w", pady=8)
     region_list = tk.Listbox(sidebar, width=32, height=7, exportselection=False)
     region_list.pack(fill="x")
     for name, action in (
         ("選択した矩形を削除", lambda: delete_region()),
-        ("既定の矩形に戻す", lambda: reset_regions()),
+        ("矩形をすべて削除", lambda: clear_regions()),
         ("確認画像を保存", lambda: save_image()),
         ("初期指定の設定をコピー", lambda: copy_settings()),
     ):
         ttk.Button(sidebar, text=name, command=action).pack(fill="x", pady=4)
-    ttk.Label(
-        sidebar, text="表示だけ縮小し、確認画像は\n元の解像度で保存します。"
-    ).pack(anchor="w", pady=8)
     ttk.Label(root, textvariable=status, padding=8, wraplength=850).pack(fill="x")
 
     def refresh_regions() -> None:
@@ -140,14 +114,11 @@ def main() -> None:
                 region_rows.append((label, index))
                 region_list.insert(tk.END, f"{name} {index + 1}")
         show_initial()
-        status.set(
-            "初期指定を変更しました。元画像と照合して確認画像を保存してください。"
-        )
+        status.set("")
 
-    def reset_regions() -> None:
-        regions[cv.GC_PR_FGD] = [CANDIDATE_RECT]
-        regions[cv.GC_BGD] = list(BACKGROUND_RECTS)
-        regions[cv.GC_FGD] = list(FOREGROUND_RECTS)
+    def clear_regions() -> None:
+        for rectangles in regions.values():
+            rectangles.clear()
         refresh_regions()
 
     def show_initial() -> None:
@@ -252,22 +223,27 @@ def main() -> None:
             raise OSError("PNG画像を作成できません")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         encoded.tofile(output_path)
-        status.set(f"確認画像を保存しました: {output_path}")
+        status.set(f"保存しました: {output_path.name}")
 
     def copy_settings() -> None:
-        text = settings_text(input_path, regions)
+        if len(regions[cv.GC_PR_FGD]) != 1:
+            raise ValueError("設定をコピーするには、前景候補の矩形を1つ描いてください")
+        # 丸めずにコピーし、提出版でも同じ画素を指定する。
+        text = (
+            f"CANDIDATE_RECT = {regions[cv.GC_PR_FGD][0]!r}\n"
+            f"BACKGROUND_RECTS = {tuple(regions[cv.GC_BGD])!r}\n"
+            f"FOREGROUND_RECTS = {tuple(regions[cv.GC_FGD])!r}\n"
+        )
         root.clipboard_clear()
         root.clipboard_append(text)
-        status.set(
-            "初期指定をコピーしました。提出版の同名の4項目へ貼り付けてください。"
-        )
+        status.set("矩形の設定をコピーしました")
 
     canvas.bind("<Configure>", lambda event: render())
     canvas.bind("<ButtonPress-1>", start_draw)
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
     region_list.bind("<<ListboxSelect>>", lambda event: show_initial())
-    reset_regions()
+    refresh_regions()
     root.mainloop()
 
 

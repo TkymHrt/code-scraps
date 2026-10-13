@@ -53,6 +53,7 @@ def main() -> None:
             clipboard = root.clipboard_get()
         except tk.TclError:
             clipboard = None
+        callback_errors = []
 
         def descendants(widget: tk.Misc) -> list[tk.Misc]:
             found: list[tk.Misc] = []
@@ -80,7 +81,12 @@ def main() -> None:
                 buttons[name].invoke()
                 root.update()
 
-            assert region_list.size() == 4
+            assert region_list.size() == 0, "起動時に矩形が配置されています"
+            invoke("初期指定の設定をコピー")
+            assert len(callback_errors) == 1 and isinstance(
+                callback_errors[0], ValueError
+            )
+            assert "前景候補" in str(callback_errors[0])
             assert canvas.find_all(), "プレビューを表示できません"
             root.geometry("900x650")
             root.update()
@@ -91,11 +97,11 @@ def main() -> None:
                 )
             invoke("確認画像を保存")
             overlay = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
-            regions = {
-                cv.GC_PR_FGD: [gui["CANDIDATE_RECT"]],
-                cv.GC_BGD: list(gui["BACKGROUND_RECTS"]),
-                cv.GC_FGD: list(gui["FOREGROUND_RECTS"]),
-            }
+            regions = {label: [] for label in gui["REGION_NAMES"]}
+            expected_empty = cv.addWeighted(
+                image, 0.65, np.full_like(image, (64, 64, 64)), 0.35, 0
+            )
+            np.testing.assert_array_equal(overlay, expected_empty)
             np.testing.assert_array_equal(
                 overlay, gui["initial_overlay"](image, regions)
             )
@@ -120,8 +126,7 @@ def main() -> None:
                     y=int(y0 + height * 0.5),
                 )
                 root.update()
-            assert region_list.size() == 6
-            invoke("既定の矩形に戻す")
+            assert region_list.size() == 2
             invoke("前景候補（橙）")
 
             # 縮小表示上で逆向きにドラッグし、コピーされた元画像の指定と照合する。
@@ -138,13 +143,16 @@ def main() -> None:
             canvas.event_generate("<B1-Motion>", x=end_x, y=end_y)
             canvas.event_generate("<ButtonRelease-1>", x=end_x, y=end_y)
             root.update()
-            assert region_list.size() == 4
+            assert region_list.size() == 3
+            # 前景候補は再び描いても増えず、置き換わる。
+            canvas.event_generate("<ButtonPress-1>", x=start_x, y=start_y)
+            canvas.event_generate("<ButtonRelease-1>", x=end_x, y=end_y)
+            root.update()
+            assert region_list.size() == 3
             invoke("初期指定の設定をコピー")
             copied = {}
             exec(root.clipboard_get(), copied)
-            assert copied["INPUT_PATH"] == input_path.as_posix()
             assert set(copied) - {"__builtins__"} == {
-                "INPUT_PATH",
                 "CANDIDATE_RECT",
                 "BACKGROUND_RECTS",
                 "FOREGROUND_RECTS",
@@ -172,9 +180,18 @@ def main() -> None:
             root.update()
             assert len(canvas.find_all()) == 2, "選択した矩形の枠がありません"
             invoke("選択した矩形を削除")
-            assert region_list.size() == 3
-            invoke("既定の矩形に戻す")
-            assert region_list.size() == 4
+            assert region_list.size() == 2
+            # 前景候補だけでもコピーでき、確実な背景・前景は空のタプルになる。
+            region_list.selection_set(1)
+            invoke("選択した矩形を削除")
+            assert region_list.size() == 1
+            invoke("初期指定の設定をコピー")
+            candidate_only = {}
+            exec(root.clipboard_get(), candidate_only)
+            assert candidate_only["BACKGROUND_RECTS"] == ()
+            assert candidate_only["FOREGROUND_RECTS"] == ()
+            invoke("矩形をすべて削除")
+            assert region_list.size() == 0
             # 入力画像と同じ保存先は、GUIを起動する前に拒否する。
             gui["main"].__globals__["OUTPUT_PATH"] = str(input_path)
             with patch.object(tk, "Tk", side_effect=AssertionError("Unexpected GUI")):
@@ -185,14 +202,22 @@ def main() -> None:
                 else:
                     raise AssertionError("入力画像と同じ保存先を許可しました")
             assert input_path.read_bytes() == original_bytes
+            assert len(callback_errors) == 1, callback_errors
             print(
-                "01 GUI smoke passed: preview, scaled drag, copy, delete, reset, save, input protection; no GrabCut"
+                "01 GUI smoke passed: empty start, manual rectangles, scaled drag, rectangle-only copy, delete, clear, save, input protection; no GrabCut"
             )
 
         try:
             with (
                 patch.object(tk, "Tk", return_value=root),
                 patch.object(root, "mainloop", side_effect=exercise),
+                patch.object(
+                    root,
+                    "report_callback_exception",
+                    side_effect=lambda kind, error, trace: callback_errors.append(
+                        error
+                    ),
+                ),
                 patch.object(
                     cv, "grabCut", side_effect=AssertionError("Unexpected GrabCut")
                 ),

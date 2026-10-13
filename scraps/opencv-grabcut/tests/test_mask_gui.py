@@ -16,10 +16,11 @@ class MaskGuiTests(unittest.TestCase):
         self.project = Path(__file__).resolve().parents[1]
         self.submissions = self.project / "submissions"
         self.gui = runpy.run_path(str(self.submissions / "01_initial_regions_gui.py"))
+        # 手動で指定した矩形を想定した検証用の値。
         self.regions = {
-            cv.GC_PR_FGD: [self.gui["CANDIDATE_RECT"]],
-            cv.GC_BGD: list(self.gui["BACKGROUND_RECTS"]),
-            cv.GC_FGD: list(self.gui["FOREGROUND_RECTS"]),
+            cv.GC_PR_FGD: [(0.34, 0.0, 0.705, 1.0)],
+            cv.GC_BGD: [(0.0, 0.0, 0.33, 1.0), (0.72, 0.0, 1.0, 1.0)],
+            cv.GC_FGD: [(0.48, 0.4, 0.56, 0.6)],
         }
 
     def temporary_directory(self) -> tempfile.TemporaryDirectory[str]:
@@ -45,7 +46,7 @@ class MaskGuiTests(unittest.TestCase):
         path.write_text("".join(lines), encoding="utf-8")
         return path
 
-    def test_overlay_and_copied_settings_match_submissions_at_original_resolution(
+    def test_overlay_matches_submissions_at_original_resolution(
         self,
     ) -> None:
         """細かい小数・重複・画像端までの指定が、01の表示と02の入力に一致する."""
@@ -54,29 +55,35 @@ class MaskGuiTests(unittest.TestCase):
             (0.1234567890123456, 0.0, 0.7135678912345678, 1.0)
         ]
         self.regions[cv.GC_FGD] = [(0.3012345678912345, 0.4, 0.5678912345678912, 0.6)]
-        expected_labels = self.gui["make_labels"](image, self.regions)
-        self.assertEqual(expected_labels.shape, (239, 317))
-        # 確実な背景の中にも、最後に重ねる確実な前景が残る。
-        self.assertEqual(expected_labels[120, 99], cv.GC_FGD)
+        expected_overlay = self.gui["initial_overlay"](image, self.regions)
+        self.assertEqual(expected_overlay.shape, image.shape)
         with self.temporary_directory() as temporary:
             directory = Path(temporary)
             input_path = directory / "input.png"
             self.assertTrue(cv.imwrite(str(input_path), image))
-            settings = self.gui["settings_text"](input_path, self.regions)
+            # GUIからコピーする3項目と同じ、手動指定の値を提出版へ渡す。
+            settings = (
+                f"CANDIDATE_RECT = {self.regions[cv.GC_PR_FGD][0]!r}\n"
+                f"BACKGROUND_RECTS = {tuple(self.regions[cv.GC_BGD])!r}\n"
+                f"FOREGROUND_RECTS = {tuple(self.regions[cv.GC_FGD])!r}\n"
+            )
             script = self.copy_submission("01_initial_regions.py", directory, settings)
             with patch.object(
                 cv, "grabCut", side_effect=AssertionError("Unexpected GrabCut")
             ):
                 runpy.run_path(str(script))
             overlay = cv.imread(str(directory / "results/01_initial_regions.png"))
-            np.testing.assert_array_equal(
-                self.gui["initial_overlay"](image, self.regions), overlay
-            )
+            np.testing.assert_array_equal(expected_overlay, overlay)
 
             def inspect_labels(
                 image: np.ndarray, labels: np.ndarray, *unused: object
             ) -> None:
-                np.testing.assert_array_equal(labels, expected_labels)
+                # 背景と重なっても、最後に重ねる確実な前景が優先される。
+                self.assertEqual(labels[120, 99], cv.GC_FGD)
+                overlay = cv.addWeighted(
+                    image, 0.65, self.gui["PALETTE"][labels], 0.35, 0
+                )
+                np.testing.assert_array_equal(overlay, expected_overlay)
                 labels[:] = cv.GC_BGD
 
             script = self.copy_submission("02_grabcut_mask.py", directory, settings)
@@ -103,23 +110,7 @@ class MaskGuiTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(ValueError, message),
             ):
-                self.gui["make_labels"](image, regions)
-
-    def test_settings_require_one_candidate_and_allow_no_definite_foreground(
-        self,
-    ) -> None:
-        self.regions[cv.GC_FGD] = []
-        text = self.gui["settings_text"](Path("C:/sample.png"), self.regions)
-        self.assertIn("FOREGROUND_RECTS = ()", text)
-        copied = {}
-        exec(text, copied)
-        self.assertEqual(
-            set(copied) - {"__builtins__"},
-            {"INPUT_PATH", "CANDIDATE_RECT", "BACKGROUND_RECTS", "FOREGROUND_RECTS"},
-        )
-        self.regions[cv.GC_PR_FGD] = []
-        with self.assertRaisesRegex(ValueError, "前景候補"):
-            self.gui["settings_text"](Path("C:/sample.png"), self.regions)
+                self.gui["initial_overlay"](image, regions)
 
 
 if __name__ == "__main__":
