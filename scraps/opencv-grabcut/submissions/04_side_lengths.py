@@ -8,9 +8,9 @@ import cv2 as cv
 import numpy as np
 
 # パスはこのスクリプトのフォルダが基準。
-INPUT_PATH = "input.png"
-OUTPUT_IMAGE_PATH = "results/04_side_lengths.png"
-OUTPUT_CSV_PATH = "results/04_side_lengths.csv"
+INPUT_PATH = r"input\赤茶色の床と剥離した金属帯.png"
+OUTPUT_IMAGE_PATH = r"results/04_side_lengths.png"
+OUTPUT_CSV_PATH = r"results/04_side_lengths.csv"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
@@ -20,9 +20,12 @@ START_Y = 0
 END_Y = None
 
 # 左・上・右・下を、画像全体に対する0〜1の割合で指定する。
-CANDIDATE_RECT = (0.34, 0.0, 0.705, 1.0)
-BACKGROUND_RECTS = ((0.0, 0.0, 0.33, 1.0), (0.72, 0.0, 1.0, 1.0))
-FOREGROUND_RECTS = ((0.48, 0.4, 0.56, 0.6),)
+CANDIDATE_RECT = (0.30522088353413657, 0.0017825311942959, 0.6974564926372155, 1.0)
+BACKGROUND_RECTS = (
+    (0.0, 0.0, 0.30120481927710846, 1.0),
+    (0.7028112449799196, 0.0017825311942959, 1.0, 1.0),
+)
+FOREGROUND_RECTS = ((0.4002677376171352, 0.0, 0.6010709504685409, 1.0),)
 
 directory = Path(__file__).resolve().parent
 input_path = (directory / INPUT_PATH).resolve()
@@ -32,9 +35,13 @@ if len({input_path, output_image_path, output_csv_path}) != 3:
     raise ValueError("入力画像・結果画像・CSVは別々のパスにしてください")
 if ITERATIONS < 1:
     raise ValueError("GrabCutの反復回数は1以上にしてください")
-image = cv.imread(str(input_path))
+# ファイルはPythonで読み、OpenCVには画像のバイト列を渡す。
+image = cv.imdecode(
+    np.frombuffer(input_path.read_bytes(), dtype=np.uint8),
+    cv.IMREAD_COLOR,
+)
 if image is None:
-    raise FileNotFoundError(f"入力画像を読み込めません: {input_path}")
+    raise OSError(f"入力画像を読み込めません: {input_path}")
 height, width = image.shape[:2]
 end_y = height - 1 if END_Y is None else END_Y
 if not (0 <= START_Y <= end_y < height):
@@ -110,8 +117,10 @@ cv.polylines(
     result, [left_edge, right_edge], isClosed=False, color=(0, 0, 255), thickness=2
 )
 output_image_path.parent.mkdir(parents=True, exist_ok=True)
-if not cv.imwrite(str(output_image_path), result):
+success, encoded = cv.imencode(output_image_path.suffix, result)
+if not success:
     raise OSError(f"画像を保存できません: {output_image_path}")
+output_image_path.write_bytes(encoded.tobytes())
 
 # 単位はpx。合計は丸める前に計算し、CSVには小数第2位まで保存する。
 output_csv_path.parent.mkdir(parents=True, exist_ok=True)

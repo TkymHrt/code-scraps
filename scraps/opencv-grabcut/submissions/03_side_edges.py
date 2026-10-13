@@ -7,9 +7,9 @@ import cv2 as cv
 import numpy as np
 
 # パスはこのスクリプトのフォルダが基準。
-INPUT_PATH = "input.png"
-OUTPUT_IMAGE_PATH = "results/03_side_edges.png"
-OUTPUT_CSV_PATH = "results/03_side_edges.csv"
+INPUT_PATH = r"input.png"
+OUTPUT_IMAGE_PATH = r"results/03_side_edges.png"
+OUTPUT_CSV_PATH = r"results/03_side_edges.csv"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
@@ -31,9 +31,13 @@ if len({input_path, output_image_path, output_csv_path}) != 3:
     raise ValueError("入力画像・結果画像・CSVは別々のパスにしてください")
 if ITERATIONS < 1:
     raise ValueError("GrabCutの反復回数は1以上にしてください")
-image = cv.imread(str(input_path))
+# ファイルはPythonで読み、OpenCVには画像のバイト列を渡す。
+image = cv.imdecode(
+    np.frombuffer(input_path.read_bytes(), dtype=np.uint8),
+    cv.IMREAD_COLOR,
+)
 if image is None:
-    raise FileNotFoundError(f"入力画像を読み込めません: {input_path}")
+    raise OSError(f"入力画像を読み込めません: {input_path}")
 height, width = image.shape[:2]
 end_y = height - 1 if END_Y is None else END_Y
 if not (0 <= START_Y <= end_y < height):
@@ -108,8 +112,10 @@ else:
     )
 
 output_image_path.parent.mkdir(parents=True, exist_ok=True)
-if not cv.imwrite(str(output_image_path), result):
+success, encoded = cv.imencode(output_image_path.suffix, result)
+if not success:
     raise OSError(f"画像を保存できません: {output_image_path}")
+output_image_path.write_bytes(encoded.tobytes())
 output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 with output_csv_path.open("w", encoding="utf-8", newline="") as output:
     writer = csv.writer(output)

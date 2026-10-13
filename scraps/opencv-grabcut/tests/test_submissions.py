@@ -1,5 +1,6 @@
 """提出版を1本ずつコピーし、初期指定と実際の抽出結果を確認する."""
 
+import ast
 import csv
 import math
 import runpy
@@ -15,6 +16,35 @@ import numpy as np
 
 
 class SubmissionTests(unittest.TestCase):
+    def submission_source(self, filename: str, **overrides: object) -> str:
+        """コピーの設定だけを合成画像用に替え、手元の実画像設定を使わない."""
+        path = Path(__file__).resolve().parents[1] / "submissions" / filename
+        source = path.read_text(encoding="utf-8")
+        stem = path.stem
+        settings = {
+            "INPUT_PATH": "input.png",
+            "OUTPUT_PATH": f"results/{stem}.png",
+            "OUTPUT_IMAGE_PATH": f"results/{stem}.png",
+            "OUTPUT_CSV_PATH": f"results/{stem}.csv",
+            "CANDIDATE_RECT": (0.34, 0.0, 0.705, 1.0),
+            "BACKGROUND_RECTS": ((0.0, 0.0, 0.33, 1.0), (0.72, 0.0, 1.0, 1.0)),
+            "FOREGROUND_RECTS": ((0.48, 0.4, 0.56, 0.6),),
+            "ITERATIONS": 5,
+            "RANDOM_SEED": 0,
+            "START_Y": 0,
+            "END_Y": None,
+        }
+        settings.update(overrides)
+        lines = source.splitlines(keepends=True)
+        for node in reversed(ast.parse(source).body):
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                name = node.targets[0].id
+                if name in settings:
+                    lines[node.lineno - 1 : node.end_lineno] = [
+                        f"{name} = {settings[name]!r}\n"
+                    ]
+        return "".join(lines)
+
     def temporary_directory(self) -> tempfile.TemporaryDirectory[str]:
         """既存入力を触らず、試験結果フォルダ内だけで実行する."""
         results = Path(__file__).resolve().parents[1] / "tests" / "results"
@@ -26,13 +56,12 @@ class SubmissionTests(unittest.TestCase):
 
     def test_initial_overlay_matches_mask_given_to_grabcut(self) -> None:
         """重なった指定を含め、01の表示と02に渡す指定が一致する."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             directory = Path(temporary)
             image = np.full((100, 100, 3), 100, np.uint8)
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
             for filename in ("01_initial_regions.py", "02_grabcut_mask.py"):
-                source = (submissions / filename).read_text(encoding="utf-8")
+                source = self.submission_source(filename)
                 source = source.replace(
                     "FOREGROUND_RECTS = ((0.48, 0.4, 0.56, 0.6),)",
                     "FOREGROUND_RECTS = ((0.30, 0.4, 0.56, 0.6),)",
@@ -81,7 +110,6 @@ class SubmissionTests(unittest.TestCase):
 
     def test_real_grabcut_preserves_hole_and_separate_foreground(self) -> None:
         """既知の合成画像を実際のGrabCutで抽出し、画素単位で照合する."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             directory = Path(temporary)
             expected = np.zeros((160, 140), np.uint8)
@@ -92,7 +120,7 @@ class SubmissionTests(unittest.TestCase):
             image[expected > 0] = 200
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
             filename = "02_grabcut_mask.py"
-            source = (submissions / filename).read_text(encoding="utf-8")
+            source = self.submission_source(filename)
             script = directory / filename
             script.write_text(source, encoding="utf-8")
             completed = subprocess.run(
@@ -114,7 +142,7 @@ class SubmissionTests(unittest.TestCase):
         """実際のGrabCutで5形状を抽出し、全行の座標と赤線を照合する."""
         project = Path(__file__).resolve().parents[1]
         filename = "03_side_edges.py"
-        source = (project / "submissions" / filename).read_text(encoding="utf-8")
+        source = self.submission_source(filename)
         with self.temporary_directory() as temporary:
             for shape in (
                 "rectangle",
@@ -179,7 +207,6 @@ class SubmissionTests(unittest.TestCase):
     def test_real_side_lengths_match_known_lengths_and_coordinate_csv(self) -> None:
         """7形状で既知の長さと、独立実行した03の点列からの長さを照合する."""
         project = Path(__file__).resolve().parents[1]
-        submissions = project / "submissions"
         with self.temporary_directory() as temporary:
             for shape in (
                 "rectangle",
@@ -219,7 +246,7 @@ class SubmissionTests(unittest.TestCase):
                     for filename in ("04_side_lengths.py", "03_side_edges.py"):
                         script = directory / filename
                         script.write_text(
-                            (submissions / filename).read_text(encoding="utf-8"),
+                            self.submission_source(filename),
                             encoding="utf-8",
                         )
                         completed = subprocess.run(
@@ -281,7 +308,6 @@ class SubmissionTests(unittest.TestCase):
 
     def test_side_lengths_reject_empty_and_single_row_without_saving(self) -> None:
         """側辺長が成立しない抽出結果で、ゼロ長のCSVを保存しない."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             for shape, message in (
                 ("empty", "試料の領域が見つかりません"),
@@ -295,7 +321,7 @@ class SubmissionTests(unittest.TestCase):
                     filename = "04_side_lengths.py"
                     script = directory / filename
                     script.write_text(
-                        (submissions / filename).read_text(encoding="utf-8"),
+                        self.submission_source(filename),
                         encoding="utf-8",
                     )
 
@@ -320,16 +346,13 @@ class SubmissionTests(unittest.TestCase):
 
     def test_side_edges_save_single_row_points(self) -> None:
         """1行だけの抽出結果でも、CSVと同じ端の画素を表示する."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             directory = Path(temporary)
             image = np.full((100, 100, 3), 100, np.uint8)
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
             filename = "03_side_edges.py"
             script = directory / filename
-            script.write_text(
-                (submissions / filename).read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            script.write_text(self.submission_source(filename), encoding="utf-8")
 
             def single_row(
                 image: np.ndarray, labels: np.ndarray, *unused: object
@@ -368,9 +391,7 @@ class SubmissionTests(unittest.TestCase):
             image[mask > 0] = 200
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
             for filename in ("04_side_lengths.py", "03_side_edges.py"):
-                source = (project / "submissions" / filename).read_text(
-                    encoding="utf-8"
-                )
+                source = self.submission_source(filename)
                 source = source.replace("START_Y = 0", "START_Y = 40")
                 source = source.replace("END_Y = None", "END_Y = 120")
                 script = directory / filename
@@ -428,7 +449,6 @@ class SubmissionTests(unittest.TestCase):
 
     def test_measurement_range_rejects_invalid_and_empty_selections(self) -> None:
         """範囲の誤り・試料なし・長さを測れない1行を保存前に検出する."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             for filename in ("03_side_edges.py", "04_side_lengths.py"):
                 for name, start, end in (
@@ -445,7 +465,7 @@ class SubmissionTests(unittest.TestCase):
                         directory.mkdir()
                         image = np.full((100, 100, 3), 100, np.uint8)
                         self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
-                        source = (submissions / filename).read_text(encoding="utf-8")
+                        source = self.submission_source(filename)
                         source = source.replace("START_Y = 0", f"START_Y = {start}")
                         source = source.replace("END_Y = None", f"END_Y = {end}")
                         script = directory / filename
@@ -472,16 +492,13 @@ class SubmissionTests(unittest.TestCase):
 
     def test_side_edges_reject_empty_extraction_without_saving(self) -> None:
         """抽出領域がない場合に、空の座標CSVや結果画像を保存しない."""
-        submissions = Path(__file__).resolve().parents[1] / "submissions"
         with self.temporary_directory() as temporary:
             directory = Path(temporary)
             image = np.full((100, 100, 3), 100, np.uint8)
             self.assertTrue(cv.imwrite(str(directory / "input.png"), image))
             filename = "03_side_edges.py"
             script = directory / filename
-            script.write_text(
-                (submissions / filename).read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            script.write_text(self.submission_source(filename), encoding="utf-8")
 
             def empty_mask(
                 image: np.ndarray, labels: np.ndarray, *unused: object
@@ -495,6 +512,102 @@ class SubmissionTests(unittest.TestCase):
                 runpy.run_path(str(script))
             self.assertFalse((directory / "results/03_side_edges.png").exists())
             self.assertFalse((directory / "results/03_side_edges.csv").exists())
+
+    def test_unicode_paths_with_spaces_relative_and_absolute(self) -> None:
+        """日本語・空白・絶対/相対パスで、独立実行とPNG・CSV保存を確認する."""
+        project = Path(__file__).resolve().parents[1]
+        filenames = (
+            "01_initial_regions.py",
+            "02_grabcut_mask.py",
+            "03_side_edges.py",
+            "04_side_lengths.py",
+        )
+        with self.temporary_directory() as temporary:
+            workspace = Path(temporary) / "日本語 フォルダ"
+            inputs = workspace / "入力 資料"
+            inputs.mkdir(parents=True)
+            expected_mask = np.zeros((160, 140), np.uint8)
+            expected_mask[20:141, 50:91] = 255
+            image = np.full((160, 140, 3), 35, np.uint8)
+            image[expected_mask > 0] = 200
+            input_path = inputs / "試料 画像.png"
+            success, encoded = cv.imencode(".png", image)
+            self.assertTrue(success)
+            input_path.write_bytes(encoded.tobytes())
+            original_bytes = input_path.read_bytes()
+            for mode in ("relative", "absolute"):
+                directory = workspace / mode
+                directory.mkdir()
+                for filename in filenames:
+                    with self.subTest(mode=mode, filename=filename):
+                        stem = Path(filename).stem
+                        output_image = directory / "出力 結果" / f"{stem}_確認.png"
+                        output_csv = directory / "出力 結果" / f"{stem}_座標.csv"
+                        source = self.submission_source(
+                            filename,
+                            INPUT_PATH=(
+                                "../入力 資料/試料 画像.png"
+                                if mode == "relative"
+                                else str(input_path)
+                            ),
+                            OUTPUT_PATH=(
+                                f"出力 結果/{output_image.name}"
+                                if mode == "relative"
+                                else str(output_image)
+                            ),
+                            OUTPUT_IMAGE_PATH=(
+                                f"出力 結果/{output_image.name}"
+                                if mode == "relative"
+                                else str(output_image)
+                            ),
+                            OUTPUT_CSV_PATH=(
+                                f"出力 結果/{output_csv.name}"
+                                if mode == "relative"
+                                else str(output_csv)
+                            ),
+                        )
+                        script = directory / filename
+                        script.write_text(source, encoding="utf-8")
+                        completed = subprocess.run(
+                            [sys.executable, str(script)],
+                            cwd=project,
+                            capture_output=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            completed.returncode,
+                            0,
+                            completed.stderr.decode(errors="replace"),
+                        )
+                        output = cv.imdecode(
+                            np.frombuffer(output_image.read_bytes(), np.uint8),
+                            cv.IMREAD_UNCHANGED,
+                        )
+                        if output is None:
+                            self.fail("日本語パスへ保存した確認画像を読み込めません")
+                        if filename == "02_grabcut_mask.py":
+                            np.testing.assert_array_equal(output, expected_mask)
+                        else:
+                            self.assertEqual(output.shape, image.shape)
+                        if filename == "03_side_edges.py":
+                            with output_csv.open(encoding="utf-8", newline="") as saved:
+                                self.assertEqual(
+                                    list(csv.reader(saved)),
+                                    [["y", "left_x", "right_x"]]
+                                    + [[str(y), "50", "90"] for y in range(20, 141)],
+                                )
+                        elif filename == "04_side_lengths.py":
+                            with output_csv.open(encoding="utf-8", newline="") as saved:
+                                self.assertEqual(
+                                    list(csv.reader(saved)),
+                                    [
+                                        ["edge", "length_px", "start_y", "end_y"],
+                                        ["left", "120.00", "0", "159"],
+                                        ["right", "120.00", "0", "159"],
+                                        ["total", "240.00", "0", "159"],
+                                    ],
+                                )
+            self.assertEqual(input_path.read_bytes(), original_bytes)
 
 
 if __name__ == "__main__":

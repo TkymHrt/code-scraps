@@ -68,17 +68,26 @@ def main() -> None:
             region_list = next(
                 widget for widget in widgets if isinstance(widget, tk.Listbox)
             )
+            status_label = next(
+                widget
+                for widget in widgets
+                if isinstance(widget, ttk.Label) and widget.master is root
+            )
             assert not any(isinstance(widget, ttk.Entry) for widget in widgets)
 
             def invoke(name: str) -> None:
                 buttons[name].invoke()
                 root.update()
 
+            def status_text() -> str:
+                return str(root.getvar(str(status_label.cget("textvariable"))))
+
             open_dialog.assert_not_called()
             assert not canvas.find_all(), "起動時に画像が読み込まれています"
             assert region_list.size() == 0, "起動時に矩形が配置されています"
             invoke("確認画像を保存")
             save_dialog.assert_not_called()
+            assert "画像を読み込んで" in status_text()
             canvas.event_generate("<ButtonPress-1>", x=0, y=0)
             canvas.event_generate("<ButtonRelease-1>", x=1, y=1)
             root.update()
@@ -93,13 +102,13 @@ def main() -> None:
             with patch.object(filedialog, "asksaveasfilename", return_value=""):
                 invoke("確認画像を保存")
             assert not output_path.exists()
+            root.clipboard_clear()
+            root.clipboard_append("コピー前の内容")
             invoke("初期指定の設定をコピー")
-            assert len(callback_errors) == 1 and isinstance(
-                callback_errors[0], ValueError
-            )
-            assert "前景候補" in str(callback_errors[0])
+            assert "前景候補" in status_text()
+            assert root.clipboard_get() == "コピー前の内容"
             assert canvas.find_all(), "プレビューを表示できません"
-            root.geometry("900x650")
+            root.geometry("900x648")
             root.update()
             for name, button in buttons.items():
                 assert button.winfo_ismapped(), f"操作が隠れています: {name}"
@@ -178,6 +187,15 @@ def main() -> None:
             with patch.object(filedialog, "askopenfilename", return_value=""):
                 invoke("画像を読み込む")
             assert root.winfo_exists() and region_list.size() == 3
+            # 読み込めない画像を選んでも、既存の画像と矩形を保つ。
+            unreadable_path = directory / "壊れた画像.png"
+            unreadable_path.write_bytes(b"not an image")
+            with patch.object(
+                filedialog, "askopenfilename", return_value=str(unreadable_path)
+            ):
+                invoke("画像を読み込む")
+            assert "画像を読み込めません" in status_text()
+            assert region_list.size() == 3
             # 編集直後に保存でき、保存画像はコピーした指定と一致する。
             invoke("確認画像を保存")
             edited = cv.imdecode(np.fromfile(output_path, np.uint8), cv.IMREAD_COLOR)
@@ -212,7 +230,7 @@ def main() -> None:
                 filedialog, "asksaveasfilename", return_value=str(input_path)
             ):
                 invoke("確認画像を保存")
-            assert len(callback_errors) == 2 and "入力画像" in str(callback_errors[-1])
+            assert "入力画像" in status_text()
             assert input_path.read_bytes() == original_bytes
             invalid_path = directory / "確認.jpg"
             with patch.object(
@@ -220,7 +238,7 @@ def main() -> None:
             ):
                 invoke("確認画像を保存")
             assert not invalid_path.exists()
-            assert len(callback_errors) == 3 and ".png" in str(callback_errors[-1])
+            assert ".png" in status_text()
             # 別の画像を読み込むと矩形を消し、新しい解像度で保存する。
             canvas.event_generate("<ButtonPress-1>", x=start_x, y=start_y)
             canvas.event_generate("<ButtonRelease-1>", x=end_x, y=end_y)
@@ -244,9 +262,9 @@ def main() -> None:
             assert save_dialog.call_args.kwargs["initialfile"] == (
                 "別の入力_initial_regions.png"
             )
-            assert len(callback_errors) == 3, callback_errors
+            assert not callback_errors, callback_errors
             print(
-                "01 GUI smoke passed: load button, native file dialogs, cancellation, reload, empty start, manual rectangles, scaled drag, rectangle-only copy, delete, clear, save, input protection; no GrabCut"
+                "01 GUI smoke passed: load button, native file dialogs, cancellation, reload, status messages, empty start, manual rectangles, scaled drag, rectangle-only copy, delete, clear, save, input protection; no GrabCut"
             )
 
         try:

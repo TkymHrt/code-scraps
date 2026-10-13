@@ -6,8 +6,8 @@ import cv2 as cv
 import numpy as np
 
 # パスはこのスクリプトのフォルダが基準。
-INPUT_PATH = "input.png"
-OUTPUT_PATH = "results/02_grabcut_mask.png"
+INPUT_PATH = r"input.png"
+OUTPUT_PATH = r"results/02_grabcut_mask.png"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
@@ -23,9 +23,13 @@ if output_path == input_path:
     raise ValueError("保存先を入力画像とは別のパスにしてください")
 if ITERATIONS < 1:
     raise ValueError("GrabCutの反復回数は1以上にしてください")
-image = cv.imread(str(input_path))
+# ファイルはPythonで読み、OpenCVには画像のバイト列を渡す。
+image = cv.imdecode(
+    np.frombuffer(input_path.read_bytes(), dtype=np.uint8),
+    cv.IMREAD_COLOR,
+)
 if image is None:
-    raise FileNotFoundError(f"入力画像を読み込めません: {input_path}")
+    raise OSError(f"入力画像を読み込めません: {input_path}")
 height, width = image.shape[:2]
 
 # 01と同じ初期マスクを、この1本の中で作る。
@@ -64,6 +68,8 @@ cv.grabCut(
 mask = np.isin(labels, (cv.GC_FGD, cv.GC_PR_FGD)).astype(np.uint8) * 255
 
 output_path.parent.mkdir(parents=True, exist_ok=True)
-if not cv.imwrite(str(output_path), mask):
+success, encoded = cv.imencode(output_path.suffix, mask)
+if not success:
     raise OSError(f"画像を保存できません: {output_path}")
+output_path.write_bytes(encoded.tobytes())
 print(f"GrabCut後の2値マスク: {output_path}")

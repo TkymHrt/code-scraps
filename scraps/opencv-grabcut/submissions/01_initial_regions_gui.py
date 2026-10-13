@@ -49,56 +49,71 @@ def main() -> None:
 
     root.title("01 — 初期指定の作成・確認")
     root.geometry("1000x700")
-    root.minsize(900, 650)
+    root.minsize(900, 648)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
     view = tk.StringVar(value="initial")
     status = tk.StringVar()
     file_text = tk.StringVar(value="未読込")
 
-    file_toolbar = ttk.Frame(root, padding=8)
+    file_toolbar = ttk.Frame(root, padding=12)
     file_toolbar.pack(fill="x")
-    ttk.Button(file_toolbar, text="画像を読み込む", command=lambda: load_image()).pack(
-        side="left"
-    )
+    ttk.Button(
+        file_toolbar,
+        text="画像を読み込む",
+        padding=(12, 8),
+        command=lambda: load_image(),
+    ).pack(side="left")
     ttk.Label(file_toolbar, textvariable=file_text).pack(side="left", padx=8)
-    body = ttk.Frame(root, padding=(8, 0, 8, 8))
+    body = ttk.Frame(root, padding=(12, 0, 12, 0))
     body.pack(fill="both", expand=True)
     sidebar = ttk.Frame(body)
-    sidebar.pack(side="left", fill="y", padx=(0, 10))
+    sidebar.pack(side="left", fill="y", padx=(0, 16))
     preview = ttk.Frame(body)
     preview.pack(side="left", fill="both", expand=True)
     view_toolbar = ttk.Frame(preview)
-    view_toolbar.pack(fill="x", pady=(0, 5))
+    view_toolbar.pack(fill="x", pady=(0, 8))
     for value, name in (("initial", "初期指定"), ("original", "元画像")):
         ttk.Radiobutton(
             view_toolbar,
             text=name,
             variable=view,
             value=value,
+            padding=4,
             command=lambda: render(),
         ).pack(side="left", padx=(0, 8))
     canvas = tk.Canvas(preview, background="#242424", highlightthickness=0)
     canvas.pack(fill="both", expand=True)
 
-    ttk.Label(sidebar, text="矩形の種類").pack(anchor="w")
+    ttk.Label(sidebar, text="矩形の種類").pack(anchor="w", pady=(0, 4))
+    # 色見本は同じBGRパレットから作り、表示中の参照を残す。
+    swatches: list[tk.PhotoImage] = []
     for label, name in REGION_NAMES.items():
+        blue, green, red = PALETTE[label]
+        swatch = tk.PhotoImage(master=root, width=16, height=16)
+        swatch.put(f"#{red:02x}{green:02x}{blue:02x}", to=(0, 0, 16, 16))
+        swatches.append(swatch)
         ttk.Radiobutton(
             sidebar,
             text=name,
+            image=swatch,
+            compound="left",
             variable=mode,
             value=label,
+            padding=4,
             command=lambda: show_initial(),
-        ).pack(anchor="w", pady=3)
+        ).pack(anchor="w", pady=4)
     region_list = tk.Listbox(sidebar, width=32, height=7, exportselection=False)
-    region_list.pack(fill="x")
+    region_list.pack(fill="x", pady=(8, 12))
     for name, action in (
         ("選択した矩形を削除", lambda: delete_region()),
         ("矩形をすべて削除", lambda: clear_regions()),
         ("確認画像を保存", lambda: save_image()),
         ("初期指定の設定をコピー", lambda: copy_settings()),
     ):
-        ttk.Button(sidebar, text=name, command=action).pack(fill="x", pady=4)
-    ttk.Label(root, textvariable=status, padding=8, wraplength=850).pack(fill="x")
+        ttk.Button(sidebar, text=name, padding=(12, 8), command=action).pack(
+            fill="x", pady=4
+        )
+    ttk.Label(root, textvariable=status, padding=12, wraplength=876).pack(fill="x")
 
     def load_image() -> None:
         nonlocal image, input_path, height, width
@@ -116,7 +131,8 @@ def main() -> None:
         # 日本語のパスにも対応するため、画像のバイト列を読み込む。
         loaded = cv.imdecode(np.fromfile(selected, np.uint8), cv.IMREAD_COLOR)
         if loaded is None:
-            raise ValueError(f"入力画像を読み込めません: {selected}")
+            status.set("画像を読み込めません。別の画像を選んでください")
+            return
         image = loaded
         input_path = Path(selected).resolve()
         height, width = image.shape[:2]
@@ -237,6 +253,7 @@ def main() -> None:
 
     def save_image() -> None:
         if image is None or input_path is None:
+            status.set("画像を読み込んでください")
             return
         selected = filedialog.asksaveasfilename(
             parent=root,
@@ -251,9 +268,11 @@ def main() -> None:
             return
         output_path = Path(selected).resolve()
         if output_path == input_path:
-            raise ValueError("保存先を入力画像とは別のパスにしてください")
+            status.set("保存先を入力画像とは別のパスにしてください")
+            return
         if output_path.suffix.lower() != ".png":
-            raise ValueError("保存先の拡張子は .png にしてください")
+            status.set("保存先の拡張子は .png にしてください")
+            return
         success, encoded = cv.imencode(".png", initial_overlay(image, regions))
         if not success:
             raise OSError("PNG画像を作成できません")
@@ -262,7 +281,8 @@ def main() -> None:
 
     def copy_settings() -> None:
         if len(regions[cv.GC_PR_FGD]) != 1:
-            raise ValueError("設定をコピーするには、前景候補の矩形を1つ描いてください")
+            status.set("前景候補の矩形を1つ描いてください")
+            return
         # 丸めずにコピーし、提出版でも同じ画素を指定する。
         text = (
             f"CANDIDATE_RECT = {regions[cv.GC_PR_FGD][0]!r}\n"

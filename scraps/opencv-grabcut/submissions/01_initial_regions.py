@@ -6,8 +6,8 @@ import cv2 as cv
 import numpy as np
 
 # パスはこのスクリプトのフォルダが基準。
-INPUT_PATH = "input.png"
-OUTPUT_PATH = "results/01_initial_regions.png"
+INPUT_PATH = r"input.png"
+OUTPUT_PATH = r"results/01_initial_regions.png"
 
 # 左・上・右・下を、画像全体に対する0〜1の割合で指定する。
 CANDIDATE_RECT = (0.34, 0.0, 0.705, 1.0)
@@ -19,9 +19,13 @@ input_path = (directory / INPUT_PATH).resolve()
 output_path = (directory / OUTPUT_PATH).resolve()
 if output_path == input_path:
     raise ValueError("保存先を入力画像とは別のパスにしてください")
-image = cv.imread(str(input_path))
+# ファイルはPythonで読み、OpenCVには画像のバイト列を渡す。
+image = cv.imdecode(
+    np.frombuffer(input_path.read_bytes(), dtype=np.uint8),
+    cv.IMREAD_COLOR,
+)
 if image is None:
-    raise FileNotFoundError(f"入力画像を読み込めません: {input_path}")
+    raise OSError(f"入力画像を読み込めません: {input_path}")
 height, width = image.shape[:2]
 
 # 背景候補で始め、前景候補・確実な背景・確実な前景の順で重ねる。
@@ -47,6 +51,8 @@ palette = np.array(
 result = cv.addWeighted(image, 0.65, palette[labels], 0.35, 0)
 
 output_path.parent.mkdir(parents=True, exist_ok=True)
-if not cv.imwrite(str(output_path), result):
+success, encoded = cv.imencode(output_path.suffix, result)
+if not success:
     raise OSError(f"画像を保存できません: {output_path}")
+output_path.write_bytes(encoded.tobytes())
 print(f"初期指定の重ね画像: {output_path}")
