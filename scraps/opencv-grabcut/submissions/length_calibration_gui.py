@@ -181,11 +181,9 @@ def main() -> None:
     photo = None
     pan_start = None
     row = {}
-    selected_csv = tk.StringVar()
-    selected_image = tk.StringVar()
+    selected_csv = tk.StringVar(value="未読込")
+    selected_image = tk.StringVar(value="未読込")
     reference = tk.StringVar()
-    zoom_percent = tk.DoubleVar(value=100)
-    zoom_text = tk.StringVar(value="100%")
     scale_text = tk.StringVar(value="未校正")
     status = tk.StringVar(value="03の長さCSVと、それを計測した元画像を選んでください")
 
@@ -211,7 +209,10 @@ def main() -> None:
             }
             row = calibrate_lengths(csv_path, calibration)
         except (OSError, ValueError, csv.Error) as error:
-            status.set(str(error))
+            message = str(error)
+            message = message.replace(str(csv_path), csv_path.name)
+            message = message.replace(repr(str(csv_path)), repr(csv_path.name))
+            status.set(message)
             return
         scale_text.set(
             f"基準物: {row['reference_mm']:g}mm\n"
@@ -296,23 +297,12 @@ def main() -> None:
             tags="image_bounds",
         )
         draw_points()
-        zoom_percent.set(scale * 100)
-        zoom_text.set(f"{scale * 100:.1f}%")
-
-    def change_zoom(anchor: tuple, factor: float) -> None:
-        nonlocal view
-        if image is None:
-            return
-        view = zoomed_view(view, anchor, factor)
-        draw_image()
-
-    def zoom_slider(value) -> None:
-        target_scale = float(value) / 100
-        anchor = (canvas.winfo_width() / 2, canvas.winfo_height() / 2)
-        change_zoom(anchor, target_scale / view[2])
 
     def wheel(event) -> str:
-        change_zoom((event.x, event.y), 1.1 ** (event.delta / 120))
+        nonlocal view
+        if image is not None:
+            view = zoomed_view(view, (event.x, event.y), 1.1 ** (event.delta / 120))
+            draw_image()
         return "break"
 
     def focus_canvas(event) -> None:
@@ -364,18 +354,21 @@ def main() -> None:
         try:
             read_lengths(path)
         except (OSError, ValueError, csv.Error) as error:
-            status.set(str(error))
+            message = str(error)
+            message = message.replace(str(path), path.name)
+            message = message.replace(repr(str(path)), repr(path.name))
+            status.set(message)
             return
         if path != csv_path:
             image_path = None
             image = None
             pan_start = None
             points.clear()
-            selected_image.set("")
+            selected_image.set("未読込")
             reference.set("")
             draw_image()
         csv_path = path
-        selected_csv.set(str(path))
+        selected_csv.set(path.name)
         update_result()
 
     def choose_image() -> None:
@@ -399,14 +392,17 @@ def main() -> None:
             if loaded is None or min(loaded.shape[:2]) < 2:
                 raise ValueError(f"校正できる画像を読み込めません: {path}")
         except (OSError, ValueError) as error:
-            status.set(str(error))
+            message = str(error)
+            message = message.replace(str(path), path.name)
+            message = message.replace(repr(str(path)), repr(path.name))
+            status.set(message)
             return
         image_path = path
         image = loaded
         height, width = image.shape[:2]
         pan_start = None
         points.clear()
-        selected_image.set(str(path))
+        selected_image.set(f"{path.name}  ({width} × {height} px)")
         reference.set("")
         # 読み込んだときだけ全体を収め、以後は手動で倍率・位置を調整する。
         scale = min(
@@ -437,38 +433,45 @@ def main() -> None:
         update_result()
         if not row:
             return
+        destination = Path(selected)
         try:
-            write_csv(Path(selected), row)
+            write_csv(destination, row)
         except (OSError, ValueError, csv.Error) as error:
-            status.set(str(error))
+            message = str(error)
+            message = message.replace(str(destination), destination.name)
+            message = message.replace(repr(str(destination)), repr(destination.name))
+            status.set(message)
             return
-        status.set(f"保存しました: {selected}")
+        status.set(f"保存しました: {destination.name}")
 
-    for label, variable, command in (
-        ("03の長さCSVを読み込む", selected_csv, choose_csv),
-        ("画像を読み込む", selected_image, choose_image),
-    ):
-        frame = ttk.Frame(root, padding=(12, 4))
-        frame.pack(fill="x")
-        ttk.Button(frame, text=label, width=24, command=command).pack(side="left")
-        ttk.Entry(frame, textvariable=variable, state="readonly").pack(
-            side="left", fill="x", expand=True, padx=(8, 0)
+    file_toolbar = ttk.Frame(root, padding=(12, 8))
+    file_toolbar.pack(fill="x")
+    file_toolbar.columnconfigure(1, weight=1)
+    for row_number, (label, variable, command) in enumerate(
+        (
+            ("03の長さCSVを読み込む", selected_csv, choose_csv),
+            ("画像を読み込む", selected_image, choose_image),
         )
-    body = ttk.Frame(root, padding=(12, 8, 12, 0))
+    ):
+        ttk.Button(file_toolbar, text=label, width=24, command=command).grid(
+            row=row_number, column=0, sticky="w", pady=4
+        )
+        ttk.Label(file_toolbar, textvariable=variable, wraplength=320).grid(
+            row=row_number, column=1, sticky="w", padx=8, pady=4
+        )
+    ttk.Label(
+        file_toolbar,
+        textvariable=status,
+        wraplength=380,
+        justify="right",
+        anchor="e",
+    ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(16, 0))
+    body = ttk.Frame(root, padding=(12, 8, 12, 12))
     body.pack(fill="both", expand=True)
     sidebar = ttk.Frame(body)
     sidebar.pack(side="left", fill="y", padx=(0, 16))
     ttk.Label(sidebar, text="基準物の実寸 (mm)").pack(anchor="w", pady=(0, 4))
     ttk.Entry(sidebar, textvariable=reference).pack(fill="x", pady=(0, 16))
-    ttk.Label(sidebar, text="表示倍率").pack(anchor="w")
-    ttk.Scale(
-        sidebar,
-        from_=1,
-        to=1600,
-        variable=zoom_percent,
-        command=zoom_slider,
-    ).pack(fill="x", pady=4)
-    ttk.Label(sidebar, textvariable=zoom_text).pack(anchor="e")
     ttk.Label(sidebar, text="校正結果").pack(anchor="w", pady=(16, 4))
     ttk.Label(sidebar, textvariable=scale_text, wraplength=288).pack(anchor="w")
     table = ttk.Treeview(
@@ -505,7 +508,6 @@ def main() -> None:
         body, background="#242424", highlightthickness=0, cursor="crosshair"
     )
     canvas.pack(side="left", fill="both", expand=True)
-    ttk.Label(root, textvariable=status, padding=12, wraplength=960).pack(fill="x")
     canvas.bind("<Button-1>", click)
     canvas.bind("<Configure>", draw_image)
     canvas.bind("<MouseWheel>", wheel)

@@ -456,14 +456,12 @@ def exercise_length_calibration(project, output, root, screenshots):
             for edge, length in zip(("left", "right", "total"), lengths):
                 writer.writerow((edge, f"{length:.2f}", *y_range))
         image_path = path.parent / "校正する 元画像.png"
-        image = np.full((1080, 1920, 3), 245, np.uint8)
-        cv.rectangle(image, (300, y_range[0]), (700, y_range[1]), (70, 80, 100), -1)
-        cv.line(image, (1200, 400), (1200 + reference_px, 400), (0, 0, 0), 2)
-        for x in (1200, 1200 + reference_px):
-            cv.line(image, (x, 380), (x, 420), (0, 0, 0), 2)
-        cv.putText(
-            image, "50 mm", (1200, 370), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2
-        )
+        image = np.full((600, 800, 3), 245, np.uint8)
+        cv.rectangle(image, (100, y_range[0]), (300, y_range[1]), (70, 80, 100), -1)
+        cv.line(image, (480, 300), (480 + reference_px, 300), (0, 0, 0), 2)
+        for x in (480, 480 + reference_px):
+            cv.line(image, (x, 280), (x, 320), (0, 0, 0), 2)
+        cv.putText(image, "50 mm", (480, 270), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
         success, encoded = cv.imencode(".png", image)
         assert success
         image_path.write_bytes(encoded.tobytes())
@@ -484,7 +482,7 @@ def exercise_length_calibration(project, output, root, screenshots):
         ]
         assert not {"点を消す", "全体表示", "100%"} & buttons.keys()
         canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
-        slider = next(w for w in widgets if isinstance(w, ttk.Scale))
+        assert not any(isinstance(w, ttk.Scale) for w in widgets)
         caption = next(
             w
             for w in widgets
@@ -493,7 +491,12 @@ def exercise_length_calibration(project, output, root, screenshots):
         siblings = caption.master.winfo_children()
         reference = siblings[siblings.index(caption) + 1]
         table = next(w for w in widgets if isinstance(w, ttk.Treeview))
-        status_label = root.winfo_children()[-1]
+        file_toolbar = choose_buttons[0].master
+        status_label = file_toolbar.grid_slaves(row=0, column=2)[0]
+        file_labels = [
+            file_toolbar.grid_slaves(row=index, column=1)[0] for index in range(2)
+        ]
+        assert not any(isinstance(w, ttk.Entry) for w in descendants(file_toolbar))
 
         def status_text():
             return str(root.getvar(str(status_label.cget("textvariable"))))
@@ -514,7 +517,7 @@ def exercise_length_calibration(project, output, root, screenshots):
 
         def current_view():
             x0, y0, x1, y1 = canvas.coords("image_bounds")
-            return x0, y0, (x1 - x0) / (1920 - 1)
+            return x0, y0, (x1 - x0) / (800 - 1)
 
         def click_image(x, y):
             offset_x, offset_y, scale = current_view()
@@ -538,13 +541,11 @@ def exercise_length_calibration(project, output, root, screenshots):
             assert not any(isinstance(w, ttk.Combobox) for w in descendants(root))
             assert not canvas.find_withtag("reference")
             offset_x, offset_y, initial_scale = current_view()
-            assert offset_x >= 11 and offset_y >= 11 and initial_scale < 1
+            assert offset_x >= 11 and offset_y >= 11 and initial_scale <= 1
             canvas.event_generate("<Button-1>", x=1, y=1)
             assert not canvas.find_withtag("reference")
-            slider.set(173.25)
-            root.update()
             offset_x, offset_y, scale = current_view()
-            assert abs(scale - 1.7325) < 1e-10
+            assert abs(scale - 1) < 1e-10
             anchor_x = canvas.winfo_width() // 2 + 17
             anchor_y = canvas.winfo_height() // 2 - 11
             before_anchor = (
@@ -573,9 +574,9 @@ def exercise_length_calibration(project, output, root, screenshots):
                 "右ドラッグが基準点を追加しました"
             )
             if index == 0:
-                slider.set(1600)
-                root.update()
-                canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=120)
+                canvas.event_generate(
+                    "<MouseWheel>", x=anchor_x, y=anchor_y, delta=3600
+                )
                 root.update()
                 assert current_view()[2] == 16
                 photo = canvas.itemcget(canvas.find_withtag("source")[0], "image")
@@ -585,21 +586,20 @@ def exercise_length_calibration(project, output, root, screenshots):
                 assert (
                     int(root.tk.call("image", "height", photo)) == canvas.winfo_height()
                 )
-            slider.set(100)
-            root.update()
+                # 画像の読み直しで初期表示へ戻し、既知の座標で点を指定する。
+                choose(choose_buttons[1], images[index])
+
             offset_x, offset_y, scale = current_view()
             assert abs(scale - 1) < 1e-10
-            midpoint_x = offset_x + (1200 + reference_lengths[index] / 2) * scale
-            midpoint_y = offset_y + 400 * scale
+            midpoint_x = offset_x + (480 + reference_lengths[index] / 2) * scale
+            midpoint_y = offset_y + 300 * scale
             drag(
                 round(canvas.winfo_width() / 2 - midpoint_x),
                 round(canvas.winfo_height() / 2 - midpoint_y),
             )
-            slider.set(200)
-            root.update()
-            click_image(1200, 400)
+            click_image(480, 300)
             assert not table.get_children()
-            click_image(1200 + reference_lengths[index], 400)
+            click_image(480 + reference_lengths[index], 300)
             root.setvar(str(reference.cget("textvariable")), "0")
             root.update()
             assert not table.get_children() and "有限値" in status_text()
@@ -608,16 +608,16 @@ def exercise_length_calibration(project, output, root, screenshots):
             root.update()
             assert len(table.get_children()) == 3
             before = values()
-            click_image(1200, 400)
+            click_image(480, 300)
             assert not table.get_children()
             assert len(canvas.find_withtag("reference")) == 2
             assert buttons["校正済みCSVを保存"].instate(["disabled"])
-            click_image(1200 + reference_lengths[index], 400)
+            click_image(480 + reference_lengths[index], 300)
             assert values() == before
+            canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=960)
+            root.update()
             if capture_image and screenshots:
                 capture(root, output / "length_calibration_zoom.png")
-            slider.set(137.5)
-            root.update()
             drag(30, -10)
             canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=120)
             root.update()
@@ -632,12 +632,20 @@ def exercise_length_calibration(project, output, root, screenshots):
         assert "CSV" in status_text()
         assert buttons["校正済みCSVを保存"].instate(["disabled"])
         for index in range(5):
+            root.geometry("1160x820")
+            root.update()
             choose(choose_buttons[0], paths[index])
             assert not table.get_children()
             assert not canvas.find_all()
             assert not reference.get()
             assert buttons["校正済みCSVを保存"].instate(["disabled"])
             choose(choose_buttons[1], images[index])
+            shown_csv = str(root.getvar(str(file_labels[0].cget("textvariable"))))
+            shown_image = str(root.getvar(str(file_labels[1].cget("textvariable"))))
+            assert shown_csv == paths[index].name
+            assert shown_image == f"{images[index].name}  (800 × 600 px)"
+            assert str(paths[index]) not in shown_csv
+            assert str(images[index]) not in shown_image
             assert not table.get_children()
             assert buttons["校正済みCSVを保存"].instate(["disabled"])
             calibrate(index, capture_image=index == 0)
@@ -667,8 +675,8 @@ def exercise_length_calibration(project, output, root, screenshots):
             with destination.open(encoding="utf-8-sig", newline="") as source:
                 row = next(csv.DictReader(source))
             assert float(row["mm_per_px"]) == factor
-            assert abs(float(row["reference_x1"]) - 1200) <= 0.5
-            assert abs(float(row["reference_y1"]) - 400) <= 0.5
+            assert abs(float(row["reference_x1"]) - 480) <= 0.5
+            assert abs(float(row["reference_y1"]) - 300) <= 0.5
             assert (
                 abs(
                     float(row["reference_x2"])
@@ -679,16 +687,26 @@ def exercise_length_calibration(project, output, root, screenshots):
             )
             assert row["input_csv"] == str(paths[index])
             assert row["image_path"] == str(images[index])
+            assert status_text() == f"保存しました: {destination.name}"
 
         bad_csv = output / "候補形式.csv"
         bad_csv.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
         before = values()
         choose(choose_buttons[0], bad_csv)
         assert "03_side_lengths" in status_text() and values() == before
+        assert str(output) not in status_text()
+        missing = output / "存在しないCSV.csv"
+        choose(choose_buttons[0], missing)
+        assert missing.name in status_text() and str(missing) not in status_text()
+        assert values() == before
+        assert "\\\\" not in status_text()
+        if screenshots:
+            capture(root, output / "length_calibration_error.png")
         bad_image = output / "読めない画像.png"
         bad_image.write_bytes(b"not an image")
         choose(choose_buttons[1], bad_image)
         assert "画像を読み込めません" in status_text() and values() == before
+        assert str(output) not in status_text()
         paths[4].write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
         with patch.object(
             filedialog, "asksaveasfilename", return_value=str(output / "stale.csv")
@@ -703,9 +721,23 @@ def exercise_length_calibration(project, output, root, screenshots):
             capture(root, output / "length_calibrated_values.png")
         root.geometry("1000x700")
         root.update()
+        assert status_label.master is file_toolbar
+        assert int(status_label.grid_info()["rowspan"]) == 2
+        assert (
+            status_label.winfo_rootx()
+            > choose_buttons[0].winfo_rootx() + choose_buttons[0].winfo_width()
+        )
+        assert (
+            status_label.winfo_rootx() + status_label.winfo_width()
+            <= root.winfo_rootx() + root.winfo_width()
+        )
+        assert (
+            status_label.winfo_rooty() + status_label.winfo_height()
+            <= canvas.winfo_rooty()
+        )
         for button in choose_buttons:
             assert button.winfo_rooty() + button.winfo_height() <= canvas.winfo_rooty()
-        for widget in (reference, slider, table, buttons["校正済みCSVを保存"]):
+        for widget in (reference, table, buttons["校正済みCSVを保存"]):
             assert widget.winfo_rootx() + widget.winfo_width() < canvas.winfo_rootx()
 
         for name, button in buttons.items():
@@ -721,7 +753,7 @@ def exercise_length_calibration(project, output, root, screenshots):
         ] == original
         assert not errors, errors
         print(
-            "校正GUI: 上部読込・左サイドバー・ボタン削除・クリックで再指定・5画像・自由ズーム・座標保持・CSV保存・入力保護を確認"
+            "校正GUI: 倍率スライダー・フルパス欄なし・右端のステータスとエラー・ホイール・5画像の校正と保存・入力保護を確認"
         )
 
     with (
