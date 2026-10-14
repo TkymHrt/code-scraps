@@ -75,7 +75,6 @@ GUIを開いたまま、使う提出版の同名の3項目を置き換えてく�
 | GUI | 用途 |
 | --- | --- |
 | [measurement_settings_gui.py](measurement_settings_gui.py) | 計測範囲・左右の正常部分・候補条件。端線や候補を確認して03・05〜08の設定をコピー |
-| [rectify_image_gui.py](rectify_image_gui.py) | 固定したカメラ係数とChArUco板で歪み・遠近・実寸補正。補正PNGと、その画像を03で測った長さのmm CSVを保存 |
 | [length_calibration_gui.py](length_calibration_gui.py) | 元画像の既知寸法で03のpx長さをmmに換算し、校正済み長さCSVを保存 |
 | [length_comparison_gui.py](length_comparison_gui.py) | 複数の校正済みCSVと厚さから理想スラブと比較。実寸・理想差・差率・前回差を表と推移グラフで確認・保存 |
 | [comparison_settings_gui.py](comparison_settings_gui.py) | 比較CSV・画像識別名・基準・保存先。04・09の設定をコピー |
@@ -84,6 +83,8 @@ GUIを開いたまま、使う提出版の同名の3項目を置き換えてく�
 | --- | --- | --- |
 | [generate_charuco_board.py](generate_charuco_board.py) | 校正・換算に使うChArUco板のPNGを生成 | `results/charuco_board.png` |
 | [camera_calibration.py](camera_calibration.py) | 換算側へコピペするカメラ行列・歪み係数を算出（GUIなし） | 係数はターミナル表示 |
+| [rectify_image.py](rectify_image.py) | 固定したカメラ係数とChArUco板で画像の歪み・遠近・実寸を補正 | `results/rectified.png` / `results/image_calibration.csv` |
+| [calibrate_lengths.py](calibrate_lengths.py) | 03の長さCSVと画像ごとの換算係数CSVから、mm換算済みCSVを保存 | `results/calibrated_lengths.csv` |
 | [01_initial_regions.py](01_initial_regions.py) | 初期指定を元画像へ重ねた確認画像 | `results/01_initial_regions.png` |
 | [01_initial_regions_gui.py](01_initial_regions_gui.py) | GUIで作った初期指定を元画像へ重ねた確認画像（01の別版） | ダイアログで指定（既定名 `<入力名>_initial_regions.png`） |
 | [02_grabcut_mask.py](02_grabcut_mask.py) | GrabCut直後の2値マスク画像 | `results/02_grabcut_mask.png` |
@@ -147,14 +148,17 @@ uv run submissions/measurement_settings_gui.py
 
 ## ChArUcoでカメラ校正と画像換算を分ける
 
-板の生成は [generate_charuco_board.py](generate_charuco_board.py)、カメラ係数の算出は [camera_calibration.py](camera_calibration.py)、撮影ごとの画像補正とmm換算は [rectify_image_gui.py](rectify_image_gui.py) で行います。
-それぞれ単独で動き、自作の共通モジュール・係数ファイル・設定管理は使いません。
-カメラ係数は同じ撮影条件で一度求め、換算側のコードへ貼ります。GUIには係数の入力・選択欄を置きません。
+板生成・カメラ係数算出・画像補正・長さCSV換算を、1目的ずつの独立スクリプトへ分けました。
+この工程はGUIを使わず、冒頭の入力・保存先を指定して実行します。自作の共通モジュールは使いません。
+カメラ係数は同じ撮影条件で一度求め、画像補正コードへ貼ります。
+撮影ごとの換算係数はCSVへ保存し、長さ換算はそのCSVと03のCSVだけを読みます。
 
 ```text
 事前：校正板を印刷 → 位置・傾き・距離を変えて撮影 → カメラ係数をコピペ
-毎回：板を含む撮影画像 → 換算GUIで補正PNG → 03で側辺長px
-      → 同じ換算GUIでmm CSV → 長さ比較GUIで厚さに基づく理想長と比較
+毎回：撮影画像 → rectify_image.py → 補正PNGと換算係数CSV
+      補正PNG → 03 → 長さCSV
+      長さCSV＋換算係数CSV → calibrate_lengths.py → 校正済みmm CSV
+      校正済みmm CSV → 長さ比較GUIで厚さに基づく理想長と比較
 ```
 
 題材の `opencv-grabcut` フォルダから実行します。現在の依存関係のまま、OpenCV 5.0.0で確認しています。
@@ -183,40 +187,60 @@ uv run submissions/camera_calibration.py
    解像度が違う写真、板の角を縦横に6点以上読めない写真では止まるので、原因を直して再実行します。
 3. 全体と写真ごとの再投影誤差pxを確認します。これは板の読取りへの当てはまりであり、実寸精度の保証値ではありません。
 4. ターミナルに表示する `CALIBRATION_SIZE`・`CAMERA_MATRIX`・`DIST_COEFFS` の3設定を、
-   `rectify_image_gui.py` 冒頭の同名の3行へ貼ります。初期値の `None` のままでは補正・保存できません。
+   `rectify_image.py` 冒頭の同名の3行へ貼ります。初期値の `None` のままでは補正・保存できません。
 
 通常のカメラモデルで、歪み係数の順序は `k1,k2,p1,p2,k3` です。撮影モード・画角・ズーム・解像度などを変えたら求め直します。
 写真と動画は同じ係数を使えるとは仮定しません。魚眼モデルの切替は実装していません。
 ChArUcoの角と複数の視点からの校正は [OpenCV公式手順](https://docs.opencv.org/5.0/tutorials/objdetect/aruco_calibration/aruco_calibration.html) を参照しました。
 
-### 撮影ごとに補正し、03の値をmmへ換算する
+### 撮影ごとに画像を補正する
 
 ```powershell
-uv run submissions/rectify_image_gui.py
+uv run submissions/rectify_image.py
 ```
 
 1. 校正に使ったものと同じ仕様の板を、試料の**計測面と同じ高さ・同じ平面**に置いて撮影します。
    板の縦方向を圧延方向へ揃え、板と試料の左右端を隠さないようにします。
-2. 上部の「撮影画像を読み込む」で選ぶと、歪み補正 → 板の角検出 → 平面の遠近補正を自動で行います。
-   右の画像は補正結果、左は角数・再投影誤差・mm/pxです。ホイールで自由に拡大・縮小し、右ドラッグで移動できます。
-3. 左の「補正PNGを保存」で、03に渡す画像を保存します。元画像への上書きは拒否します。
-   板の範囲だけに切り抜かず、撮影画像全体を含む平面画像を作ります。外側の余白は黒になります。
-4. **GUIを開いたまま**、01や計測設定GUIでこの補正PNGの初期指定・材料区間を設定し、03の入力をそのPNGへ変えて計測します。
-   板と補正外の余白は前景候補へ含めません。元画像用の矩形・y座標は流用しません。
-5. 同じ換算GUIの「補正後の03 CSVを読み込む」で、今の補正PNGを測った03のCSVを選びます。
-   左・右・左右合計を自動でmm表示し、「mm換算CSVを保存」で比較用CSVを保存します。
-6. [長さ比較GUI](#撮影ごとの長さを比較するgui)で、複数回のmm CSVと厚さを比較します。比較GUIは変更していません。
+2. 冒頭の `INPUT_PATH` にその画像、`OUTPUT_IMAGE_PATH` と `OUTPUT_CSV_PATH` に保存先を指定して実行します。
+   相対パスはスクリプトのフォルダが基準です。元画像・補正PNG・換算係数CSVは別のパスにします。
+3. 歪み補正 → 板の角検出 → 平面の遠近補正を自動で行い、補正PNGと換算係数CSVを保存します。
+   板の範囲だけに切り抜かず、撮影画像全体を含む平面画像を作ります。外側の余白は黒です。
+   角数・再投影誤差・mm/pxと保存先をターミナルへ表示します。
+4. 補正PNGを確認し、01や計測設定GUIで初期指定・対応する材料区間を設定します。
+   03の入力をそのPNGへ変えて計測します。板と補正外の余白は前景候補へ含めず、元画像用の矩形・y座標は流用しません。
 
 補正後の解像度はコードの `MM_PER_PX = 0.25`、つまり4px/mmに固定しています。
-表示ズームはこの値を変えません。元画像にない細部を増やす指定ではなく、比較する撮影間で同じ値を使います。
-長さの換算は `03の側辺長px × MM_PER_PX` です。CSVは従来の校正済みCSVと同じ形式で、
-`image_path` は補正PNG、基準2点は板上の既知点を補正画像の座標へ写したものです。手動の点指定はありません。
+元画像にない細部を増やす指定ではなく、比較する撮影間で同じ値を使います。
+`image_calibration.csv` は1画像につき1行です。`source_image_path,image_path` に元画像と補正PNG、
+`reference_mm,reference_px,mm_per_px` に基準寸法と換算値、`reference_x1,reference_y1,reference_x2,reference_y2` に
+板の既知点を補正画像へ写した座標、`image_width,image_height` に補正画像のサイズを保存します。手動の点指定はありません。
+
+### 指定した長さCSVを校正済みCSVへ変換する
+
+```powershell
+uv run submissions/calibrate_lengths.py
+```
+
+冒頭の3設定だけで、入力と出力を指定します。
+
+```python
+INPUT_CSV_PATH = "results/03_side_lengths.csv"
+CALIBRATION_CSV_PATH = "results/image_calibration.csv"
+OUTPUT_CSV_PATH = "results/calibrated_lengths.csv"
+```
+
+`03の側辺長px × 換算係数CSVのmm_per_px` を求め、左・右・左右合計のmm値を保存します。
+このスクリプトは画像やカメラ係数を読みません。元画像・補正PNGがなくても、保存済みの2つのCSVから換算できます。
+換算係数・基準点の整合性、計測範囲、左・右・合計を確認し、不正な入力では出力を変更しません。
+入力CSV・換算係数CSV・元画像・補正PNGへの上書きを拒否します。
+出力は従来と同じ校正済みCSV形式に元画像の `source_image_path` を添えたものです。
+複数回を処理するときは、撮影ごとに対応する長さCSV・換算係数CSV・出力先を指定して実行し、
+保存したmm CSVを [長さ比較GUI](#撮影ごとの長さを比較するgui) へまとめて読み込みます。
 
 **03で測った長さの数値だけを、後から歪み・遠近補正することはできません。先に画像を補正します。**
-03のCSVには画像名がないため、保存した補正PNGとその計測CSVの対応を選ぶ人が確認してください。
-別の画像を選ぶと前の換算結果を解除し、保存時にも03のCSVを読み直します。
+03のCSVには画像名がないため、その補正PNGを計測したCSVと換算係数CSVの対応を確認してください。
 板不足、異なる画像サイズ、板の再投影誤差が2pxを超える場合、消失線が画面を横切る場合、
-極端に大きい出力（2千万画素超など）では保存を止め、上部の読み込みバー右端に理由を表示します。
+極端に大きい出力（2千万画素超など）では保存を止めます。理由はターミナルの例外で確認し、原因を直して再実行します。
 
 平面補正で試料の反りや高さの違いは直せません。板の印刷誤差と、板から離れた領域への補正精度も実物で確認します。
 03は画素ごとの側辺の折れ線長なので、補間・画素の段差も長さへ加わります。
@@ -225,7 +249,7 @@ uv run submissions/rectify_image_gui.py
 ## 画像ごとに校正してmm換算するGUI
 
 [length_calibration_gui.py](length_calibration_gui.py) は、元画像の既知寸法で03の長さをmmへ換算するツールです。
-従来の2点指定方式も残しています。ChArUcoによる歪み・遠近補正は上の換算GUIを使います。
+手で2点を指定する従来方式のツールです。ChArUcoを使う場合は、上記のGUIなしの補正・CSV換算を使います。
 校正済みの長さCSVを1画像につき1ファイルで保存します。厚さ・理想スラブ・撮影順は設定しません。
 上部には読み込みボタンとファイル名を表示し、エラー・ステータスは読み込みバーの右端に表示します。フルパス欄と倍率スライダーは置きません。
 
@@ -275,7 +299,7 @@ mm/px = 基準物の既知の長さmm / 画像上の両端間距離px
 ## 撮影ごとの長さを比較するGUI
 
 [length_comparison_gui.py](length_comparison_gui.py) は、**校正済みのmm長さ**を、
-幅一定・体積一定の理想スラブと比較するツールです。画像の補正・校正とpxからmmへの換算は、前段の換算GUIまたは2点指定の校正GUIが担当します。
+幅一定・体積一定の理想スラブと比較するツールです。ChArUco方式では前段の `rectify_image.py` と `calibrate_lengths.py` が画像補正・mm換算を担当します。従来の2点方式で保存したCSVも読み込めます。
 各CSVには、印などで対応を確認した**同じ材料区間**の計測値を使います。
 
 題材の `opencv-grabcut` フォルダから起動します。Tkinter・Matplotlibを使い、1本で動きます。
@@ -583,6 +607,26 @@ uv run submissions/09_compare_candidates.py
 2026-10-13に初期指定の確認・2値マスク・左右端取得・左右側辺長の4本を追加しました。
 同日に03・04へ計測範囲の指定と可視化を追加し、04のCSVを計測範囲付きの4列へ変更しました。
 
+## ChArUcoの換算をGUIなしのCSV入出力へ変更（2026-10-14）
+
+`rectify_image_gui.py` を外し、画像補正は `rectify_image.py`、長さCSV換算は `calibrate_lengths.py` に分けました。
+画像補正が換算係数CSVを保存するため、長さ換算は画像を開かず、03のCSVと換算係数CSVだけで実行できます。
+手動2点方式の旧GUIは別方式として残し、ChArUcoの処理では使いません。
+全77件、RuffのLint・format、tyが通過しました。
+
+独立コピーを別プロセスで動かし、板生成・12写真のカメラ校正・2撮影の補正・03・CSV換算・複数比較を通しました。
+元画像と補正PNGを退避した後も、CSVだけで同じmm値を再保存できました。
+不整合な換算係数では既存結果を変更しないこと、合計・空欄の不備や入力への上書きを拒否することも確認しました。
+
+```powershell
+uv run tests/verify_camera_pipeline.py --out tests/results/camera_cli_new
+```
+
+成果は `tests/results/camera_cli_20261014/`、全77件のログは `tests/results/camera_cli_20261014_unittest_final.log` です。
+`verification.txt` に各スクリプトの出力と測定値を記録しています。
+150mmの合成区間の補正後の上下間隔は2撮影で150.00・150.50mm、03の側辺長はそれぞれ左155.695・162.405mm、右156.520・160.2275mmでした。
+画像補正の寸法確認と、画素の段差を含む03の折れ線長を区別しています。実カメラでの係数・寸法精度は未確認です。
+
 ## 板の生成を独立スクリプトへ分離（2026-10-14）
 
 `generate_charuco_board.py` を追加し、`camera_calibration.py` から板の生成・保存を取り除きました。
@@ -611,9 +655,7 @@ mm CSVの保存と比較側での読み込みを通しました。キャンセ�
 その合成区間の補正後の上下間隔は150.00mm、03の折れ線長は左155.6950mm・右156.5200mmでした。
 画素の段差と補間による境界の変化が側辺長に加わるため、幾何補正の寸法と03の弧長は同じ精度指標にしません。
 
-```powershell
-uv run tests/verify_camera_gui.py --out tests/results/camera_gui_new --screenshots
-```
+当時は `verify_camera_gui.py` でGUIを検証しました。現在の検証は上記の `verify_camera_pipeline.py` へ置き換えています。
 
 今回の成果は `tests/results/camera_gui_20261014/`、全75件のログは `tests/results/camera_gui_20261014_unittest.log` です。
 `camera_calibration.txt` がコピペ用係数、`verification.txt` が03までの値、

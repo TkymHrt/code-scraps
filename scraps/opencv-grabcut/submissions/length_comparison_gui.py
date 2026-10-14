@@ -47,7 +47,7 @@ def read_calibrated_lengths(path: Path) -> dict:
         reader = csv.DictReader(source)
         if not set(required).issubset(reader.fieldnames or []):
             raise ValueError(
-                f"校正GUIで保存したcalibrated_lengths.csvを選んでください: {path}"
+                f"校正済みのcalibrated_lengths.csvを選んでください: {path}"
             )
         saved_rows = list(reader)
     if len(saved_rows) != 1:

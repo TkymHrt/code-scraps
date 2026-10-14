@@ -294,7 +294,7 @@ class LengthComparisonGuiTests(unittest.TestCase):
                 fields = reader.fieldnames
                 assert fields is not None
                 original = next(reader)
-            with self.assertRaisesRegex(ValueError, "校正GUI"):
+            with self.assertRaisesRegex(ValueError, "校正済み"):
                 self.gui["read_calibrated_lengths"](sample["source_csv"])
             for column, value in (
                 ("left_mm", ""),

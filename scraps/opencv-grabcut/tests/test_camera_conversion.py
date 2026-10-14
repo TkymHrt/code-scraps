@@ -77,12 +77,31 @@ def calibration_photos(directory):
     return paths
 
 
-def configure(gui, matrix=MATRIX, distortion=DISTORTION):
+def configure(rectification, matrix=MATRIX, distortion=DISTORTION):
     # 独立スクリプトで、実運用のコピペと同じ3設定だけを置き換える。
-    settings = gui["rectify_image"].__globals__
+    settings = rectification["rectify_image"].__globals__
     settings["CALIBRATION_SIZE"] = IMAGE_SIZE
     settings["CAMERA_MATRIX"] = matrix.tolist()
     settings["DIST_COEFFS"] = distortion.ravel().tolist()
+
+
+def copy_script(filename, directory, **settings):
+    source = (PROJECT / "submissions" / filename).read_text(encoding="utf-8")
+    lines = source.splitlines(keepends=True)
+    for node in reversed(ast.parse(source).body):
+        if isinstance(node, ast.Assign):
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        else:
+            continue
+        if isinstance(target, ast.Name) and target.id in settings:
+            lines[node.lineno - 1 : node.end_lineno] = [
+                f"{target.id} = {settings[target.id]!r}\n"
+            ]
+    path = directory / filename
+    path.write_text("".join(lines), encoding="utf-8")
+    return path
 
 
 class CameraConversionTests(unittest.TestCase):
@@ -100,7 +119,33 @@ class CameraConversionTests(unittest.TestCase):
         cls.temporary.cleanup()
 
     def setUp(self):
-        self.gui = runpy.run_path(str(PROJECT / "submissions/rectify_image_gui.py"))
+        self.rectification = runpy.run_path(
+            str(PROJECT / "submissions/rectify_image.py")
+        )
+        self.converter = runpy.run_path(
+            str(PROJECT / "submissions/calibrate_lengths.py")
+        )
+
+    def calibration_file(self, directory):
+        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
+        source_path = directory / "撮影元.png"
+        _, encoded = cv.imencode(".png", image)
+        source_path.write_bytes(encoded.tobytes())
+        image_path = directory / "補正.png"
+        calibration_path = directory / "換算係数.csv"
+        script = copy_script(
+            "rectify_image.py",
+            directory,
+            INPUT_PATH=str(source_path),
+            OUTPUT_IMAGE_PATH=str(image_path),
+            OUTPUT_CSV_PATH=str(calibration_path),
+            CALIBRATION_SIZE=IMAGE_SIZE,
+            CAMERA_MATRIX=MATRIX.tolist(),
+            DIST_COEFFS=DISTORTION.tolist(),
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            runpy.run_path(str(script), run_name="__main__")
+        return source_path, image_path, calibration_path
 
     def test_board_generation_and_camera_calibration_are_separate(self):
         with tempfile.TemporaryDirectory(dir=self.directory) as temporary:
@@ -120,7 +165,7 @@ class CameraConversionTests(unittest.TestCase):
             self.assertTrue(np.all(image[:100] == 255))
             # 校正側と換算側の仕様で読め、各角が実寸に対応した位置に並ぶ。
             dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
-            for script in (self.camera, self.gui):
+            for script in (self.camera, self.rectification):
                 board = cv.aruco.CharucoBoard(
                     script["BOARD_SQUARES"],
                     script["SQUARE_MM"],
@@ -164,20 +209,22 @@ class CameraConversionTests(unittest.TestCase):
         for statement in assignments:
             self.assertIsInstance(statement, ast.Assign)
             value = ast.literal_eval(statement.value)
-            self.gui["rectify_image"].__globals__[statement.targets[0].id] = value
+            self.rectification["rectify_image"].__globals__[statement.targets[0].id] = (
+                value
+            )
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
-        correction = self.gui["rectify_image"](image)
+        correction = self.rectification["rectify_image"](image)
         self.assertLess(correction["error_px"], 1)
 
     def test_length_is_consistent_across_pose_distance_and_partial_board(self):
-        configure(self.gui, self.calibration[1], self.calibration[2])
+        configure(self.rectification, self.calibration[1], self.calibration[2])
         measured = []
         for rotation, translation, partial in [
             ((0.12, -0.22, 0.03), (-170, -65, 600), False),
             ((-0.20, 0.18, -0.10), (-150, -100, 650), False),
             ((0.20, 0.15, 0.12), (-160, -90, 560), True),
         ]:
-            correction = self.gui["rectify_image"](
+            correction = self.rectification["rectify_image"](
                 rendered_scene(rotation, translation, partial)
             )
             image = correction["image"]
@@ -194,21 +241,23 @@ class CameraConversionTests(unittest.TestCase):
     def test_unconfigured_wrong_size_and_no_board_are_rejected(self):
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
         with self.assertRaisesRegex(ValueError, "貼り付け"):
-            self.gui["rectify_image"](image)
-        configure(self.gui)
+            self.rectification["rectify_image"](image)
+        configure(self.rectification)
         with self.assertRaisesRegex(ValueError, "解像度"):
-            self.gui["rectify_image"](image[:500])
+            self.rectification["rectify_image"](image[:500])
         with self.assertRaisesRegex(ValueError, "6点"):
-            self.gui["rectify_image"](np.zeros_like(image))
+            self.rectification["rectify_image"](np.zeros_like(image))
         ai_path = PROJECT / "submissions/input/赤茶色の床と剥離した金属帯.png"
         if ai_path.exists():
             ai = cv.imdecode(
                 np.frombuffer(ai_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
             )
             assert ai is not None
-            self.gui["rectify_image"].__globals__["CALIBRATION_SIZE"] = ai.shape[1::-1]
+            self.rectification["rectify_image"].__globals__["CALIBRATION_SIZE"] = (
+                ai.shape[1::-1]
+            )
             with self.assertRaisesRegex(ValueError, "6点"):
-                self.gui["rectify_image"](ai)
+                self.rectification["rectify_image"](ai)
 
     def test_camera_input_errors_stop_without_parameters(self):
         with self.assertRaisesRegex(ValueError, "10枚"):
@@ -224,58 +273,88 @@ class CameraConversionTests(unittest.TestCase):
             self.camera["calibrate"](self.paths[:9] + [path])
 
     def test_invalid_homography_is_stopped_before_allocating_image(self):
-        configure(self.gui)
+        configure(self.rectification)
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
         with patch.object(cv, "findHomography", return_value=(None, None)):
             with self.assertRaisesRegex(ValueError, "遠近補正"):
-                self.gui["rectify_image"](image)
-        self.gui["rectify_image"].__globals__["MM_PER_PX"] = 0.0001
+                self.rectification["rectify_image"](image)
+        self.rectification["rectify_image"].__globals__["MM_PER_PX"] = 0.0001
         with self.assertRaisesRegex(ValueError, "大きすぎ"):
-            self.gui["rectify_image"](image)
+            self.rectification["rectify_image"](image)
 
     def test_mm_csv_is_compatible_and_input_files_are_protected(self):
-        configure(self.gui)
-        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
-        correction = self.gui["rectify_image"](image)
-        source_path = self.directory / "撮影元.png"
-        source_path.write_bytes(b"original")
-        image_path = self.directory / "補正.png"
-        self.gui["save_image"](image_path, correction, source_path)
+        source_path, image_path, calibration_path = self.calibration_file(
+            self.directory
+        )
         csv_path = self.directory / "03.csv"
         with csv_path.open("w", encoding="utf-8-sig", newline="") as output:
             writer = csv.writer(output)
             writer.writerow(("edge", "length_px", "start_y", "end_y"))
             for edge, length in (("left", 600), ("right", 600), ("total", 1200)):
                 writer.writerow((edge, length, 100, 700))
-        row = self.gui["convert_lengths"](csv_path, image_path, correction)
+        saved_path = self.directory / "校正済み.csv"
+        row = self.converter["calibrate_lengths"](
+            csv_path, calibration_path, saved_path
+        )
         self.assertEqual(
             (row["left_mm"], row["right_mm"], row["total_mm"]), (150, 150, 300)
         )
-        saved_path = self.directory / "校正済み.csv"
-        self.gui["save_lengths"](saved_path, row, source_path)
+        self.assertTrue(saved_path.read_bytes().startswith(b"\xef\xbb\xbf"))
         comparison = runpy.run_path(
             str(PROJECT / "submissions/length_comparison_gui.py")
         )
         saved = comparison["read_calibrated_lengths"](saved_path)
         self.assertEqual(saved["left_mm"], 150)
-        for protected in (source_path, image_path, csv_path):
+        for protected in (source_path, image_path, csv_path, calibration_path):
             before = protected.read_bytes()
             with self.assertRaises(ValueError):
-                self.gui["save_lengths"](protected, row, source_path)
+                self.converter["calibrate_lengths"](
+                    csv_path, calibration_path, protected
+                )
             self.assertEqual(protected.read_bytes(), before)
-        with self.assertRaises(ValueError):
-            self.gui["save_image"](source_path, correction, source_path)
+        # 換算処理はCSVだけを使う。元画像も補正画像も不要。
+        source_path.unlink()
+        image_path.unlink()
+        repeated = self.converter["calibrate_lengths"](
+            csv_path, calibration_path, saved_path
+        )
+        self.assertEqual(repeated["left_mm"], row["left_mm"])
         csv_path.write_text(
             csv_path.read_text(encoding="utf-8-sig").replace("1200", "1250"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ValueError, "合計"):
-            self.gui["convert_lengths"](csv_path, image_path, correction)
+            self.converter["calibrate_lengths"](csv_path, calibration_path, saved_path)
         csv_path.write_text(
             "edge,length_px,start_y,end_y\nleft,,100,700\n", encoding="utf-8"
         )
         with self.assertRaisesRegex(ValueError, "空欄"):
-            self.gui["convert_lengths"](csv_path, image_path, correction)
+            self.converter["calibrate_lengths"](csv_path, calibration_path, saved_path)
+
+    def test_inconsistent_calibration_does_not_replace_existing_result(self):
+        with tempfile.TemporaryDirectory(dir=self.directory) as temporary:
+            directory = Path(temporary)
+            _, _, calibration_path = self.calibration_file(directory)
+            csv_path = directory / "03.csv"
+            csv_path.write_text(
+                "edge,length_px,start_y,end_y\nleft,600,100,700\n"
+                "right,600,100,700\ntotal,1200,100,700\n",
+                encoding="utf-8",
+            )
+            saved_path = directory / "校正済み.csv"
+            saved_path.write_bytes(b"keep result")
+            with calibration_path.open(encoding="utf-8-sig", newline="") as source:
+                calibration = list(csv.DictReader(source))[0]
+            calibration["mm_per_px"] = "0.5"
+            with calibration_path.open("w", encoding="utf-8-sig", newline="") as output:
+                writer = csv.DictWriter(output, fieldnames=list(calibration))
+                writer.writeheader()
+                writer.writerow(calibration)
+            with self.assertRaisesRegex(ValueError, "換算係数が一致"):
+                self.converter["calibrate_lengths"](
+                    csv_path, calibration_path, saved_path
+                )
+            self.assertEqual(saved_path.read_bytes(), b"keep result")
 
 
 if __name__ == "__main__":

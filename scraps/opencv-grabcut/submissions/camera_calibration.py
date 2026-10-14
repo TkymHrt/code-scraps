@@ -1,4 +1,4 @@
-"""ChArUcoの複数写真から、換算GUIへ貼るカメラ行列と歪み係数を求める."""
+"""ChArUcoの複数写真から、画像補正コードへ貼るカメラ行列と歪み係数を求める."""
 
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import numpy as np
 # この撮影モード・解像度で撮った校正板の写真だけを入れる。
 INPUT_DIRECTORY = "input/camera_calibration"
 
-# generate_charuco_board.pyと換算GUIと同じ板。
+# generate_charuco_board.pyとrectify_image.pyと同じ板。
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
@@ -106,7 +106,7 @@ def main() -> None:
     print(f"再投影誤差 RMS: {rms:.4f}px（実寸精度の保証値ではありません）")
     for path, error in zip(paths, errors):
         print(f"  {path.name}: {error:.4f}px")
-    print("\nrectify_image_gui.pyの冒頭の3設定を、以下に置き換えてください。\n")
+    print("\nrectify_image.pyの冒頭の3設定を、以下に置き換えてください。\n")
     print(parameter_text(image_size, matrix, distortion))
 
 
