@@ -1,4 +1,4 @@
-"""設定GUIと長さ専用GUIの選択・計算・表示・保存を、実際のTkで確認する."""
+"""設定・校正・長さ比較GUIの選択・計算・表示・保存を、実際のTkで確認する."""
 
 import argparse
 import ast
@@ -431,13 +431,12 @@ def exercise_comparison(project, output, root, screenshots):
         gui["main"]()
 
 
-def exercise_length_comparison(project, output, root, screenshots):
-    gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+def exercise_length_calibration(project, output, root, screenshots):
+    gui = runpy.run_path(str(project / "submissions/length_calibration_gui.py"))
     errors = []
     paths = []
     images = []
     reference_lengths = [100, 200, 100, 100, 100]
-    thicknesses = [10, 10, 5, 5, 4]
     cases = (
         (200, 200, 400),
         (400, 400, 800),
@@ -479,10 +478,12 @@ def exercise_length_comparison(project, output, root, screenshots):
         root.update()
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
-        input_table, length_table, ideal_table, ratio_table, previous_table = [
-            w for w in widgets if isinstance(w, ttk.Treeview)
+        choose_buttons = [
+            w
+            for w in widgets
+            if isinstance(w, ttk.Button) and str(w.cget("text")) == "選ぶ"
         ]
-        notebook = next(w for w in widgets if isinstance(w, ttk.Notebook))
+        table = next(w for w in widgets if isinstance(w, ttk.Treeview))
         status_label = root.winfo_children()[-1]
 
         def status_text():
@@ -492,44 +493,17 @@ def exercise_length_comparison(project, output, root, screenshots):
             buttons[name].invoke()
             root.update()
 
-        def field(label):
-            caption = next(
-                w
-                for w in widgets
-                if isinstance(w, ttk.Label) and str(w.cget("text")) == label
-            )
-            siblings = caption.master.winfo_children()
-            return siblings[siblings.index(caption) + 1]
+        def choose(button, path):
+            with patch.object(filedialog, "askopenfilename", return_value=str(path)):
+                button.invoke()
+                root.update()
 
-        initial_length = field("初期区間長 (mm)")
-        initial_thickness = field("初期厚さ (mm)")
-        name_field = field("撮影名")
-        thickness_field = field("撮影時の厚さ (mm)")
-
-        def set_field(widget, value):
-            root.setvar(str(widget.cget("textvariable")), str(value))
-            root.update()
-
-        def add(items):
-            with patch.object(
-                filedialog,
-                "askopenfilenames",
-                return_value=tuple(str(path) for path in items),
-            ):
-                invoke("CSVを追加")
-
-        def select(*indices):
-            input_table.selection_set(tuple(str(index) for index in indices))
-            input_table.event_generate("<<TreeviewSelect>>")
-            root.update()
-
-        def values(table):
+        def values():
             return tuple(
                 tuple(table.item(item, "values")) for item in table.get_children()
             )
 
         def calibrate(index, cancel=False, capture_image=False):
-            select(index)
 
             def drive():
                 popup = next(
@@ -593,7 +567,7 @@ def exercise_length_comparison(project, output, root, screenshots):
                     )
                     assert "mm/px" in factor_text and "有限値" not in factor_text
                     if capture_image and screenshots:
-                        capture(popup, output / "slab_calibration.png")
+                        capture(popup, output / "length_calibration_points.png")
                     actions["この校正を使う"].invoke()
                 except Exception as error:
                     errors.append(error)
@@ -601,11 +575,174 @@ def exercise_length_comparison(project, output, root, screenshots):
                         popup.destroy()
 
             root.after(40, drive)
-            with patch.object(
-                filedialog, "askopenfilename", return_value=str(images[index])
-            ):
-                invoke("既知寸法から校正")
+            invoke("既知寸法から校正")
             assert not errors, errors
+
+        invoke("既知寸法から校正")
+        assert "CSVと元画像" in status_text()
+        assert buttons["校正済みCSVを保存"].instate(["disabled"])
+        for index in range(5):
+            choose(choose_buttons[0], paths[index])
+            assert not table.get_children()
+            assert buttons["校正済みCSVを保存"].instate(["disabled"])
+            choose(choose_buttons[1], images[index])
+            assert not table.get_children()
+            assert buttons["校正済みCSVを保存"].instate(["disabled"])
+            calibrate(index, capture_image=index == 0)
+            factor = 50 / reference_lengths[index]
+            expected = tuple(
+                (label, f"{px:.3f}", f"{px * factor:.3f}")
+                for label, px in zip(("左", "右", "左右合計"), cases[index])
+            )
+            assert values() == expected, values()
+            before = values()
+            calibrate(index, cancel=True)
+            assert values() == before
+            for button in choose_buttons:
+                choose(button, "")
+                assert values() == before
+            with patch.object(filedialog, "asksaveasfilename", return_value=""):
+                invoke("校正済みCSVを保存")
+            assert values() == before
+            with patch.object(
+                filedialog, "asksaveasfilename", return_value=str(paths[index])
+            ):
+                invoke("校正済みCSVを保存")
+            assert "入力CSV" in status_text()
+            destination = paths[index].parent / "calibrated_lengths.csv"
+            with patch.object(
+                filedialog, "asksaveasfilename", return_value=str(destination)
+            ):
+                invoke("校正済みCSVを保存")
+            with destination.open(encoding="utf-8-sig", newline="") as source:
+                row = next(csv.DictReader(source))
+            assert float(row["mm_per_px"]) == factor
+            assert float(row["reference_x1"]) == 1200
+            assert float(row["reference_x2"]) == 1200 + reference_lengths[index]
+            assert row["input_csv"] == str(paths[index])
+            assert row["image_path"] == str(images[index])
+
+        bad_csv = output / "候補形式.csv"
+        bad_csv.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
+        before = values()
+        choose(choose_buttons[0], bad_csv)
+        assert "03_side_lengths" in status_text() and values() == before
+        bad_image = output / "読めない画像.png"
+        bad_image.write_bytes(b"not an image")
+        choose(choose_buttons[1], bad_image)
+        assert "画像を読み込めません" in status_text() and values() == before
+        paths[4].write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
+        with patch.object(
+            filedialog, "asksaveasfilename", return_value=str(output / "stale.csv")
+        ):
+            invoke("校正済みCSVを保存")
+        assert not (output / "stale.csv").exists() and not table.get_children()
+        assert buttons["校正済みCSVを保存"].instate(["disabled"])
+        paths[4].write_bytes(original[4][0])
+        choose(choose_buttons[0], paths[4])
+        assert len(table.get_children()) == 3
+        if screenshots:
+            capture(root, output / "length_calibrated_values.png")
+        root.geometry("800x440")
+        root.update()
+        for name, button in buttons.items():
+            assert button.winfo_ismapped(), name
+            assert button.winfo_height() >= button.winfo_reqheight(), name
+            assert (
+                button.winfo_rooty() + button.winfo_height()
+                <= root.winfo_rooty() + root.winfo_height()
+            )
+        assert [
+            (path.read_bytes(), image.read_bytes())
+            for path, image in zip(paths, images)
+        ] == original
+        assert not errors, errors
+        print(
+            "校正GUI: 5画像・2点指定・100%表示とスクロール・mm換算・CSV保存・キャンセル・入力保護を確認"
+        )
+
+    with (
+        patch.object(tk, "Tk", return_value=root),
+        patch.object(root, "mainloop", side_effect=exercise),
+        patch.object(
+            root,
+            "report_callback_exception",
+            side_effect=lambda kind, error, trace: errors.append(error),
+        ),
+    ):
+        gui["main"]()
+
+
+def exercise_length_comparison(project, output, root, screenshots):
+    gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+    errors = []
+    paths = []
+    sources = []
+    images = []
+    thicknesses = [10, 10, 5, 5, 4]
+    for index in range(5):
+        directory = output / "スラブ試験" / f"{index + 1:02d}"
+        paths.append(directory / "calibrated_lengths.csv")
+        sources.append(directory / "03_side_lengths.csv")
+        images.append(directory / "校正する 元画像.png")
+    original = [
+        (path.read_bytes(), source.read_bytes(), image.read_bytes())
+        for path, source, image in zip(paths, sources, images)
+    ]
+
+    def exercise():
+        root.deiconify()
+        root.update()
+        widgets = descendants(root)
+        buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
+        input_table, length_table, ideal_table, ratio_table, previous_table = [
+            w for w in widgets if isinstance(w, ttk.Treeview)
+        ]
+        notebook = next(w for w in widgets if isinstance(w, ttk.Notebook))
+        status_label = root.winfo_children()[-1]
+
+        def status_text():
+            return str(root.getvar(str(status_label.cget("textvariable"))))
+
+        def invoke(name):
+            buttons[name].invoke()
+            root.update()
+
+        def field(label):
+            caption = next(
+                w
+                for w in widgets
+                if isinstance(w, ttk.Label) and str(w.cget("text")) == label
+            )
+            siblings = caption.master.winfo_children()
+            return siblings[siblings.index(caption) + 1]
+
+        initial_length = field("初期区間長 (mm)")
+        initial_thickness = field("初期厚さ (mm)")
+        name_field = field("撮影名")
+        thickness_field = field("撮影時の厚さ (mm)")
+
+        def set_field(widget, value):
+            root.setvar(str(widget.cget("textvariable")), str(value))
+            root.update()
+
+        def add(items):
+            with patch.object(
+                filedialog,
+                "askopenfilenames",
+                return_value=tuple(str(path) for path in items),
+            ):
+                invoke("CSVを追加")
+
+        def select(*indices):
+            input_table.selection_set(tuple(str(index) for index in indices))
+            input_table.event_generate("<<TreeviewSelect>>")
+            root.update()
+
+        def values(table):
+            return tuple(
+                tuple(table.item(item, "values")) for item in table.get_children()
+            )
 
         invoke("比較する")
         assert "初期区間長" in status_text()
@@ -622,7 +759,6 @@ def exercise_length_comparison(project, output, root, screenshots):
             select(index)
             set_field(thickness_field, thickness)
             invoke("撮影名・厚さを適用")
-            calibrate(index, capture_image=index == 0)
         assert [input_table.item(str(i), "values")[3] for i in range(5)] == [
             "0.5",
             "0.25",
@@ -644,12 +780,10 @@ def exercise_length_comparison(project, output, root, screenshots):
         assert values(previous_table)[1] == ("撮影02", "+0.000", "+0.000", "+0.000")
         assert buttons["比較CSVを保存"].instate(["!disabled"])
         before = values(length_table)
-        calibrate(0, cancel=True)
-        assert values(length_table) == before and buttons["比較CSVを保存"].instate(
-            ["!disabled"]
-        )
-        with patch.object(filedialog, "askopenfilename", return_value=""):
-            invoke("既知寸法から校正")
+        assert not any(isinstance(w, tk.Canvas) for w in widgets)
+        assert "既知寸法から校正" not in buttons
+        with patch.object(filedialog, "askopenfilenames", return_value=()):
+            invoke("CSVを追加")
         assert values(length_table) == before
         select(2)
         set_field(name_field, "撮影02")
@@ -706,7 +840,7 @@ def exercise_length_comparison(project, output, root, screenshots):
         assert (
             len([w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]) == 1
         )
-        for path in paths:
+        for path in paths + sources:
             with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
                 invoke("比較CSVを保存")
             assert "入力CSV" in status_text()
@@ -750,7 +884,8 @@ def exercise_length_comparison(project, output, root, screenshots):
         paths[4].write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
         invoke("比較する")
         assert (
-            not length_table.get_children() and "03_side_lengths.csv" in status_text()
+            not length_table.get_children()
+            and "calibrated_lengths.csv" in status_text()
         )
         assert buttons["推移グラフを表示"].instate(["disabled"])
         paths[4].write_bytes(original[4][0])
@@ -762,12 +897,12 @@ def exercise_length_comparison(project, output, root, screenshots):
         assert len(length_table.get_children()) == 3
         assert values(length_table)[1][0] == "圧延後"
         assert [
-            (path.read_bytes(), image.read_bytes())
-            for path, image in zip(paths, images)
+            (path.read_bytes(), source.read_bytes(), image.read_bytes())
+            for path, source, image in zip(paths, sources, images)
         ] == original
         assert not errors, errors
         print(
-            "スラブ比較GUI: 初期区間・厚さ・画像別2点校正・100%表示とスクロール・mm/理想差/率/前回差・更新・並べ替え・保存・入力保護を確認"
+            "スラブ比較GUI: 校正GUIを閉じた後の5CSV読込・初期区間と厚さ・mm/理想差/率/前回差・更新・並べ替え・保存・入力保護を確認"
         )
 
     with (
@@ -802,6 +937,7 @@ def main():
     for exercise in (
         exercise_measurement,
         exercise_comparison,
+        exercise_length_calibration,
         exercise_length_comparison,
     ):
         root = tk.Tk()

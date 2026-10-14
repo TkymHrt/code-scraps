@@ -1,4 +1,4 @@
-"""画像別校正・幅一定のスラブ基準・実寸差と保存を既知値で確認する."""
+"""保存済みのmm長さ・幅一定のスラブ基準・実寸差と保存を確認する."""
 
 import csv
 import runpy
@@ -15,6 +15,9 @@ class LengthComparisonGuiTests(unittest.TestCase):
         self.project = Path(__file__).resolve().parents[1]
         self.gui = runpy.run_path(
             str(self.project / "submissions/length_comparison_gui.py")
+        )
+        self.calibrator = runpy.run_path(
+            str(self.project / "submissions/length_calibration_gui.py")
         )
         self.comparison = test_submission_comparison.SubmissionComparisonTests()
 
@@ -40,15 +43,19 @@ class LengthComparisonGuiTests(unittest.TestCase):
         success, encoded = cv.imencode(".png", image)
         self.assertTrue(success)
         image_path.write_bytes(encoded.tobytes())
-        calibration = self.gui["calibration_from_points"](
+        calibration = self.calibrator["calibration_from_points"](
             50, ((30, 40), (30 + reference_px, 40)), (700, 800)
         )
         calibration["image_path"] = str(image_path.resolve())
+        calibrated_path = path.parent / "calibrated_lengths.csv"
+        row = self.calibrator["calibrate_lengths"](path, calibration)
+        self.calibrator["write_csv"](calibrated_path, row)
         return {
             "sample_id": name,
-            "csv_path": path,
+            "csv_path": calibrated_path,
+            "source_csv": path,
+            "image_path": image_path,
             "thickness_mm": thickness,
-            "calibration": calibration,
         }
 
     def known_samples(self, directory):
@@ -66,12 +73,7 @@ class LengthComparisonGuiTests(unittest.TestCase):
             ),
         ]
 
-    def test_diagonal_calibration_and_single_image_against_model(self):
-        calibration = self.gui["calibration_from_points"](
-            50, ((10, 10), (40, 50)), (100, 100)
-        )
-        self.assertEqual(calibration["reference_px"], 50)
-        self.assertEqual(calibration["mm_per_px"], 1)
+    def test_single_image_against_model(self):
         with self.comparison.temporary_directory() as temporary:
             sample = self.write_case(Path(temporary), "1枚", (200, 200, 400))
             rows = self.gui["compare_lengths"]([sample], 100, 10)
@@ -81,37 +83,6 @@ class LengthComparisonGuiTests(unittest.TestCase):
             figure = self.gui["create_graph"](rows)
             self.assertEqual(figure.axes[0].lines[2].get_marker(), "s")
 
-    def test_calibration_rejects_invalid_reference_and_points(self):
-        for reference, points, size in (
-            (0, ((1, 1), (5, 5)), (100, 100)),
-            (-1, ((1, 1), (5, 5)), (100, 100)),
-            ("bad", ((1, 1), (5, 5)), (100, 100)),
-            (float("inf"), ((1, 1), (5, 5)), (100, 100)),
-            (float("nan"), ((1, 1), (5, 5)), (100, 100)),
-            (50, (), (100, 100)),
-            (50, ((1, 1),), (100, 100)),
-            (50, ((1, 1), (1, 1)), (100, 100)),
-            (50, ((1, 1), (100, 5)), (100, 100)),
-            (50, ((1, 1), (-1, 5)), (100, 100)),
-            (50, ((1, 1), (float("nan"), 5)), (100, 100)),
-            (50, ((0, 0), (0, 5)), (1, 100)),
-        ):
-            with self.subTest(reference=reference, points=points, size=size):
-                with self.assertRaises(ValueError):
-                    self.gui["calibration_from_points"](reference, points, size)
-
-    def test_display_coordinates_map_to_original_image(self):
-        convert = self.gui["point_on_image"]
-        bounds = (12, 24, 101, 51)
-        self.assertEqual(convert(12, 24, bounds, (1001, 501)), (0, 0))
-        self.assertEqual(convert(62, 49, bounds, (1001, 501)), (500, 250))
-        self.assertEqual(convert(112, 74, bounds, (1001, 501)), (1000, 500))
-        self.assertIsNone(convert(11, 24, bounds, (1001, 501)))
-        self.assertIsNone(convert(113, 24, bounds, (1001, 501)))
-        self.assertEqual(
-            convert(112, 124, (12, 24, 1001, 501), (1001, 501)), (100, 100)
-        )
-
     def test_multiple_scales_slab_length_csv_graph_and_independent_script(self):
         with self.comparison.temporary_directory() as temporary:
             directory = Path(temporary)
@@ -119,7 +90,7 @@ class LengthComparisonGuiTests(unittest.TestCase):
             before = [
                 (
                     sample["csv_path"].read_bytes(),
-                    Path(sample["calibration"]["image_path"]).read_bytes(),
+                    sample["image_path"].read_bytes(),
                 )
                 for sample in samples
             ]
@@ -151,7 +122,7 @@ class LengthComparisonGuiTests(unittest.TestCase):
             self.assertEqual(saved[2]["delta_total_pct"], "5")
             self.assertEqual(saved[0]["reference_x1"], "30")
             self.assertEqual(
-                saved[0]["image_path"], samples[0]["calibration"]["image_path"]
+                saved[0]["image_path"], str(samples[0]["image_path"].resolve())
             )
             graph_path = directory / "出力/スラブ 比較.png"
             gui["write_graph"](graph_path, rows)
@@ -174,41 +145,12 @@ class LengthComparisonGuiTests(unittest.TestCase):
                 [
                     (
                         sample["csv_path"].read_bytes(),
-                        Path(sample["calibration"]["image_path"]).read_bytes(),
+                        sample["image_path"].read_bytes(),
                     )
                     for sample in samples
                 ],
                 before,
             )
-
-    def test_invalid_csv_rows_are_rejected(self) -> None:
-        with self.comparison.temporary_directory() as temporary:
-            path = Path(temporary) / "不正 長さ.csv"
-            header = "edge,length_px,start_y,end_y\n"
-            good_rows = "left,120,20,140\nright,120,20,140\ntotal,240,20,140\n"
-            cases = {
-                "candidate_format": "edge,candidate_count\nleft,2\nright,3\ntotal,5\n",
-                "missing_row": header + "left,120,20,140\nright,120,20,140\n",
-                "duplicate_edge": header + good_rows.replace("right,", "left,"),
-                "unknown_edge": header + good_rows.replace("right,", "top,"),
-                "missing_field": header
-                + good_rows.replace("left,120,20,140", "left,120,20"),
-                "empty_field": header + good_rows.replace("left,120", "left,"),
-                "not_number": header + good_rows.replace("left,120", "left,abc"),
-                "nan": header + good_rows.replace("left,120", "left,nan"),
-                "infinity": header + good_rows.replace("left,120", "left,inf"),
-                "zero": header + good_rows.replace("left,120", "left,0"),
-                "negative": header + good_rows.replace("left,120", "left,-1"),
-                "invalid_range": header + good_rows.replace(",20,140", ",140,20"),
-                "mixed_ranges": header
-                + good_rows.replace("left,120,20", "left,120,21"),
-                "wrong_total": header + good_rows.replace("total,240", "total,250"),
-            }
-            for name, text in cases.items():
-                with self.subTest(name=name):
-                    path.write_text(text, encoding="utf-8")
-                    with self.assertRaises(ValueError):
-                        self.gui["read_lengths"](path)
 
     def test_invalid_models_and_incomplete_sample_conditions_are_rejected(self):
         with self.comparison.temporary_directory() as temporary:
@@ -233,19 +175,12 @@ class LengthComparisonGuiTests(unittest.TestCase):
                 [dict(samples[0], thickness_mm=None)],
                 [dict(samples[0], thickness_mm=-1)],
                 [dict(samples[0], thickness_mm=float("inf"))],
-                [dict(samples[0], calibration=None)],
             ]
             for items in invalid_samples:
                 with self.subTest(items=items):
                     with self.assertRaises(ValueError):
                         self.gui["compare_lengths"](items, 100, 10)
             path = samples[2]["csv_path"]
-            path.write_text(
-                path.read_text(encoding="utf-8-sig").replace(",30,430", ",30,900"),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(ValueError, "校正画像"):
-                self.gui["compare_lengths"](samples, 100, 10)
             path.unlink()
             with self.assertRaises(OSError):
                 self.gui["compare_lengths"](samples, 100, 10)
@@ -258,17 +193,17 @@ class LengthComparisonGuiTests(unittest.TestCase):
             before = [
                 (
                     sample["csv_path"].read_bytes(),
-                    Path(sample["calibration"]["image_path"]).read_bytes(),
+                    sample["image_path"].read_bytes(),
                 )
                 for sample in samples
             ]
             for sample in samples:
                 with self.assertRaisesRegex(ValueError, "入力CSV"):
                     self.gui["write_csv"](sample["csv_path"], rows)
+                with self.assertRaisesRegex(ValueError, "入力CSV"):
+                    self.gui["write_csv"](sample["source_csv"], rows)
                 with self.assertRaisesRegex(ValueError, "校正画像"):
-                    self.gui["write_graph"](
-                        Path(sample["calibration"]["image_path"]), rows
-                    )
+                    self.gui["write_graph"](sample["image_path"], rows)
             for function, path in (
                 ("write_csv", directory / "wrong.txt"),
                 ("write_graph", directory / "wrong.csv"),
@@ -283,7 +218,7 @@ class LengthComparisonGuiTests(unittest.TestCase):
                 [
                     (
                         sample["csv_path"].read_bytes(),
-                        Path(sample["calibration"]["image_path"]).read_bytes(),
+                        sample["image_path"].read_bytes(),
                     )
                     for sample in samples
                 ],
@@ -349,6 +284,75 @@ class LengthComparisonGuiTests(unittest.TestCase):
             self.assertEqual(len(axes[0].lines[0].get_ydata()), 20)
             self.assertEqual(len(axes[2].get_xticklabels()), 20)
             self.assertEqual(axes[2].get_xticklabels()[-1].get_rotation(), 45)
+
+    def test_invalid_calibrated_csv_and_manual_unit_mismatch_are_rejected(self):
+        with self.comparison.temporary_directory() as temporary:
+            sample = self.write_case(Path(temporary), "校正済み", (200, 200, 400))
+            path = sample["csv_path"]
+            with path.open(encoding="utf-8-sig", newline="") as source:
+                reader = csv.DictReader(source)
+                fields = reader.fieldnames
+                assert fields is not None
+                original = next(reader)
+            with self.assertRaisesRegex(ValueError, "校正GUI"):
+                self.gui["read_calibrated_lengths"](sample["source_csv"])
+            for column, value in (
+                ("left_mm", ""),
+                ("left_mm", "nan"),
+                ("left_mm", "inf"),
+                ("left_mm", "0"),
+                ("left_mm", "99"),
+                ("mm_per_px", "-1"),
+                ("mm_per_px", "0.6"),
+                ("reference_mm", "bad"),
+                ("image_path", ""),
+                ("reference_x1", "nan"),
+                ("image_width", "1"),
+                ("end_y", "800"),
+                ("total_px", "410"),
+                ("total_mm", "205"),
+            ):
+                invalid = dict(original, **{column: value})
+                if column == "total_px":
+                    invalid["total_mm"] = "205"
+                with path.open("w", encoding="utf-8-sig", newline="") as output:
+                    writer = csv.DictWriter(output, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerow(invalid)
+                with self.subTest(column=column, value=value):
+                    with self.assertRaises(ValueError):
+                        self.gui["read_calibrated_lengths"](path)
+            for count in (0, 2):
+                with path.open("w", encoding="utf-8-sig", newline="") as output:
+                    writer = csv.DictWriter(output, fieldnames=fields)
+                    writer.writeheader()
+                    for _ in range(count):
+                        writer.writerow(original)
+                with self.assertRaisesRegex(ValueError, "1行"):
+                    self.gui["read_calibrated_lengths"](path)
+
+    def test_saved_measurements_work_without_original_images_or_pixel_csvs(self):
+        with self.comparison.temporary_directory() as temporary:
+            samples = self.known_samples(Path(temporary))
+            before = self.gui["compare_lengths"](samples, 100, 10)
+            for sample in samples:
+                sample["source_csv"].unlink()
+                sample["image_path"].unlink()
+            # 比較時に画像を開いたり、校正点から倍率を作り直したりしない。
+            after = self.gui["compare_lengths"](samples, 100, 10)
+            self.assertEqual(after, before)
+            changed = self.gui["compare_lengths"](samples, 120, 10)
+            self.assertEqual(changed[2]["left_mm"], 215)
+            self.assertEqual(changed[2]["ideal_length_mm"], 240)
+
+    def test_pixel_rounding_and_fractional_scale_survive_csv_roundtrip(self):
+        with self.comparison.temporary_directory() as temporary:
+            sample = self.write_case(
+                Path(temporary), "小数", (200.004, 201.004, 401.008), reference_px=150
+            )
+            rows = self.gui["compare_lengths"]([sample], 100, 10)
+            self.assertAlmostEqual(rows[0]["left_mm"], 200 / 3, places=9)
+            self.assertAlmostEqual(rows[0]["total_mm"], 401.01 / 3, places=9)
 
 
 if __name__ == "__main__":
