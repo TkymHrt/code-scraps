@@ -111,15 +111,13 @@ class LengthCalibrationGuiTests(unittest.TestCase):
 
     def test_display_coordinates_map_to_original_image(self):
         convert = self.gui["point_on_image"]
-        bounds = (12, 24, 101, 51)
-        self.assertEqual(convert(12, 24, bounds, (1001, 501)), (0, 0))
-        self.assertEqual(convert(62, 49, bounds, (1001, 501)), (500, 250))
-        self.assertEqual(convert(112, 74, bounds, (1001, 501)), (1000, 500))
-        self.assertIsNone(convert(11, 24, bounds, (1001, 501)))
-        self.assertIsNone(convert(113, 24, bounds, (1001, 501)))
-        self.assertEqual(
-            convert(112, 124, (12, 24, 1001, 501), (1001, 501)), (100, 100)
-        )
+        view = (12, 24, 0.1)
+        self.assertEqual(convert(12, 24, view, (1001, 501)), (0, 0))
+        self.assertEqual(convert(62, 49, view, (1001, 501)), (500, 250))
+        self.assertEqual(convert(112, 74, view, (1001, 501)), (1000, 500))
+        self.assertIsNone(convert(11, 24, view, (1001, 501)))
+        self.assertIsNone(convert(113, 24, view, (1001, 501)))
+        self.assertEqual(convert(112, 124, (12, 24, 1), (1001, 501)), (100, 100))
 
     def test_invalid_csv_rows_are_rejected(self) -> None:
         with self.comparison.temporary_directory() as temporary:
@@ -154,21 +152,9 @@ class LengthCalibrationGuiTests(unittest.TestCase):
         image_size = (1920, 1080)
         view = (-125.5, 48.25, 0.73)
         anchor = (312, 187)
-        before_bounds = (
-            view[0],
-            view[1],
-            1 + (image_size[0] - 1) * view[2],
-            1 + (image_size[1] - 1) * view[2],
-        )
-        before = self.gui["point_on_image"](*anchor, before_bounds, image_size)
+        before = self.gui["point_on_image"](*anchor, view, image_size)
         changed = self.gui["zoomed_view"](view, anchor, 1.1**0.5)
-        after_bounds = (
-            changed[0],
-            changed[1],
-            1 + (image_size[0] - 1) * changed[2],
-            1 + (image_size[1] - 1) * changed[2],
-        )
-        after = self.gui["point_on_image"](*anchor, after_bounds, image_size)
+        after = self.gui["point_on_image"](*anchor, changed, image_size)
         assert before is not None and after is not None
         self.assertAlmostEqual(before[0], after[0], places=10)
         self.assertAlmostEqual(before[1], after[1], places=10)

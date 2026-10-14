@@ -92,15 +92,15 @@ def calibration_from_points(
 
 
 def point_on_image(
-    x: float, y: float, bounds: tuple, image_size: tuple[int, int]
+    x: float, y: float, view: tuple, image_size: tuple[int, int]
 ) -> tuple[float, float] | None:
-    x0, y0, display_width, display_height = bounds
-    if not (x0 <= x <= x0 + display_width - 1 and y0 <= y <= y0 + display_height - 1):
-        return None
+    offset_x, offset_y, scale = view
     width, height = image_size
-    image_x = (x - x0) * (width - 1) / (display_width - 1)
-    image_y = (y - y0) * (height - 1) / (display_height - 1)
-    return image_x, image_y
+    image_x = (x - offset_x) / scale
+    image_y = (y - offset_y) / scale
+    if 0 <= image_x <= width - 1 and 0 <= image_y <= height - 1:
+        return image_x, image_y
+    return None
 
 
 def zoomed_view(view: tuple, anchor: tuple, factor: float) -> tuple:
@@ -178,7 +178,6 @@ def main() -> None:
     width, height = 0, 0
     points = []
     view = (0.0, 0.0, 1.0)
-    bounds = (0.0, 0.0, 2.0, 2.0)
     photo = None
     pan_start = None
     row = {}
@@ -190,14 +189,11 @@ def main() -> None:
     scale_text = tk.StringVar(value="未校正")
     status = tk.StringVar(value="03の長さCSVと、それを計測した元画像を選んでください")
 
-    def invalidate_result() -> None:
-        row.clear()
-        table.delete(*table.get_children())
-        save_button.state(["disabled"])
-
     def update_result(*args) -> None:
         nonlocal row
-        invalidate_result()
+        row = {}
+        table.delete(*table.get_children())
+        save_button.state(["disabled"])
         scale_text.set("未校正")
         if csv_path is None or image is None:
             status.set("03の長さCSVと元画像を選んでください")
@@ -206,18 +202,21 @@ def main() -> None:
             status.set(f"既知寸法の両端をクリックしてください（{len(points)}/2点）")
             return
         try:
-            calibration = calibration_from_points(
-                reference.get(), points, (width, height)
-            )
-            calibration["image_path"] = str(image_path)
+            calibration = {
+                "reference_mm": reference.get(),
+                "points": points,
+                "image_width": width,
+                "image_height": height,
+                "image_path": str(image_path),
+            }
             row = calibrate_lengths(csv_path, calibration)
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
             return
         scale_text.set(
-            f"基準物: {calibration['reference_mm']:g}mm\n"
-            f"画像上: {calibration['reference_px']:.3f}px\n"
-            f"換算値: {calibration['mm_per_px']:.8g}mm/px"
+            f"基準物: {row['reference_mm']:g}mm\n"
+            f"画像上: {row['reference_px']:.3f}px\n"
+            f"換算値: {row['mm_per_px']:.8g}mm/px"
         )
         for edge, label in (("left", "左"), ("right", "右"), ("total", "左右合計")):
             table.insert(
@@ -263,7 +262,7 @@ def main() -> None:
             )
 
     def draw_image(event=None) -> None:
-        nonlocal photo, bounds
+        nonlocal photo
         canvas.delete("all")
         if image is None:
             photo = None
@@ -288,34 +287,17 @@ def main() -> None:
             raise ValueError("画像の表示データを作れません")
         photo = tk.PhotoImage(master=root, data=encoded.tobytes(), format="PNG")
         canvas.create_image(0, 0, image=photo, anchor="nw", tags="source")
-        display_width = 1 + (width - 1) * scale
-        display_height = 1 + (height - 1) * scale
-        bounds = (offset_x, offset_y, display_width, display_height)
         canvas.create_rectangle(
             offset_x,
             offset_y,
-            offset_x + display_width - 1,
-            offset_y + display_height - 1,
+            offset_x + (width - 1) * scale,
+            offset_y + (height - 1) * scale,
             outline="#666666",
             tags="image_bounds",
         )
         draw_points()
         zoom_percent.set(scale * 100)
         zoom_text.set(f"{scale * 100:.1f}%")
-
-    def fit_image() -> None:
-        nonlocal view
-        if image is None:
-            return
-        scale = min(
-            1.0,
-            max(2, canvas.winfo_width() - 24) / width,
-            max(2, canvas.winfo_height() - 24) / height,
-        )
-        offset_x = (canvas.winfo_width() - 1 - (width - 1) * scale) / 2
-        offset_y = (canvas.winfo_height() - 1 - (height - 1) * scale) / 2
-        view = (offset_x, offset_y, scale)
-        draw_image()
 
     def change_zoom(anchor: tuple, factor: float) -> None:
         nonlocal view
@@ -328,9 +310,6 @@ def main() -> None:
         target_scale = float(value) / 100
         anchor = (canvas.winfo_width() / 2, canvas.winfo_height() / 2)
         change_zoom(anchor, target_scale / view[2])
-
-    def actual_size() -> None:
-        zoom_slider(100)
 
     def wheel(event) -> str:
         change_zoom((event.x, event.y), 1.1 ** (event.delta / 120))
@@ -362,17 +341,12 @@ def main() -> None:
     def click(event) -> None:
         if image is None:
             return
-        point = point_on_image(event.x, event.y, bounds, (width, height))
+        point = point_on_image(event.x, event.y, view, (width, height))
         if point is None:
             return
         if len(points) == 2:
             points.clear()
         points.append(point)
-        draw_points()
-        update_result()
-
-    def clear_points() -> None:
-        points.clear()
         draw_points()
         update_result()
 
@@ -405,7 +379,7 @@ def main() -> None:
         update_result()
 
     def choose_image() -> None:
-        nonlocal image_path, image, width, height, pan_start
+        nonlocal image_path, image, width, height, view, pan_start
         selected = filedialog.askopenfilename(
             parent=root,
             title="選択したCSVを計測した元画像を選ぶ",
@@ -434,7 +408,16 @@ def main() -> None:
         points.clear()
         selected_image.set(str(path))
         reference.set("")
-        fit_image()
+        # 読み込んだときだけ全体を収め、以後は手動で倍率・位置を調整する。
+        scale = min(
+            1.0,
+            max(2, canvas.winfo_width() - 24) / width,
+            max(2, canvas.winfo_height() - 24) / height,
+        )
+        offset_x = (canvas.winfo_width() - 1 - (width - 1) * scale) / 2
+        offset_y = (canvas.winfo_height() - 1 - (height - 1) * scale) / 2
+        view = (offset_x, offset_y, scale)
+        draw_image()
         update_result()
 
     def save() -> None:
@@ -462,55 +445,35 @@ def main() -> None:
         status.set(f"保存しました: {selected}")
 
     for label, variable, command in (
-        ("03の長さCSV", selected_csv, choose_csv),
-        ("計測した元画像", selected_image, choose_image),
+        ("03の長さCSVを読み込む", selected_csv, choose_csv),
+        ("画像を読み込む", selected_image, choose_image),
     ):
         frame = ttk.Frame(root, padding=(12, 4))
         frame.pack(fill="x")
-        ttk.Label(frame, text=label, width=16).pack(side="left")
+        ttk.Button(frame, text=label, width=24, command=command).pack(side="left")
         ttk.Entry(frame, textvariable=variable, state="readonly").pack(
-            side="left", fill="x", expand=True, padx=8
+            side="left", fill="x", expand=True, padx=(8, 0)
         )
-        ttk.Button(frame, text="選ぶ", command=command).pack(side="left")
-    controls = ttk.Frame(root, padding=12)
-    controls.pack(fill="x")
-    ttk.Label(controls, text="基準物の実寸 (mm)").pack(side="left", padx=(0, 8))
-    ttk.Entry(controls, textvariable=reference, width=12).pack(side="left")
-    for label, command in (
-        ("点を消す", clear_points),
-        ("全体表示", fit_image),
-        ("100%", actual_size),
-    ):
-        ttk.Button(controls, text=label, command=command).pack(side="left", padx=8)
+    body = ttk.Frame(root, padding=(12, 8, 12, 0))
+    body.pack(fill="both", expand=True)
+    sidebar = ttk.Frame(body)
+    sidebar.pack(side="left", fill="y", padx=(0, 16))
+    ttk.Label(sidebar, text="基準物の実寸 (mm)").pack(anchor="w", pady=(0, 4))
+    ttk.Entry(sidebar, textvariable=reference).pack(fill="x", pady=(0, 16))
+    ttk.Label(sidebar, text="表示倍率").pack(anchor="w")
     ttk.Scale(
-        controls,
+        sidebar,
         from_=1,
         to=1600,
         variable=zoom_percent,
         command=zoom_slider,
-        length=180,
-    ).pack(side="left", fill="x", expand=True, padx=8)
-    ttk.Label(controls, textvariable=zoom_text, width=10).pack(side="left")
-    ttk.Label(
-        root,
-        text="左クリック: 基準点 / ホイール: 拡大・縮小 / 右ドラッグ: 移動",
-        padding=(12, 0),
-    ).pack(anchor="w")
-    content = ttk.Frame(root, padding=12)
-    content.pack(fill="both", expand=True)
-    content.rowconfigure(0, weight=1)
-    content.columnconfigure(0, weight=1)
-    canvas = tk.Canvas(
-        content, background="#242424", highlightthickness=0, cursor="crosshair"
+    ).pack(fill="x", pady=4)
+    ttk.Label(sidebar, textvariable=zoom_text).pack(anchor="e")
+    ttk.Label(sidebar, text="校正結果").pack(anchor="w", pady=(16, 4))
+    ttk.Label(sidebar, textvariable=scale_text, wraplength=288).pack(anchor="w")
+    table = ttk.Treeview(
+        sidebar, columns=("edge", "px", "mm"), show="headings", height=3
     )
-    canvas.grid(row=0, column=0, sticky="nsew")
-    side = ttk.Frame(content, padding=(12, 0, 0, 0))
-    side.grid(row=0, column=1, sticky="ns")
-    ttk.Label(side, text="校正結果", padding=(0, 8)).pack(anchor="w")
-    ttk.Label(side, textvariable=scale_text, wraplength=280, padding=(0, 8)).pack(
-        anchor="w"
-    )
-    table = ttk.Treeview(side, columns=("edge", "px", "mm"), show="headings", height=3)
     for column, label, column_width in (
         ("edge", "側辺", 64),
         ("px", "測定長 (px)", 112),
@@ -525,9 +488,23 @@ def main() -> None:
         )
     table.pack(fill="x", pady=8)
     save_button = ttk.Button(
-        side, text="校正済みCSVを保存", command=save, state="disabled", padding=(12, 8)
+        sidebar,
+        text="校正済みCSVを保存",
+        command=save,
+        state="disabled",
+        padding=(12, 8),
     )
     save_button.pack(fill="x", pady=8)
+    ttk.Label(
+        sidebar,
+        text="左クリック: 基準点\nホイール: 拡大・縮小\n右ドラッグ: 画像の移動\n\n"
+        "2点指定後は、次のクリックから指定し直せます。",
+        wraplength=288,
+    ).pack(anchor="w", pady=8)
+    canvas = tk.Canvas(
+        body, background="#242424", highlightthickness=0, cursor="crosshair"
+    )
+    canvas.pack(side="left", fill="both", expand=True)
     ttk.Label(root, textvariable=status, padding=12, wraplength=960).pack(fill="x")
     canvas.bind("<Button-1>", click)
     canvas.bind("<Configure>", draw_image)

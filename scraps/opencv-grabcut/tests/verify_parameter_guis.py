@@ -479,10 +479,10 @@ def exercise_length_calibration(project, output, root, screenshots):
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
         choose_buttons = [
-            w
-            for w in widgets
-            if isinstance(w, ttk.Button) and str(w.cget("text")) == "選ぶ"
+            buttons["03の長さCSVを読み込む"],
+            buttons["画像を読み込む"],
         ]
+        assert not {"点を消す", "全体表示", "100%"} & buttons.keys()
         canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
         slider = next(w for w in widgets if isinstance(w, ttk.Scale))
         caption = next(
@@ -536,8 +536,9 @@ def exercise_length_calibration(project, output, root, screenshots):
         def calibrate(index, capture_image=False):
             assert not any(isinstance(w, tk.Toplevel) for w in descendants(root))
             assert not any(isinstance(w, ttk.Combobox) for w in descendants(root))
-            invoke("点を消す")
-            invoke("全体表示")
+            assert not canvas.find_withtag("reference")
+            offset_x, offset_y, initial_scale = current_view()
+            assert offset_x >= 11 and offset_y >= 11 and initial_scale < 1
             canvas.event_generate("<Button-1>", x=1, y=1)
             assert not canvas.find_withtag("reference")
             slider.set(173.25)
@@ -584,9 +585,10 @@ def exercise_length_calibration(project, output, root, screenshots):
                 assert (
                     int(root.tk.call("image", "height", photo)) == canvas.winfo_height()
                 )
-            invoke("100%")
+            slider.set(100)
+            root.update()
             offset_x, offset_y, scale = current_view()
-            assert scale == 1
+            assert abs(scale - 1) < 1e-10
             midpoint_x = offset_x + (1200 + reference_lengths[index] / 2) * scale
             midpoint_y = offset_y + 400 * scale
             drag(
@@ -606,6 +608,12 @@ def exercise_length_calibration(project, output, root, screenshots):
             root.update()
             assert len(table.get_children()) == 3
             before = values()
+            click_image(1200, 400)
+            assert not table.get_children()
+            assert len(canvas.find_withtag("reference")) == 2
+            assert buttons["校正済みCSVを保存"].instate(["disabled"])
+            click_image(1200 + reference_lengths[index], 400)
+            assert values() == before
             if capture_image and screenshots:
                 capture(root, output / "length_calibration_zoom.png")
             slider.set(137.5)
@@ -618,13 +626,10 @@ def exercise_length_calibration(project, output, root, screenshots):
             assert values() == before
             assert buttons["校正済みCSVを保存"].instate(["!disabled"])
             assert len(canvas.find_withtag("reference")) == 5
-            invoke("全体表示")
-            assert values() == before
             if capture_image and screenshots:
                 capture(root, output / "length_calibration_points.png")
 
-        invoke("点を消す")
-        assert "CSVと元画像" in status_text()
+        assert "CSV" in status_text()
         assert buttons["校正済みCSVを保存"].instate(["disabled"])
         for index in range(5):
             choose(choose_buttons[0], paths[index])
@@ -698,6 +703,11 @@ def exercise_length_calibration(project, output, root, screenshots):
             capture(root, output / "length_calibrated_values.png")
         root.geometry("1000x700")
         root.update()
+        for button in choose_buttons:
+            assert button.winfo_rooty() + button.winfo_height() <= canvas.winfo_rooty()
+        for widget in (reference, slider, table, buttons["校正済みCSVを保存"]):
+            assert widget.winfo_rootx() + widget.winfo_width() < canvas.winfo_rootx()
+
         for name, button in buttons.items():
             assert button.winfo_ismapped(), name
             assert button.winfo_height() >= button.winfo_reqheight(), name
@@ -711,7 +721,7 @@ def exercise_length_calibration(project, output, root, screenshots):
         ] == original
         assert not errors, errors
         print(
-            "校正GUI: 一画面・5画像・自由ズームとカーソル中心・右ドラッグ・座標保持・mm換算・CSV保存・キャンセル・入力保護を確認"
+            "校正GUI: 上部読込・左サイドバー・ボタン削除・クリックで再指定・5画像・自由ズーム・座標保持・CSV保存・入力保護を確認"
         )
 
     with (
