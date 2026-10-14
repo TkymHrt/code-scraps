@@ -3,7 +3,7 @@
 対応する同じ材料区間を複数撮影で計測し、撮影回ごとの長さの変化を比較します。
 初期区間長・初期厚さと各回の厚さから、幅一定・体積一定の理想スラブを計算します。
 
-実践用は `submissions/` の5本です。各ファイルに設定・入力・処理・保存を置き、
+基本の実行順は `submissions/` の5本です。各ファイルに設定・入力・処理・保存を置き、
 自作モジュールへ依存しない単発スクリプトを順番に使います。
 
 | 順 | スクリプト | 役割 |
@@ -13,6 +13,14 @@
 | 3 | `rectify_image.py` | 指定フォルダを固定係数と板で一括補正し、PNGを出力 |
 | 4 | `initial_regions_gui.py` | 初期指定・対応区間を操作し、長さCSVと確認画像を保存 |
 | 5 | `length_comparison_gui.py` | 複数CSVと理想値を比較し、表・グラフ・CSVで確認 |
+
+長さ分析の別案として `submissions/length_analysis_gui.py` も使えます。
+同じ長さCSVから区間の伸びと左右側辺の形状を分け、数値表・推移・直前パスからの変化を一画面に表示します。
+[操作と指標の定義](submissions/README.md#長さ分析の別案伸びと側辺形状を分ける) を参照してください。
+
+最小比較には `submissions/length_comparison_simple_gui.py` を使えます。
+初期区間長・初期厚さと各撮影の厚さから求めた理想片側長を、CSVの左右側辺長と数値表・1枚の推移グラフで比較します。
+[最小比較GUIの操作](submissions/README.md#最小比較gui厚さから理想長を計算) を参照してください。
 
 [実行順・設定・GUI操作・検証記録](submissions/README.md) に手順をまとめています。
 板生成とカメラ校正は初回、画像補正と計測GUIは撮影ごと、比較は複数撮影のCSVを使います。
@@ -30,6 +38,10 @@ uv run submissions/camera_calibration.py
 uv run submissions/rectify_image.py
 uv run submissions/initial_regions_gui.py
 uv run submissions/length_comparison_gui.py
+# 長さ分析の別案
+uv run submissions/length_analysis_gui.py
+# 厚さから理想長を求める最小比較
+uv run submissions/length_comparison_simple_gui.py
 ```
 
 カメラ係数は現在未設定です。本番カメラで校正してから補正コードへ貼り付けます。
@@ -52,5 +64,7 @@ uv run ruff format --check .
 uv run ty check .
 ```
 
-現行10件と旧版77件、合計87件の自動試験、生成画像を使った実Tk操作と複数CSV比較を確認しています。
+従来の87件と新規分析GUIの6件、合計93件の自動試験、生成画像を使った実Tk操作と複数CSV比較を確認しています。
+新規分析GUIは既知の数値CSVで、入力・再分析・保存と20パス表示も確認しています。
+最小比較GUIは、追加の4件の自動試験と実Tkでの厚さ入力・再比較・保存・削除・20撮影表示を確認しています。
 実カメラの歪み補正精度、本番画像での抽出精度は未確認です。
