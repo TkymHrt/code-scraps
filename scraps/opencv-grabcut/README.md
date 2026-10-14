@@ -89,6 +89,7 @@ uv run ty check .
 GUIの縮小表示上のドラッグ・保存などは `uv run tests/verify_mask_gui.py` で確認できます（Tkを起動できる環境で実行）。
 画像設定・比較設定・校正・長さ専用GUIの操作は `uv run tests/verify_parameter_guis.py --out tests/results/parameter_guis_new` で確認できます。
 ChArUcoの板生成・係数算出・画像補正・03実行・CSV換算の受け渡しは `uv run tests/verify_camera_pipeline.py --out tests/results/camera_cli_new` で確認できます。独立コピーを別プロセスで動かし、元画像がなくてもCSVだけで再換算できることと、複数のmm CSVを比較できることを確認します。
+元の生成画像の試料右隣に板を仮合成する確認は `uv run tests/verify_adjacent_board.py --out tests/results/adjacent_board_new` で再現できます。右側の背景を拡張し、正対・遠近変形・仮のレンズ歪みの3条件で補正・計測・CSV換算を実行します。寸法・カメラ係数・同一平面は仮の条件です。
 Ruffは構文・未使用名・インポート順だけをチェックします。
 計測条件は実画像に合わせて設定し、入力・保存先と生成物の更新を運用で確認します。
 
