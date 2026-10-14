@@ -435,44 +435,54 @@ def exercise_length_comparison(project, output, root, screenshots):
     gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
     errors = []
     paths = []
-    original_bytes = []
-    for index, lengths in enumerate(
-        (
-            (120, 122, 242),
-            (123, 121, 244),
-            (121, 124, 245),
-            (126, 125, 251),
-            (125, 127, 252),
-        )
+    images = []
+    reference_lengths = [100, 200, 100, 100, 100]
+    thicknesses = [10, 10, 5, 5, 4]
+    cases = (
+        (200, 200, 400),
+        (400, 400, 800),
+        (430, 410, 840),
+        (440, 420, 860),
+        (510, 500, 1010),
+    )
+    ranges = ((20, 220), (60, 460), (30, 430), (30, 430), (30, 530))
+    for index, (lengths, y_range, reference_px) in enumerate(
+        zip(cases, ranges, reference_lengths)
     ):
-        path = output / "撮影試験" / f"{index + 1:02d}" / "03_side_lengths.csv"
+        path = output / "スラブ試験" / f"{index + 1:02d}" / "03_side_lengths.csv"
         path.parent.mkdir(parents=True)
         with path.open("w", encoding="utf-8-sig", newline="") as target:
             writer = csv.writer(target)
             writer.writerow(("edge", "length_px", "start_y", "end_y"))
             for edge, length in zip(("left", "right", "total"), lengths):
-                writer.writerow((edge, f"{length:.2f}", 20, 140))
+                writer.writerow((edge, f"{length:.2f}", *y_range))
+        image_path = path.parent / "校正する 元画像.png"
+        image = np.full((1080, 1920, 3), 245, np.uint8)
+        cv.rectangle(image, (300, y_range[0]), (700, y_range[1]), (70, 80, 100), -1)
+        cv.line(image, (1200, 400), (1200 + reference_px, 400), (0, 0, 0), 2)
+        for x in (1200, 1200 + reference_px):
+            cv.line(image, (x, 380), (x, 420), (0, 0, 0), 2)
+        cv.putText(
+            image, "50 mm", (1200, 370), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2
+        )
+        success, encoded = cv.imencode(".png", image)
+        assert success
+        image_path.write_bytes(encoded.tobytes())
         paths.append(path)
-        original_bytes.append(path.read_bytes())
+        images.append(image_path)
+    original = [
+        (path.read_bytes(), image.read_bytes()) for path, image in zip(paths, images)
+    ]
 
     def exercise():
         root.deiconify()
         root.update()
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
-        tables = [w for w in widgets if isinstance(w, ttk.Treeview)]
-        input_table, lengths_table, delta_table, previous_table = tables
+        input_table, length_table, ideal_table, ratio_table, previous_table = [
+            w for w in widgets if isinstance(w, ttk.Treeview)
+        ]
         notebook = next(w for w in widgets if isinstance(w, ttk.Notebook))
-        editor = next(
-            w
-            for w in widgets
-            if isinstance(w, ttk.Entry) and str(w.cget("state")) == "normal"
-        )
-        path_entry = next(
-            w
-            for w in widgets
-            if isinstance(w, ttk.Entry) and str(w.cget("state")) == "readonly"
-        )
         status_label = root.winfo_children()[-1]
 
         def status_text():
@@ -480,6 +490,24 @@ def exercise_length_comparison(project, output, root, screenshots):
 
         def invoke(name):
             buttons[name].invoke()
+            root.update()
+
+        def field(label):
+            caption = next(
+                w
+                for w in widgets
+                if isinstance(w, ttk.Label) and str(w.cget("text")) == label
+            )
+            siblings = caption.master.winfo_children()
+            return siblings[siblings.index(caption) + 1]
+
+        initial_length = field("初期区間長 (mm)")
+        initial_thickness = field("初期厚さ (mm)")
+        name_field = field("撮影名")
+        thickness_field = field("撮影時の厚さ (mm)")
+
+        def set_field(widget, value):
+            root.setvar(str(widget.cget("textvariable")), str(value))
             root.update()
 
         def add(items):
@@ -500,195 +528,246 @@ def exercise_length_comparison(project, output, root, screenshots):
                 tuple(table.item(item, "values")) for item in table.get_children()
             )
 
-        assert buttons["比較CSVを保存"].instate(["disabled"])
+        def calibrate(index, cancel=False, capture_image=False):
+            select(index)
+
+            def drive():
+                popup = next(
+                    w
+                    for w in root.winfo_children()
+                    if isinstance(w, tk.Toplevel)
+                    and w.title() == "既知寸法から画像を校正"
+                )
+                try:
+                    root.update()
+                    children = descendants(popup)
+                    actions = {
+                        str(w.cget("text")): w
+                        for w in children
+                        if isinstance(w, ttk.Button)
+                    }
+                    if cancel:
+                        actions["キャンセル"].invoke()
+                        return
+                    canvas = next(w for w in children if isinstance(w, tk.Canvas))
+                    entry = next(w for w in children if isinstance(w, ttk.Entry))
+                    mode = next(w for w in children if isinstance(w, ttk.Combobox))
+                    source_item = canvas.find_withtag("source")[0]
+                    photo = canvas.itemcget(source_item, "image")
+                    display_width = int(root.tk.call("image", "width", photo))
+                    assert display_width < 1920
+                    canvas.event_generate("<Button-1>", x=1, y=1)
+                    mode.set("100%")
+                    mode.event_generate("<<ComboboxSelected>>")
+                    root.update()
+                    source_item = canvas.find_withtag("source")[0]
+                    photo = canvas.itemcget(source_item, "image")
+                    assert int(root.tk.call("image", "width", photo)) == 1920
+                    canvas.xview_moveto(0.45)
+                    canvas.yview_moveto(0.15)
+                    root.update()
+                    x0, y0 = canvas.coords(source_item)
+                    assert canvas.canvasx(0) > 0, "スクロールした座標を確認していません"
+                    actions["点を消す"].invoke()
+                    for x, y in ((1200, 400), (1200 + reference_lengths[index], 400)):
+                        display_x = round(x0 + x - canvas.canvasx(0))
+                        display_y = round(y0 + y - canvas.canvasy(0))
+                        assert (
+                            0 <= display_x < canvas.winfo_width()
+                            and 0 <= display_y < canvas.winfo_height()
+                        )
+                        canvas.event_generate("<Button-1>", x=display_x, y=display_y)
+                        root.update()
+                    root.setvar(str(entry.cget("textvariable")), "0")
+                    actions["この校正を使う"].invoke()
+                    root.update()
+                    assert popup.winfo_exists(), "0mmの校正が適用されました"
+                    root.setvar(str(entry.cget("textvariable")), "50")
+                    live_status = next(
+                        w
+                        for w in popup.winfo_children()
+                        if isinstance(w, ttk.Label) and str(w.cget("textvariable"))
+                    )
+                    factor_text = str(
+                        root.getvar(str(live_status.cget("textvariable")))
+                    )
+                    assert "mm/px" in factor_text and "有限値" not in factor_text
+                    if capture_image and screenshots:
+                        capture(popup, output / "slab_calibration.png")
+                    actions["この校正を使う"].invoke()
+                except Exception as error:
+                    errors.append(error)
+                    if popup.winfo_exists():
+                        popup.destroy()
+
+            root.after(40, drive)
+            with patch.object(
+                filedialog, "askopenfilename", return_value=str(images[index])
+            ):
+                invoke("既知寸法から校正")
+            assert not errors, errors
+
         invoke("比較する")
-        assert "2枚以上" in status_text()
-        add(paths[:1])
+        assert "初期区間長" in status_text()
+        set_field(initial_length, 100)
+        set_field(initial_thickness, 10)
         invoke("比較する")
-        assert "2枚以上" in status_text()
+        assert "1枚以上" in status_text()
+        add(paths)
         add(paths)
         assert len(input_table.get_children()) == 5
         invoke("比較する")
-        assert values(lengths_table) == (
-            ("撮影01", "120.00", "122.00", "242.00"),
-            ("撮影02", "123.00", "121.00", "244.00"),
-            ("撮影03", "121.00", "124.00", "245.00"),
-            ("撮影04", "126.00", "125.00", "251.00"),
-            ("撮影05", "125.00", "127.00", "252.00"),
-        )
+        assert "厚さ" in status_text()
+        for index, thickness in enumerate(thicknesses):
+            select(index)
+            set_field(thickness_field, thickness)
+            invoke("撮影名・厚さを適用")
+            calibrate(index, capture_image=index == 0)
+        assert [input_table.item(str(i), "values")[3] for i in range(5)] == [
+            "0.5",
+            "0.25",
+            "0.5",
+            "0.5",
+            "0.5",
+        ]
+        invoke("比較する")
+        assert values(length_table) == (
+            ("撮影01", "100.000", "100.000", "100.000", "200.000"),
+            ("撮影02", "100.000", "100.000", "100.000", "200.000"),
+            ("撮影03", "200.000", "215.000", "205.000", "420.000"),
+            ("撮影04", "200.000", "220.000", "210.000", "430.000"),
+            ("撮影05", "250.000", "255.000", "250.000", "505.000"),
+        ), values(length_table)
+        assert values(ideal_table)[2] == ("撮影03", "+15.000", "+5.000", "+20.000")
+        assert values(ratio_table)[2] == ("撮影03", "+7.500", "+2.500", "+5.000")
         assert values(previous_table)[0] == ("撮影01", "—", "—", "—")
-        assert values(previous_table)[1] == ("撮影02", "+3.00", "-1.00", "+2.00")
-        before = values(lengths_table)
-        add(paths)
-        add(())
-        assert values(lengths_table) == before and len(input_table.get_children()) == 5
+        assert values(previous_table)[1] == ("撮影02", "+0.000", "+0.000", "+0.000")
         assert buttons["比較CSVを保存"].instate(["!disabled"])
-
-        select(2)
-        assert path_entry.get() == str(paths[2])
-        invoke("選択を基準にする")
-        assert not lengths_table.get_children()
-        assert input_table.item("2", "values")[1] == "基準"
-        root.setvar(str(editor.cget("textvariable")), "中間撮影")
-        invoke("撮影名を変更")
-        assert input_table.item("2", "values")[2] == "中間撮影"
-        invoke("比較する")
-        assert values(delta_table) == (
-            ("撮影01", "-1.00", "-2.00", "-3.00"),
-            ("撮影02", "+2.00", "-3.00", "-1.00"),
-            ("中間撮影", "+0.00", "+0.00", "+0.00"),
-            ("撮影04", "+5.00", "+1.00", "+6.00"),
-            ("撮影05", "+4.00", "+3.00", "+7.00"),
+        before = values(length_table)
+        calibrate(0, cancel=True)
+        assert values(length_table) == before and buttons["比較CSVを保存"].instate(
+            ["!disabled"]
         )
-        root.setvar(str(editor.cget("textvariable")), "撮影02")
-        invoke("撮影名を変更")
-        assert "重複" in status_text() and len(lengths_table.get_children()) == 5
+        with patch.object(filedialog, "askopenfilename", return_value=""):
+            invoke("既知寸法から校正")
+        assert values(length_table) == before
         select(2)
+        set_field(name_field, "撮影02")
+        invoke("撮影名・厚さを適用")
+        assert "重複" in status_text() and values(length_table) == before
+        select(2)
+        set_field(name_field, "圧延後")
+        invoke("撮影名・厚さを適用")
+        assert not length_table.get_children()
         invoke("比較する")
-        assert "baseline" in delta_table.item(delta_table.get_children()[2], "tags")
+        assert values(ideal_table)[2][0] == "圧延後"
         if screenshots:
             for index, filename in enumerate(
                 (
-                    "length_comparison.png",
-                    "length_baseline_delta.png",
-                    "length_previous_delta.png",
+                    "slab_lengths.png",
+                    "slab_deviations.png",
+                    "slab_rates.png",
+                    "slab_previous.png",
                 )
             ):
                 notebook.select(index)
                 root.update()
                 capture(root, output / filename)
             notebook.select(0)
-            root.update()
-        root.geometry("1000x700")
+        root.geometry("1060x760")
         root.update()
         for name, button in buttons.items():
             assert button.winfo_ismapped(), name
-            assert button.winfo_height() >= button.winfo_reqheight(), name
             assert button.winfo_width() >= button.winfo_reqwidth(), name
+            assert button.winfo_height() >= button.winfo_reqheight(), name
             assert (
                 button.winfo_rooty() + button.winfo_height()
                 <= root.winfo_rooty() + root.winfo_height()
             ), name
-
         for name, suffix in (("比較CSVを保存", ".csv"), ("推移グラフを保存", ".png")):
-            path = output / f"撮影 推移{suffix}"
+            path = output / f"スラブ実寸 比較{suffix}"
             with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
                 invoke(name)
             assert path.is_file()
-        with (output / "撮影 推移.csv").open(encoding="utf-8-sig", newline="") as saved:
+        with (output / "スラブ実寸 比較.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as saved:
             rows = list(csv.DictReader(saved))
-        assert len(rows) == 5 and all(row["baseline_id"] == "中間撮影" for row in rows)
-        assert rows[0]["previous_delta_total_px"] == ""
-        assert (
-            rows[-1]["delta_total_px"] == "7.00"
-            and rows[-1]["previous_delta_total_px"] == "1.00"
-        )
+        assert len(rows) == 5 and rows[1]["mm_per_px"] == "0.25"
+        assert rows[2]["ideal_length_mm"] == "200" and rows[2]["delta_total_pct"] == "5"
         invoke("推移グラフを表示")
         preview = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
-        assert preview.winfo_ismapped()
         assert (
             preview.winfo_rooty() + preview.winfo_height() <= root.winfo_screenheight()
         )
+        if screenshots:
+            capture(preview, output / "slab_graph_preview.png")
         invoke("推移グラフを表示")
         assert (
             len([w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]) == 1
         )
-        if screenshots:
-            capture(preview, output / "length_graph_preview.png")
-        close_command = preview.protocol("WM_DELETE_WINDOW")
-        preview.tk.call(close_command)
-        root.update()
-        assert not preview.winfo_exists()
-        invoke("推移グラフを表示")
-        preview = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
         for path in paths:
             with patch.object(filedialog, "asksaveasfilename", return_value=str(path)):
                 invoke("比較CSVを保存")
             assert "入力CSV" in status_text()
+        for image in images:
+            with patch.object(filedialog, "asksaveasfilename", return_value=str(image)):
+                invoke("推移グラフを保存")
+            assert "校正画像" in status_text()
         with patch.object(filedialog, "asksaveasfilename", return_value=""):
             invoke("比較CSVを保存")
-        assert len(lengths_table.get_children()) == 5
 
+        set_field(initial_length, 110)
+        assert not preview.winfo_exists() and not length_table.get_children()
+        assert buttons["比較CSVを保存"].instate(["disabled"])
+        invoke("比較する")
+        assert values(length_table)[0][1] == "110.000"
+        set_field(initial_length, 100)
+        invoke("比較する")
         select(4)
         invoke("上へ")
-        assert not preview.winfo_exists(), "撮影順変更後も古いグラフが残っています"
-        assert not previous_table.get_children() and buttons["比較CSVを保存"].instate(
-            ["disabled"]
-        )
-        assert input_table.item("2", "values")[1] == "基準"
+        assert not previous_table.get_children()
         invoke("比較する")
-        assert values(previous_table)[3] == ("撮影05", "+4.00", "+3.00", "+7.00")
-        assert values(previous_table)[4] == ("撮影04", "+1.00", "-2.00", "-1.00")
+        assert values(length_table)[3][0] == "撮影05"
+        assert values(previous_table)[3][1:] == ("+40.000", "+45.000", "+85.000")
         invoke("下へ")
         invoke("比較する")
-        assert values(previous_table)[4] == ("撮影05", "-1.00", "+2.00", "+1.00")
-
-        bad = output / "不正.csv"
-        bad.write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
-        extra = output / "有効.csv"
-        extra.write_bytes(original_bytes[0])
-        add((extra, bad))
-        assert (
-            len(input_table.get_children()) == 5
-            and len(lengths_table.get_children()) == 5
-        )
-        assert "03_side_lengths.csv" in status_text(), status_text()
-
+        assert values(previous_table)[4][1:] == ("+35.000", "+40.000", "+75.000")
+        select(4)
+        set_field(thickness_field, 0)
+        invoke("撮影名・厚さを適用")
+        assert "厚さ" in status_text() and len(length_table.get_children()) == 5
+        select(4)
+        set_field(thickness_field, 5)
+        invoke("撮影名・厚さを適用")
+        assert not length_table.get_children()
+        invoke("比較する")
+        assert values(length_table)[4][1] == "200.000"
+        select(4)
+        set_field(thickness_field, 4)
+        invoke("撮影名・厚さを適用")
+        invoke("比較する")
         paths[4].write_text("edge,candidate_count\nleft,1\n", encoding="utf-8")
         invoke("比較する")
         assert (
-            not lengths_table.get_children() and "03_side_lengths.csv" in status_text()
+            not length_table.get_children() and "03_side_lengths.csv" in status_text()
         )
-        assert buttons["推移グラフを保存"].instate(["disabled"])
-        with patch.object(filedialog, "asksaveasfilename") as picker:
-            invoke("比較CSVを保存")
-            picker.assert_not_called()
-        paths[4].write_bytes(original_bytes[4])
+        assert buttons["推移グラフを表示"].instate(["disabled"])
+        paths[4].write_bytes(original[4][0])
         invoke("比較する")
         select(1, 3)
         invoke("選択を削除")
         assert len(input_table.get_children()) == 3
         invoke("比較する")
-        assert [row[0] for row in values(lengths_table)] == [
-            "撮影01",
-            "中間撮影",
-            "撮影05",
-        ]
-        select(1)
-        invoke("選択を削除")
-        invoke("比較する")
-        assert "基準" in status_text() and not delta_table.get_children()
-        select(0)
-        invoke("選択を基準にする")
-        invoke("比較する")
-        assert len(delta_table.get_children()) == 2
-        select(0, 1)
-        invoke("選択を削除")
-        assert not input_table.get_children() and buttons["比較CSVを保存"].instate(
-            ["disabled"]
-        )
-
-        # 画面より多い撮影でも、一覧と結果の最後の行までたどれる。
-        many_paths = []
-        for index in range(12):
-            path = output / f"追加撮影{index + 1:02d}.csv"
-            path.write_bytes(original_bytes[0])
-            many_paths.append(path)
-        add(many_paths)
-        invoke("比較する")
-        assert len(lengths_table.get_children()) == 12
-        for table in tables:
-            last = table.get_children()[-1]
-            if table is not input_table:
-                notebook.select(table.master)
-            root.update()
-            table.see(last)
-            root.update()
-            assert table.bbox(last), f"最後の撮影までスクロールできません: {table}"
-        assert [path.read_bytes() for path in paths] == original_bytes
+        assert len(length_table.get_children()) == 3
+        assert values(length_table)[1][0] == "圧延後"
+        assert [
+            (path.read_bytes(), image.read_bytes())
+            for path, image in zip(paths, images)
+        ] == original
         assert not errors, errors
         print(
-            "長さ専用GUI: 複数追加・撮影順・基準変更・撮影名・3表・推移プレビュー・複数削除・結果更新・保存・入力保護を確認"
+            "スラブ比較GUI: 初期区間・厚さ・画像別2点校正・100%表示とスクロール・mm/理想差/率/前回差・更新・並べ替え・保存・入力保護を確認"
         )
 
     with (
