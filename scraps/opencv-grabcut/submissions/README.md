@@ -82,7 +82,8 @@ GUIを開いたまま、使う提出版の同名の3項目を置き換えてく�
 
 | スクリプト | その1本の成果 | 保存先 |
 | --- | --- | --- |
-| [camera_calibration.py](camera_calibration.py) | ChArUco校正板PNGと、換算側へコピペするカメラ行列・歪み係数（GUIなし） | `results/charuco_board.png`、係数はターミナル表示 |
+| [generate_charuco_board.py](generate_charuco_board.py) | 校正・換算に使うChArUco板のPNGを生成 | `results/charuco_board.png` |
+| [camera_calibration.py](camera_calibration.py) | 換算側へコピペするカメラ行列・歪み係数を算出（GUIなし） | 係数はターミナル表示 |
 | [01_initial_regions.py](01_initial_regions.py) | 初期指定を元画像へ重ねた確認画像 | `results/01_initial_regions.png` |
 | [01_initial_regions_gui.py](01_initial_regions_gui.py) | GUIで作った初期指定を元画像へ重ねた確認画像（01の別版） | ダイアログで指定（既定名 `<入力名>_initial_regions.png`） |
 | [02_grabcut_mask.py](02_grabcut_mask.py) | GrabCut直後の2値マスク画像 | `results/02_grabcut_mask.png` |
@@ -146,7 +147,7 @@ uv run submissions/measurement_settings_gui.py
 
 ## ChArUcoでカメラ校正と画像換算を分ける
 
-カメラ係数の算出は [camera_calibration.py](camera_calibration.py)、撮影ごとの画像補正とmm換算は [rectify_image_gui.py](rectify_image_gui.py) で行います。
+板の生成は [generate_charuco_board.py](generate_charuco_board.py)、カメラ係数の算出は [camera_calibration.py](camera_calibration.py)、撮影ごとの画像補正とmm換算は [rectify_image_gui.py](rectify_image_gui.py) で行います。
 それぞれ単独で動き、自作の共通モジュール・係数ファイル・設定管理は使いません。
 カメラ係数は同じ撮影条件で一度求め、換算側のコードへ貼ります。GUIには係数の入力・選択欄を置きません。
 
@@ -158,17 +159,23 @@ uv run submissions/measurement_settings_gui.py
 
 題材の `opencv-grabcut` フォルダから実行します。現在の依存関係のまま、OpenCV 5.0.0で確認しています。
 
+### 板だけを生成する
+
+```powershell
+uv run submissions/generate_charuco_board.py
+```
+
+`submissions/results/charuco_board.png` を作ります。板を生成する処理はこのスクリプトだけが担当し、カメラ校正では画像を生成しません。
+板は `DICT_4X4_50` のChArUco、横7・縦5マス、1マス30mm、マーカー18mmです。
+黒白の板本体を **210 × 150mm**、白い余白を含むPNG全体を230 × 170mmで印刷します。
+横向きの用紙に収め、縦横と1マスの寸法を実測し、平らで硬い板へ貼ります。
+印刷時の「用紙に合わせる」で実寸が変わる場合は倍率を調整してください。
+
 ### 事前にカメラ係数を求める（GUIなし）
 
 ```powershell
 uv run submissions/camera_calibration.py
 ```
-
-初回は `submissions/results/charuco_board.png` を作り、写真の置き場所を表示します。
-板は `DICT_4X4_50` のChArUco、横7・縦5マス、1マス30mm、マーカー18mmです。
-黒白の板本体を **210 × 150mm**、白い余白を含むPNG全体を230 × 170mmで印刷します。
-横向きの用紙に収め、縦横と1マスの寸法を実測し、平らで硬い板へ貼ります。
-印刷時の「用紙に合わせる」で実寸が変わる場合は倍率を調整してください。
 
 1. 本番と同じカメラ・撮影モード・画角・解像度で、板の写真を10枚以上撮ります。
    板の位置・傾き・距離を変え、画面中央と周辺を広く使います。同じ構図の複製だけでは校正できません。
@@ -575,6 +582,17 @@ uv run submissions/09_compare_candidates.py
 
 2026-10-13に初期指定の確認・2値マスク・左右端取得・左右側辺長の4本を追加しました。
 同日に03・04へ計測範囲の指定と可視化を追加し、04のCSVを計測範囲付きの4列へ変更しました。
+
+## 板の生成を独立スクリプトへ分離（2026-10-14）
+
+`generate_charuco_board.py` を追加し、`camera_calibration.py` から板の生成・保存を取り除きました。
+板生成・係数算出・画像換算の3本がそれぞれ1目的を担当し、互いのコードを読み込みません。
+印刷寸法を表示し、校正・換算と同じChArUco仕様を使います。
+今回の関連7件、RuffのLint・format、tyが通過しました。
+別フォルダにコピーして板を生成し、校正側・換算側の仕様で24点を読め、30mmの格子に対応する位置へ並ぶことを確認しました。
+カメラ校正だけを実行しても、板のPNGを新規生成・上書きしないことも確認しました。
+実際のTkまでの検証も、板生成 → 12写真の校正 → 補正PNG → 03 → mm CSVの順で通しました。
+その成果は `tests/results/board_separation_20261014/` にあります。今回は関連7件を実行し、従来の全75件の通過記録は前回の変更時のものです。
 
 ## ChArUcoのカメラ校正と換算の実装・検証（2026-10-14）
 

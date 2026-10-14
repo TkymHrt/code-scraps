@@ -31,15 +31,23 @@ def main():
     ):
         raise ValueError("tests/results内の、まだ存在しない検証先を指定してください")
     output.mkdir(parents=True)
+    board_source = project / "submissions/generate_charuco_board.py"
+    board_copy = output / board_source.name
+    board_copy.write_bytes(board_source.read_bytes())
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        runpy.run_path(str(board_copy))
+    board_path = output / "results/charuco_board.png"
+    board_contents = board_path.read_bytes()
     photos = output / "input/camera_calibration"
     photos.mkdir(parents=True)
     paths = calibration_photos(photos)
     camera_source = project / "submissions/camera_calibration.py"
     camera_copy = output / camera_source.name
     camera_copy.write_bytes(camera_source.read_bytes())
-    log = io.StringIO()
     with contextlib.redirect_stdout(log):
         runpy.run_path(str(camera_copy), run_name="__main__")
+    assert board_path.read_bytes() == board_contents
     (output / "camera_calibration.txt").write_text(log.getvalue(), encoding="utf-8")
     assert "CALIBRATION_SIZE = (960, 720)" in log.getvalue()
     camera = runpy.run_path(str(camera_copy))

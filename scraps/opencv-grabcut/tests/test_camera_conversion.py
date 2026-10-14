@@ -1,7 +1,9 @@
 """既知のカメラで描いた板と150mmの試料で、校正・補正・換算を確認する."""
 
 import ast
+import contextlib
 import csv
+import io
 import runpy
 import tempfile
 import unittest
@@ -99,6 +101,54 @@ class CameraConversionTests(unittest.TestCase):
 
     def setUp(self):
         self.gui = runpy.run_path(str(PROJECT / "submissions/rectify_image_gui.py"))
+
+    def test_board_generation_and_camera_calibration_are_separate(self):
+        with tempfile.TemporaryDirectory(dir=self.directory) as temporary:
+            directory = Path(temporary)
+            generator = directory / "generate_charuco_board.py"
+            generator.write_bytes(
+                (PROJECT / "submissions/generate_charuco_board.py").read_bytes()
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                settings = runpy.run_path(str(generator))
+            board_path = directory / "results/charuco_board.png"
+            image = cv.imdecode(
+                np.frombuffer(board_path.read_bytes(), np.uint8), cv.IMREAD_GRAYSCALE
+            )
+            assert image is not None
+            self.assertEqual(image.shape, (1700, 2300))
+            self.assertTrue(np.all(image[:100] == 255))
+            # 校正側と換算側の仕様で読め、各角が実寸に対応した位置に並ぶ。
+            dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
+            for script in (self.camera, self.gui):
+                board = cv.aruco.CharucoBoard(
+                    script["BOARD_SQUARES"],
+                    script["SQUARE_MM"],
+                    script["MARKER_MM"],
+                    dictionary,
+                )
+                corners, ids, _, _ = cv.aruco.CharucoDetector(board).detectBoard(image)
+                assert ids is not None and corners is not None
+                self.assertEqual(len(ids), 24)
+                world_points = np.array(board.getChessboardCorners())
+                detected_world = world_points[ids.astype(np.int32).ravel(), :2]
+                expected = (detected_world + settings["MARGIN_MM"]) * settings[
+                    "PIXELS_PER_MM"
+                ]
+                np.testing.assert_allclose(corners.reshape(-1, 2), expected, atol=1)
+            # 係数算出の実行は、板を新規生成も上書きもしない。
+            calibration = directory / "camera_calibration.py"
+            calibration.write_bytes(
+                (PROJECT / "submissions/camera_calibration.py").read_bytes()
+            )
+            board_path.write_bytes(b"keep existing board")
+            with contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(str(calibration), run_name="__main__")
+            self.assertEqual(board_path.read_bytes(), b"keep existing board")
+            board_path.unlink()
+            with contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(str(calibration), run_name="__main__")
+            self.assertFalse(board_path.exists())
 
     def test_camera_parameters_are_recovered_and_copyable(self):
         size, matrix, distortion, rms, errors = self.calibration

@@ -7,9 +7,8 @@ import numpy as np
 
 # この撮影モード・解像度で撮った校正板の写真だけを入れる。
 INPUT_DIRECTORY = "input/camera_calibration"
-BOARD_IMAGE_PATH = "results/charuco_board.png"
 
-# 換算GUIと同じ板。印刷後の黒白の領域は210 × 150mmにする。
+# generate_charuco_board.pyと換算GUIと同じ板。
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
@@ -86,21 +85,6 @@ def parameter_text(
 def main() -> None:
     directory = Path(__file__).resolve().parent
     input_directory = directory / INPUT_DIRECTORY
-    board_path = directory / BOARD_IMAGE_PATH
-    dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
-    board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
-    # 10px/mmの板本体に白い余白を加える。用紙サイズから寸法を推定しない。
-    board_image = board.generateImage((2100, 1500))
-    printable = cv.copyMakeBorder(
-        board_image, 100, 100, 100, 100, cv.BORDER_CONSTANT, value=255
-    )
-    board_path.parent.mkdir(parents=True, exist_ok=True)
-    success, encoded = cv.imencode(".png", printable)
-    if not success:
-        raise OSError("校正板のPNGを作れません")
-    board_path.write_bytes(encoded.tobytes())
-    print(f"校正板: {board_path}")
-    print("黒白の領域を210 × 150mm、1マスを30mmで印刷し、実測してください。")
     paths = []
     if input_directory.is_dir():
         for path in sorted(input_directory.iterdir()):
