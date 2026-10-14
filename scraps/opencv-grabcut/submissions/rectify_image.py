@@ -1,4 +1,4 @@
-"""固定したカメラ係数とChArUcoで、一定のmm/pxの補正PNGを保存する."""
+"""指定フォルダの写真を、固定カメラ係数とChArUcoで補正してPNGへ保存する."""
 
 import math
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2 as cv
 import numpy as np
 
-INPUT_PATH = "input/赤茶色の床と剥離した金属帯.png"
-OUTPUT_IMAGE_PATH = "results/rectified.png"
+INPUT_DIRECTORY = "input"
+OUTPUT_DIRECTORY = "output/rectified"
 
 # camera_calibration.pyの出力を、この3設定へ一度貼り付ける。
 CALIBRATION_SIZE: tuple[int, int] | None = None
@@ -18,7 +18,7 @@ DIST_COEFFS: list[float] | None = None
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
-# 01_initial_regions_gui.pyにも同じ値を設定する。
+# initial_regions_gui.pyにも同じ値を設定する。
 MM_PER_PX = 0.25
 
 
@@ -105,28 +105,62 @@ def rectify_image(image: np.ndarray) -> dict:
 
 def main() -> None:
     directory = Path(__file__).resolve().parent
-    input_path = (directory / INPUT_PATH).resolve()
-    image_path = (directory / OUTPUT_IMAGE_PATH).resolve()
-    if input_path == image_path:
-        raise ValueError("元画像と補正PNGは別のパスにしてください")
-    if image_path.suffix.lower() != ".png":
-        raise ValueError("保存先の拡張子は .png にしてください")
-    image = cv.imdecode(
-        np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
-    )
-    if image is None:
-        raise ValueError(f"画像を読み込めません: {input_path}")
-    correction = rectify_image(image)
-    success, encoded = cv.imencode(".png", correction["image"])
-    if not success:
-        raise OSError("補正画像をPNGにできません")
-    image_path.parent.mkdir(parents=True, exist_ok=True)
-    image_path.write_bytes(encoded.tobytes())
+    input_directory = (directory / INPUT_DIRECTORY).resolve()
+    output_directory = (directory / OUTPUT_DIRECTORY).resolve()
+    if input_directory == output_directory:
+        raise ValueError("入力と出力は別のフォルダにしてください")
+    if not input_directory.is_dir():
+        raise ValueError(f"入力フォルダがありません: {input_directory}")
+    input_paths = []
+    output_names = []
+    for path in sorted(input_directory.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp",
+            ".tif",
+            ".tiff",
+        ):
+            continue
+        output_name = f"{path.stem}.png"
+        if output_name.casefold() in output_names:
+            raise ValueError(
+                f"出力名が重複します。入力名を変えてください: {output_name}"
+            )
+        input_paths.append(path)
+        output_names.append(output_name.casefold())
+    if not input_paths:
+        raise ValueError("入力フォルダに画像がありません")
+
+    failed = 0
+    for input_path in input_paths:
+        output_path = output_directory / f"{input_path.stem}.png"
+        try:
+            image = cv.imdecode(
+                np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+            )
+            if image is None:
+                raise ValueError("画像を読み込めません")
+            correction = rectify_image(image)
+            success, encoded = cv.imencode(".png", correction["image"])
+            if not success:
+                raise OSError("補正画像をPNGにできません")
+            output_directory.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(encoded.tobytes())
+        except (OSError, ValueError, cv.error) as error:
+            failed += 1
+            print(f"失敗: {input_path.name}: {error}")
+            continue
+        print(
+            f"保存: {output_path.name} / 角{correction['corner_count']}点 / "
+            f"再投影誤差{correction['error_px']:.3f}px"
+        )
     print(
-        f"検出した角: {correction['corner_count']}点、再投影誤差: {correction['error_px']:.3f}px"
+        f"完了: 成功{len(input_paths) - failed}枚、失敗{failed}枚 → {output_directory}"
     )
-    print(f"補正PNG: {image_path}")
-    print(f"補正画像の倍率: {correction['mm_per_px']:g}mm/px")
+    if failed:
+        raise SystemExit("補正できなかった画像を確認して、再実行してください")
 
 
 if __name__ == "__main__":

@@ -10,14 +10,14 @@
 | --- | --- | --- |
 | 1 | `generate_charuco_board.py` | ChArUco板のPNGを生成 |
 | 2 | `camera_calibration.py` | 校正写真からカメラ係数を算出し、コピペ用に表示 |
-| 3 | `rectify_image.py` | コピペした固定係数と板で補正PNGを出力 |
-| 4 | `01_initial_regions_gui.py` | 初期指定・対応区間を操作し、長さCSVと確認画像を保存 |
+| 3 | `rectify_image.py` | 指定フォルダを固定係数と板で一括補正し、PNGを出力 |
+| 4 | `initial_regions_gui.py` | 初期指定・対応区間を操作し、長さCSVと確認画像を保存 |
 | 5 | `length_comparison_gui.py` | 複数CSVと理想値を比較し、表・グラフ・CSVで確認 |
 
 [実行順・設定・GUI操作・検証記録](submissions/README.md) に手順をまとめています。
-板生成とカメラ校正は初回、画像補正と01計測は撮影ごと、比較は複数撮影のCSVを使います。
-補正画像は固定のmm/pxへ揃え、同じ値を01のコード冒頭にも設定します。
-カメラ係数の保存・自動読込や一括実行の仕組みはありません。
+板生成とカメラ校正は初回、画像補正と計測GUIは撮影ごと、比較は複数撮影のCSVを使います。
+補正画像は固定のmm/pxへ揃え、同じ値を計測GUIのコード冒頭にも設定します。
+カメラ係数はコードへ貼り付け、各工程を個別に実行します。
 
 Python 3.14以降、NumPy、OpenCV、Matplotlib、GUIにはTkinterを使います。
 依存関係はこのフォルダの `pyproject.toml` と `uv.lock` で管理します。
@@ -28,7 +28,7 @@ uv sync
 uv run submissions/generate_charuco_board.py
 uv run submissions/camera_calibration.py
 uv run submissions/rectify_image.py
-uv run submissions/01_initial_regions_gui.py
+uv run submissions/initial_regions_gui.py
 uv run submissions/length_comparison_gui.py
 ```
 
@@ -39,7 +39,7 @@ uv run submissions/length_comparison_gui.py
 [旧提出版](sandbox/previous_submissions/README.md)、
 [旧実践版](sandbox/previous_scripts/README.md)、
 [試作・前処理比較](sandbox/README.md) を参照してください。
-既存の入力・結果は保存場所を維持しています。
+現行の標準出力先は `submissions/output/` です。補正画像は `output/rectified/`、計測CSV・比較結果・板のPNGは `output/` に保存します。過去の結果は従来の場所へ保管しています。
 
 現在の実装範囲は [PLAN.md](PLAN.md)、作業履歴は [PROGRESS.md](PROGRESS.md)、
 撮影条件は [CAPTURE.md](CAPTURE.md) にあります。
@@ -52,5 +52,5 @@ uv run ruff format --check .
 uv run ty check .
 ```
 
-現行7件と旧版77件の自動試験、生成画像を使った実Tk操作と複数CSV比較を確認しています。
+現行10件と旧版77件、合計87件の自動試験、生成画像を使った実Tk操作と複数CSV比較を確認しています。
 実カメラの歪み補正精度、本番画像での抽出精度は未確認です。

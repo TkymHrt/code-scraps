@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cv2 as cv
 
-OUTPUT_PATH = "results/charuco_board.png"
+OUTPUT_PATH = "output/charuco_board.png"
 
 # camera_calibration.pyとrectify_image.pyと同じ仕様にする。
 BOARD_SQUARES = (7, 5)

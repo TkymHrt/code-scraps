@@ -50,7 +50,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.gui = runpy.run_path(
-            str(copy_current("01_initial_regions_gui.py", self.directory))
+            str(copy_current("initial_regions_gui.py", self.directory))
         )
         self.comparison = runpy.run_path(
             str(copy_current("length_comparison_gui.py", self.directory))
@@ -165,7 +165,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             with self.subTest(column=column), self.assertRaises(ValueError):
                 self.comparison["read_lengths"](path)
 
-    def test_twenty_shots_reordering_and_invalid_conditions(self):
+    def test_twenty_shots_preserve_input_order_and_reject_invalid_conditions(self):
         samples = [self.sample(f"撮影{i:02}", 120 + i * 4) for i in range(20)]
         rows = self.comparison["compare_lengths"](samples, 30, 10)
         self.assertEqual(rows[-1]["left_mm"], 49)
@@ -189,20 +189,23 @@ class CurrentWorkflowTests(unittest.TestCase):
         script = copy_current(
             "rectify_image.py",
             self.directory,
-            INPUT_PATH="撮影.png",
-            OUTPUT_IMAGE_PATH="補正.png",
+            INPUT_DIRECTORY="input",
+            OUTPUT_DIRECTORY="output/rectified",
             CALIBRATION_SIZE=IMAGE_SIZE,
             CAMERA_MATRIX=MATRIX.tolist(),
             DIST_COEFFS=DISTORTION.tolist(),
         )
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
         _, encoded = cv.imencode(".png", image)
-        source_path = self.directory / "撮影.png"
+        input_directory = self.directory / "input"
+        input_directory.mkdir()
+        source_path = input_directory / "撮影.png"
         source_path.write_bytes(encoded.tobytes())
         before = source_path.read_bytes()
         with contextlib.redirect_stdout(io.StringIO()):
             rectifier = runpy.run_path(str(script), run_name="__main__")
         self.assertEqual(source_path.read_bytes(), before)
+        self.assertTrue((self.directory / "output/rectified/撮影.png").is_file())
         self.assertFalse(list(self.directory.glob("*.csv")))
         self.assertEqual(rectifier["MM_PER_PX"], self.gui["MM_PER_PX"])
         configure(rectifier)
@@ -222,7 +225,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         generator = copy_current("generate_charuco_board.py", self.directory)
         with contextlib.redirect_stdout(io.StringIO()):
             runpy.run_path(str(generator), run_name="__main__")
-        board_path = self.directory / "results/charuco_board.png"
+        board_path = self.directory / "output/charuco_board.png"
         before = board_path.read_bytes()
         camera = runpy.run_path(
             str(copy_current("camera_calibration.py", self.directory))
@@ -241,6 +244,114 @@ class CurrentWorkflowTests(unittest.TestCase):
         )
         self.assertLess(corrected["error_px"], 1)
         self.assertEqual(board_path.read_bytes(), before)
+
+    def test_batch_converts_multiple_formats_and_skips_nested_and_other_files(self):
+        input_directory = self.directory / "input"
+        input_directory.mkdir()
+        poses = [
+            ((0.12, -0.22, 0.03), (-170, -65, 600)),
+            ((-0.20, 0.18, -0.10), (-150, -100, 650)),
+        ]
+        original = {}
+        for name, (rotation, translation) in zip(("撮影1.png", "撮影2.bmp"), poses):
+            _, encoded = cv.imencode(
+                Path(name).suffix, rendered_scene(rotation, translation)
+            )
+            original[name] = encoded.tobytes()
+            (input_directory / name).write_bytes(original[name])
+        (input_directory / "説明.txt").write_text("not an image", encoding="utf-8")
+        nested = input_directory / "別の写真"
+        nested.mkdir()
+        (nested / "対象外.png").write_bytes(b"not read")
+        script = copy_current(
+            "rectify_image.py",
+            self.directory,
+            INPUT_DIRECTORY="input",
+            CALIBRATION_SIZE=IMAGE_SIZE,
+            CAMERA_MATRIX=MATRIX.tolist(),
+            DIST_COEFFS=DISTORTION.tolist(),
+        )
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertIn("成功2枚、失敗0枚", log.getvalue())
+        output_directory = self.directory / "output/rectified"
+        self.assertEqual(
+            sorted(path.name for path in output_directory.iterdir()),
+            ["撮影1.png", "撮影2.png"],
+        )
+        for name, contents in original.items():
+            self.assertEqual((input_directory / name).read_bytes(), contents)
+            corrected = cv.imdecode(
+                np.frombuffer(
+                    (output_directory / f"{Path(name).stem}.png").read_bytes(), np.uint8
+                ),
+                cv.IMREAD_COLOR,
+            )
+            assert corrected is not None
+            ys, _ = np.nonzero(cv.inRange(corrected, (20, 75, 145), (90, 145, 220)))
+            self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
+
+    def test_batch_reports_bad_images_and_keeps_their_previous_outputs(self):
+        input_directory = self.directory / "input"
+        input_directory.mkdir()
+        _, encoded = cv.imencode(
+            ".png", np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0], 3), np.uint8)
+        )
+        (input_directory / "00_板なし.png").write_bytes(encoded.tobytes())
+        _, encoded = cv.imencode(
+            ".png", rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
+        )
+        (input_directory / "01_正常.png").write_bytes(encoded.tobytes())
+        (input_directory / "02_破損.png").write_bytes(b"bad image")
+        output_directory = self.directory / "output/rectified"
+        output_directory.mkdir(parents=True)
+        (output_directory / "00_板なし.png").write_bytes(b"keep previous output")
+        script = copy_current(
+            "rectify_image.py",
+            self.directory,
+            INPUT_DIRECTORY="input",
+            CALIBRATION_SIZE=IMAGE_SIZE,
+            CAMERA_MATRIX=MATRIX.tolist(),
+            DIST_COEFFS=DISTORTION.tolist(),
+        )
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as log,
+            self.assertRaises(SystemExit),
+        ):
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertIn("成功1枚、失敗2枚", log.getvalue())
+        self.assertEqual(
+            (output_directory / "00_板なし.png").read_bytes(), b"keep previous output"
+        )
+        self.assertTrue((output_directory / "01_正常.png").is_file())
+        self.assertFalse((output_directory / "02_破損.png").exists())
+
+    def test_batch_rejects_missing_empty_same_directory_and_name_collisions(self):
+        rectifier = runpy.run_path(
+            str(copy_current("rectify_image.py", self.directory))
+        )
+        main = rectifier["main"]
+        settings = main.__globals__
+        settings["INPUT_DIRECTORY"] = "missing"
+        with self.assertRaisesRegex(ValueError, "ありません"):
+            main()
+        input_directory = self.directory / "input"
+        input_directory.mkdir()
+        settings["INPUT_DIRECTORY"] = "input"
+        with self.assertRaisesRegex(ValueError, "画像がありません"):
+            main()
+        settings["OUTPUT_DIRECTORY"] = "input"
+        with self.assertRaisesRegex(ValueError, "別のフォルダ"):
+            main()
+        settings["OUTPUT_DIRECTORY"] = "output/rectified"
+        for name in ("同じ名前.jpg", "同じ名前.png"):
+            (input_directory / name).write_bytes(b"unchanged input")
+        with self.assertRaisesRegex(ValueError, "重複"):
+            main()
+        self.assertFalse((self.directory / "output/rectified").exists())
+        self.assertEqual(
+            (input_directory / "同じ名前.jpg").read_bytes(), b"unchanged input"
+        )
 
 
 if __name__ == "__main__":

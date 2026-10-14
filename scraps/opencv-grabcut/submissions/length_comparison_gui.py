@@ -1,4 +1,4 @@
-"""01の長さCSVと撮影時の厚さから、複数撮影を理想スラブと比較する."""
+"""計測済みの長さCSVと撮影時の厚さから、複数撮影を理想スラブと比較する."""
 
 import csv
 import math
@@ -39,16 +39,16 @@ def read_lengths(path: Path) -> dict:
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.DictReader(source)
         if not set(required).issubset(reader.fieldnames or []):
-            raise ValueError(f"01で保存した長さCSVを選んでください: {path}")
+            raise ValueError(f"計測GUIで保存した長さCSVを選んでください: {path.name}")
         saved_rows = list(reader)
     if len(saved_rows) != 1:
-        raise ValueError(f"長さCSVは1画像につき1行が必要です: {path}")
+        raise ValueError(f"長さCSVは1画像につき1行が必要です: {path.name}")
     saved = saved_rows[0]
     row: dict = {}
     for column in required:
         value = saved[column]
         if value is None or not value.strip():
-            raise ValueError(f"空欄のある項目を確認してください: {column}: {path}")
+            raise ValueError(f"空欄のある項目を確認してください: {column}: {path.name}")
         row[column] = value
     for column in (
         "mm_per_px",
@@ -59,20 +59,22 @@ def read_lengths(path: Path) -> dict:
         "total_px",
         "total_mm",
     ):
-        row[column] = positive_value(row[column], f"{column}: {path}")
+        row[column] = positive_value(row[column], f"{column}: {path.name}")
     try:
         for column in ("image_width", "image_height", "start_y", "end_y"):
             row[column] = int(row[column])
     except ValueError as error:
         raise ValueError(
-            f"画像サイズ・計測範囲の数値を確認してください: {path}"
+            f"画像サイズ・計測範囲の数値を確認してください: {path.name}"
         ) from error
     if (
         row["image_width"] < 2
         or row["image_height"] < 2
         or not 0 <= row["start_y"] < row["end_y"] < row["image_height"]
     ):
-        raise ValueError(f"長さCSVの画像サイズ・計測範囲を確認してください: {path}")
+        raise ValueError(
+            f"長さCSVの画像サイズ・計測範囲を確認してください: {path.name}"
+        )
     for edge in ("left", "right", "total"):
         if not math.isclose(
             row[f"{edge}_mm"],
@@ -80,11 +82,11 @@ def read_lengths(path: Path) -> dict:
             rel_tol=1e-10,
             abs_tol=1e-10,
         ):
-            raise ValueError(f"長さCSVのpx値・mm値・倍率が一致しません: {path}")
+            raise ValueError(f"長さCSVのpx値・mm値・倍率が一致しません: {path.name}")
     if not math.isclose(
         row["left_mm"] + row["right_mm"], row["total_mm"], rel_tol=1e-10, abs_tol=1e-10
     ):
-        raise ValueError(f"左右の実寸と合計が一致しません: {path}")
+        raise ValueError(f"左右の実寸と合計が一致しません: {path.name}")
     image_path = Path(row["image_path"])
     if not image_path.is_absolute():
         image_path = path.parent / image_path
@@ -100,7 +102,7 @@ def compare_lengths(
     initial_length_mm = positive_value(initial_length_mm, "初期区間長 (mm)")
     initial_thickness_mm = positive_value(initial_thickness_mm, "初期厚さ (mm)")
     if not samples:
-        raise ValueError("01で保存した長さCSVを1枚以上追加してください")
+        raise ValueError("計測GUIで保存した長さCSVを1枚以上追加してください")
     names = []
     paths = []
     rows = []
@@ -247,198 +249,115 @@ def write_graph(path: Path, rows: list[dict]) -> None:
 
 def main() -> None:
     directory = Path(__file__).resolve().parent
+    output_directory = directory / "output"
     root = tk.Tk()
-    root.title("計測済み長さと理想スラブの比較")
-    root.geometry("1160x820")
-    root.minsize(1060, 760)
+    root.title("長さと理想スラブの比較")
+    root.geometry("1120x800")
+    root.minsize(1000, 760)
     samples = []
     rows = []
-    graph_window = None
-    initial_length = tk.StringVar()
-    initial_thickness = tk.StringVar()
-    sample_name = tk.StringVar()
-    sample_thickness = tk.StringVar()
-    selected_csv = tk.StringVar()
-    selected_image = tk.StringVar()
+    graph_canvas: FigureCanvasTkAgg | None = None
+    initial_length = tk.StringVar(master=root)
+    initial_thickness = tk.StringVar(master=root)
+    count_text = tk.StringVar(master=root, value="0撮影")
     status = tk.StringVar(
-        value="初期区間長・初期厚さを入れ、対応する同じ材料区間の計測済みCSVを追加してください"
+        master=root, value="CSVを追加し、初期条件と各撮影の厚さを入力してください"
     )
 
-    def invalidate_result() -> None:
-        nonlocal graph_window
-        if graph_window is not None:
-            graph_window.destroy()
-            graph_window = None
+    def invalidate(*_args) -> None:
+        nonlocal graph_canvas
         rows.clear()
         for table in result_tables.values():
             table.delete(*table.get_children())
-        for button in (preview_button, csv_button, graph_button):
-            button.state(["disabled"])
+        if graph_canvas is not None:
+            graph_canvas.get_tk_widget().destroy()
+            graph_canvas.figure.clear()
+            graph_canvas = None
+        csv_button.state(["disabled"])
+        graph_button.state(["disabled"])
+        status.set("条件を変更しました。比較し直してください")
 
-    def model_changed(*args) -> None:
-        invalidate_result()
-        status.set("初期スラブの条件を変更しました。比較し直してください")
-
-    def select_sample(event=None) -> None:
-        selection = input_table.selection()
-        if len(selection) == 1:
-            sample = samples[int(selection[0])]
-            sample_name.set(sample["sample_id"])
-            thickness = sample["thickness_mm"]
-            sample_thickness.set("" if thickness is None else f"{thickness:g}")
-            selected_csv.set(str(sample["csv_path"]))
-            selected_image.set(sample["measurement"]["image_path"])
-        else:
-            sample_name.set("")
-            sample_thickness.set("")
-            selected_csv.set("")
-            selected_image.set("")
-
-    def refresh_inputs(selection: int | None = None) -> None:
-        input_table.delete(*input_table.get_children())
+    def refresh_inputs() -> None:
+        for widget in input_rows.winfo_children():
+            widget.destroy()
         for index, sample in enumerate(samples):
-            path = sample["csv_path"]
-            short_path = f"{path.parent.parent.name}/{path.parent.name}/{path.name}"
-            thickness = sample["thickness_mm"]
-            factor = f"{sample['measurement']['mm_per_px']:.8g}"
-            input_table.insert(
-                "",
-                "end",
-                iid=str(index),
-                values=(
-                    index + 1,
-                    sample["sample_id"],
-                    "未入力" if thickness is None else f"{thickness:g}",
-                    factor,
-                    short_path,
-                ),
+            row_frame = ttk.Frame(input_rows, padding=(8, 4))
+            row_frame.pack(fill="x")
+            row_frame.columnconfigure(0, weight=1)
+            ttk.Label(
+                row_frame,
+                text=f"{index + 1}. {sample['csv_path'].name}",
+                wraplength=360,
+            ).grid(row=0, column=0, sticky="w", padx=(0, 12))
+            ttk.Entry(
+                row_frame,
+                textvariable=sample["thickness_text"],
+                width=10,
+                justify="right",
+            ).grid(row=0, column=1, padx=(0, 6))
+            ttk.Label(row_frame, text="mm").grid(row=0, column=2, padx=(0, 12))
+
+            # 各ボタンが自分の行を覚えるよう、既定引数にそのサンプルを渡す。
+            def remove_this(sample=sample) -> None:
+                samples.remove(sample)
+                refresh_inputs()
+                invalidate()
+                status.set(f"除外しました: {sample['csv_path'].name}")
+
+            ttk.Button(row_frame, text="削除", command=remove_this).grid(
+                row=0, column=3
             )
-        if selection is not None:
-            input_table.selection_set(str(selection))
-            input_table.see(str(selection))
-        select_sample()
+        count_text.set(f"{len(samples)}撮影")
 
     def add_csvs() -> None:
         selected = filedialog.askopenfilenames(
             parent=root,
-            title="対応する同じ材料区間の計測済みCSVを選ぶ",
-            initialdir=directory,
+            title="対応する材料区間の長さCSVを追加",
+            initialdir=output_directory,
             filetypes=[("CSV", "*.csv")],
         )
         if not selected:
             return
         existing_paths = []
-        names = []
         for sample in samples:
             existing_paths.append(sample["csv_path"])
-            names.append(sample["sample_id"])
         new_paths = []
-        measurements = []
         try:
             for filename in selected:
                 path = Path(filename).resolve()
                 if path in existing_paths or path in new_paths:
                     continue
-                measurement = read_lengths(path)
+                read_lengths(path)
                 new_paths.append(path)
-                measurements.append(measurement)
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
             return
         if not new_paths:
             status.set("同じCSVは重複して追加しません")
             return
-        for path, measurement in zip(new_paths, measurements):
-            number = len(samples) + 1
-            name = f"撮影{number:02d}"
-            while name in names:
-                number += 1
-                name = f"撮影{number:02d}"
-            samples.append(
-                {
-                    "sample_id": name,
-                    "csv_path": path,
-                    "thickness_mm": None,
-                    "measurement": measurement,
-                }
-            )
-            names.append(name)
+        for path in new_paths:
+            thickness_text = tk.StringVar(master=root)
+            thickness_text.trace_add("write", invalidate)
+            samples.append({"csv_path": path, "thickness_text": thickness_text})
         refresh_inputs()
-        invalidate_result()
-        status.set("各行を選び、撮影名と厚さを入力・適用して比較してください")
-
-    def remove_samples() -> None:
-        selection = input_table.selection()
-        if not selection:
-            status.set("削除する行を選んでください")
-            return
-        indices = []
-        for item in selection:
-            indices.append(int(item))
-        for index in sorted(indices, reverse=True):
-            del samples[index]
-        refresh_inputs()
-        invalidate_result()
-        status.set(f"選択したCSVを削除しました。残り{len(samples)}枚です")
-
-    def move_sample(direction: int) -> None:
-        selection = input_table.selection()
-        if len(selection) != 1:
-            status.set("移動する行を1つ選んでください")
-            return
-        index = int(selection[0])
-        new_index = index + direction
-        if not 0 <= new_index < len(samples):
-            return
-        moved = samples[index]
-        samples[index] = samples[new_index]
-        samples[new_index] = moved
-        refresh_inputs(new_index)
-        invalidate_result()
-        status.set("撮影順を変更しました。比較し直してください")
-
-    def move_up() -> None:
-        move_sample(-1)
-
-    def move_down() -> None:
-        move_sample(1)
-
-    def apply_sample() -> None:
-        selection = input_table.selection()
-        if len(selection) != 1:
-            status.set("条件を設定する行を1つ選んでください")
-            return
-        index = int(selection[0])
-        name = sample_name.get().strip()
-        if not name:
-            status.set("撮影名を入力してください")
-            return
-        for other_index, sample in enumerate(samples):
-            if other_index != index and sample["sample_id"] == name:
-                status.set("撮影名が重複しています")
-                return
-        try:
-            thickness = positive_value(sample_thickness.get(), "撮影時の厚さ (mm)")
-        except ValueError as error:
-            status.set(str(error))
-            return
-        if (
-            samples[index]["sample_id"] == name
-            and samples[index]["thickness_mm"] == thickness
-        ):
-            return
-        samples[index]["sample_id"] = name
-        samples[index]["thickness_mm"] = thickness
-        refresh_inputs(index)
-        invalidate_result()
-        status.set("撮影名と厚さを設定しました。比較し直してください")
+        invalidate()
+        status.set("各CSVの厚さを入力して比較してください。表示順で比較します")
 
     def compare() -> None:
-        nonlocal rows
-        invalidate_result()
+        nonlocal rows, graph_canvas
+        invalidate()
+        conditions = []
+        for index, sample in enumerate(samples):
+            conditions.append(
+                {
+                    "sample_id": f"{index + 1}. {sample['csv_path'].name}",
+                    "csv_path": sample["csv_path"],
+                    "thickness_mm": sample["thickness_text"].get(),
+                }
+            )
         try:
             rows = compare_lengths(
-                samples, initial_length.get(), initial_thickness.get()
+                conditions, initial_length.get(), initial_thickness.get()
             )
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
@@ -465,22 +384,24 @@ def main() -> None:
                         text = f"{value:.3f}"
                     values.append(text)
                 table.insert("", "end", values=values)
-        for button in (preview_button, csv_button, graph_button):
-            button.state(["!disabled"])
-        status.set(
-            "比較しました。理想との差は「実寸 − 理想」、前回差は「実寸 − 前回の実寸」です"
-        )
+        graph_canvas = FigureCanvasTkAgg(create_graph(rows), master=graph_frame)
+        graph_canvas.get_tk_widget().pack(fill="both", expand=True)
+        graph_canvas.draw()
+        csv_button.state(["!disabled"])
+        graph_button.state(["!disabled"])
+        status.set("比較しました。差は実寸−理想、前回差は実寸−前回です")
 
     def save(suffix: str) -> None:
         if not rows:
             return
         selected = filedialog.asksaveasfilename(
             parent=root,
-            title="スラブ基準の比較結果を保存",
-            initialdir=directory,
-            initialfile=f"slab_length_comparison{suffix}",
+            title="比較結果を保存",
+            initialdir=output_directory,
+            initialfile=f"length_comparison{suffix}",
             defaultextension=suffix,
             filetypes=[("比較結果", f"*{suffix}")],
+            confirmoverwrite=True,
         )
         if not selected:
             return
@@ -492,7 +413,7 @@ def main() -> None:
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
             return
-        status.set(f"保存しました: {selected}")
+        status.set(f"保存しました: {Path(selected).name}")
 
     def save_csv() -> None:
         save(".csv")
@@ -500,113 +421,72 @@ def main() -> None:
     def save_graph() -> None:
         save(".png")
 
-    def show_graph() -> None:
-        nonlocal graph_window
-        if not rows:
-            return
-        if graph_window is not None:
-            graph_window.lift()
-            return
-        window = tk.Toplevel(root)
-        graph_window = window
-        window.title("理想スラブと実寸の推移")
-        width = min(1100, root.winfo_screenwidth() - 80)
-        height = min(900, root.winfo_screenheight() - 120)
-        left = max(0, (root.winfo_screenwidth() - width) // 2)
-        window.geometry(f"{width}x{height}+{left}+20")
-        window.minsize(800, 650)
-        figure = create_graph(rows)
-        canvas = FigureCanvasTkAgg(figure, master=window)
-        canvas.get_tk_widget().pack(fill="both", expand=True)
-        window.update_idletasks()
-        canvas.draw()
+    def update_scroll(_event=None) -> None:
+        input_canvas.configure(scrollregion=input_canvas.bbox("all"))
 
-        def close_graph() -> None:
-            nonlocal graph_window
-            window.destroy()
-            graph_window = None
+    def resize_inputs(event) -> None:
+        input_canvas.itemconfigure(input_item, width=event.width)
 
-        window.protocol("WM_DELETE_WINDOW", close_graph)
-
-    model = ttk.Frame(root, padding=12)
-    model.pack(fill="x")
-    ttk.Label(model, text="初期区間長 (mm)").pack(side="left", padx=(0, 8))
-    ttk.Entry(model, textvariable=initial_length, width=16).pack(side="left")
-    ttk.Label(model, text="初期厚さ (mm)").pack(side="left", padx=(24, 8))
-    ttk.Entry(model, textvariable=initial_thickness, width=16).pack(side="left")
-    ttk.Label(
-        root,
-        text="理想の片側長 = 初期区間長 × 初期厚さ ÷ 各回の厚さ（幅一定・体積一定）",
-        padding=(12, 0),
-    ).pack(anchor="w")
-    toolbar = ttk.Frame(root, padding=(12, 8))
+    toolbar = ttk.Frame(root, padding=12)
     toolbar.pack(fill="x")
-    for label, command in (
-        ("CSVを追加", add_csvs),
-        ("選択を削除", remove_samples),
-        ("上へ", move_up),
-        ("下へ", move_down),
-        ("比較する", compare),
-    ):
-        ttk.Button(toolbar, text=label, command=command, padding=(12, 8)).pack(
-            side="left", padx=(0, 8)
-        )
-    ttk.Label(
-        root,
-        text="撮影順（上から順に。同じ材料区間を各画像で計測。Ctrl・Shiftで複数削除）",
-        padding=(12, 0),
-    ).pack(anchor="w")
-    input_frame = ttk.Frame(root, padding=(12, 8))
-    input_frame.pack(fill="both", expand=True)
-    input_table = ttk.Treeview(
-        input_frame,
-        columns=("order", "name", "thickness", "scale", "path"),
-        show="headings",
-        selectmode="extended",
-        height=4,
+    ttk.Button(toolbar, text="CSVを追加", command=add_csvs, padding=(12, 8)).pack(
+        side="left"
     )
-    for column, label, width in (
-        ("order", "順番", 50),
-        ("name", "撮影名", 140),
-        ("thickness", "厚さ (mm)", 100),
-        ("scale", "mm/px", 130),
-        ("path", "計測済みCSV", 620),
+    ttk.Label(toolbar, textvariable=count_text).pack(side="left", padx=12)
+    ttk.Label(toolbar, textvariable=status, wraplength=540).pack(side="right")
+    body = ttk.Frame(root, padding=(12, 0, 12, 12))
+    body.pack(fill="both", expand=True)
+    sidebar = ttk.Frame(body, width=220)
+    sidebar.pack(side="left", fill="y", padx=(0, 16))
+    preview = ttk.Frame(body)
+    preview.pack(side="left", fill="both", expand=True)
+
+    ttk.Label(sidebar, text="基準スラブ").pack(anchor="w", pady=(0, 8))
+    for label, variable in (
+        ("初期区間長 (mm)", initial_length),
+        ("初期厚さ (mm)", initial_thickness),
     ):
-        input_table.heading(column, text=label)
-        input_table.column(column, width=width, stretch=column == "path")
-    input_table.pack(side="left", fill="both", expand=True)
+        ttk.Label(sidebar, text=label).pack(anchor="w", pady=(4, 2))
+        ttk.Entry(sidebar, textvariable=variable, width=22).pack(fill="x", pady=(0, 8))
+    ttk.Label(
+        sidebar, text="幅一定・体積一定\n理想長 = 初期区間長 × 初期厚さ\n÷ 各撮影の厚さ"
+    ).pack(anchor="w", pady=8)
+    ttk.Button(sidebar, text="比較する", command=compare, padding=(12, 8)).pack(
+        fill="x", pady=(8, 4)
+    )
+    csv_button = ttk.Button(
+        sidebar, text="比較CSVを保存", command=save_csv, padding=(12, 8)
+    )
+    csv_button.pack(fill="x", pady=4)
+    graph_button = ttk.Button(
+        sidebar, text="推移グラフを保存", command=save_graph, padding=(12, 8)
+    )
+    graph_button.pack(fill="x", pady=4)
+
+    input_frame = ttk.LabelFrame(
+        preview, text="撮影（追加順・各行に厚さを入力）", padding=8
+    )
+    input_frame.pack(fill="x", pady=(0, 12))
+    input_canvas = tk.Canvas(input_frame, height=160, highlightthickness=0)
+    input_canvas.pack(side="left", fill="both", expand=True)
     input_scroll = ttk.Scrollbar(
-        input_frame, orient="vertical", command=input_table.yview
+        input_frame, orient="vertical", command=input_canvas.yview
     )
     input_scroll.pack(side="right", fill="y")
-    input_table.configure(yscrollcommand=input_scroll.set)
-    for label, variable in (
-        ("選択中のCSV", selected_csv),
-        ("計測した補正画像", selected_image),
-    ):
-        frame = ttk.Frame(root, padding=(12, 2))
-        frame.pack(fill="x")
-        ttk.Label(frame, text=label, width=14).pack(side="left", padx=(0, 8))
-        ttk.Entry(frame, textvariable=variable, state="readonly").pack(
-            side="left", fill="x", expand=True
-        )
-    editor = ttk.Frame(root, padding=(12, 8))
-    editor.pack(fill="x")
-    ttk.Label(editor, text="撮影名").pack(side="left", padx=(0, 8))
-    ttk.Entry(editor, textvariable=sample_name, width=20).pack(side="left")
-    ttk.Label(editor, text="撮影時の厚さ (mm)").pack(side="left", padx=(16, 8))
-    ttk.Entry(editor, textvariable=sample_thickness, width=12).pack(side="left")
-    ttk.Button(editor, text="撮影名・厚さを適用", command=apply_sample).pack(
-        side="left", padx=8
-    )
-    notebook = ttk.Notebook(root)
-    notebook.pack(fill="both", expand=True, padx=12, pady=8)
+    input_canvas.configure(yscrollcommand=input_scroll.set)
+    input_rows = ttk.Frame(input_canvas)
+    input_item = input_canvas.create_window(0, 0, window=input_rows, anchor="nw")
+    input_rows.bind("<Configure>", update_scroll)
+    input_canvas.bind("<Configure>", resize_inputs)
+
+    notebook = ttk.Notebook(preview)
+    notebook.pack(fill="both", expand=True)
     result_tables = {}
     for key, title, unit in (
-        ("length", "実寸 (mm)", "mm"),
-        ("ideal", "理想との差 (mm)", "mm"),
-        ("ratio", "理想との差率 (%)", "%"),
-        ("previous", "前回との差 (mm)", "mm"),
+        ("length", "実寸", "mm"),
+        ("ideal", "理想との差", "mm"),
+        ("ratio", "差率", "%"),
+        ("previous", "前回との差", "mm"),
     ):
         frame = ttk.Frame(notebook)
         notebook.add(frame, text=title)
@@ -617,49 +497,31 @@ def main() -> None:
         table = ttk.Treeview(frame, columns=columns, show="headings", height=5)
         for column in columns:
             if column == "name":
-                label = "撮影名"
+                label = "撮影"
             elif column == "ideal":
                 label = "理想片側長 (mm)"
             else:
                 labels = {"left": "左", "right": "右", "total": "左右合計"}
                 label = f"{labels[column]} ({unit})"
             table.heading(column, text=label)
-            table.column(column, width=200, anchor="w" if column == "name" else "e")
+            table.column(
+                column,
+                width=180 if column == "name" else 120,
+                anchor="w" if column == "name" else "e",
+            )
         table.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
         scrollbar.pack(side="right", fill="y")
         table.configure(yscrollcommand=scrollbar.set)
         result_tables[key] = table
-    actions = ttk.Frame(root, padding=(12, 8))
-    actions.pack(fill="x")
-    preview_button = ttk.Button(
-        actions,
-        text="推移グラフを表示",
-        command=show_graph,
-        state="disabled",
-        padding=(12, 8),
-    )
-    preview_button.pack(side="left", padx=(0, 8))
-    csv_button = ttk.Button(
-        actions,
-        text="比較CSVを保存",
-        command=save_csv,
-        state="disabled",
-        padding=(12, 8),
-    )
-    csv_button.pack(side="left")
-    graph_button = ttk.Button(
-        actions,
-        text="推移グラフを保存",
-        command=save_graph,
-        state="disabled",
-        padding=(12, 8),
-    )
-    graph_button.pack(side="left", padx=8)
-    ttk.Label(root, textvariable=status, padding=12, wraplength=1020).pack(fill="x")
-    input_table.bind("<<TreeviewSelect>>", select_sample)
-    initial_length.trace_add("write", model_changed)
-    initial_thickness.trace_add("write", model_changed)
+    graph_frame = ttk.Frame(notebook)
+    notebook.add(graph_frame, text="推移グラフ")
+
+    initial_length.trace_add("write", invalidate)
+    initial_thickness.trace_add("write", invalidate)
+    csv_button.state(["disabled"])
+    graph_button.state(["disabled"])
+    output_directory.mkdir(parents=True, exist_ok=True)
     root.mainloop()
 
 

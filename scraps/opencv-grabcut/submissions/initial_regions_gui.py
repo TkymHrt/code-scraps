@@ -11,6 +11,7 @@ import numpy as np
 
 # rectify_image.pyで出力した補正画像と同じ倍率にする。
 MM_PER_PX = 0.25
+OUTPUT_DIRECTORY = "output"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
@@ -150,6 +151,7 @@ def write_csv(path: Path, image_path: Path, measurement: dict) -> None:
 
 def main() -> None:
     directory = Path(__file__).resolve().parent
+    output_directory = directory / OUTPUT_DIRECTORY
     root = tk.Tk()
     input_path: Path | None = None
     image: np.ndarray | None = None
@@ -162,7 +164,7 @@ def main() -> None:
 
     measurement: dict | None = None
     result_image: np.ndarray | None = None
-    root.title("01 — 初期指定と長さの計測")
+    root.title("初期指定と長さの計測")
     root.geometry("1120x800")
     root.minsize(1000, 760)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
@@ -172,14 +174,13 @@ def main() -> None:
 
     start_text = tk.StringVar(value="0")
     end_text = tk.StringVar()
-    result_text = tk.StringVar(value="未計測")
 
     def load_image() -> None:
         nonlocal image, input_path, height, width
         selected = filedialog.askopenfilename(
             parent=root,
             title="補正画像を選ぶ",
-            initialdir=directory,
+            initialdir=directory / "output/rectified",
             filetypes=[
                 ("画像", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
                 ("すべて", "*.*"),
@@ -326,7 +327,7 @@ def main() -> None:
         selected = filedialog.asksaveasfilename(
             parent=root,
             title="確認画像の保存先を選ぶ",
-            initialdir=input_path.parent,
+            initialdir=output_directory,
             initialfile=f"{input_path.stem}_measurement.png",
             defaultextension=".png",
             filetypes=[("PNG画像", "*.png")],
@@ -358,7 +359,8 @@ def main() -> None:
         nonlocal measurement, result_image
         measurement = None
         result_image = None
-        result_text.set("未計測")
+        for item in result_table.get_children():
+            result_table.set(item, "length", "—")
         save_csv_button.state(["disabled"])
         if view.get() == "result":
             view.set("initial")
@@ -386,11 +388,9 @@ def main() -> None:
             return
         measurement = measured
         result_image = overlay
-        result_text.set(
-            f"左: {measured['left_mm']:.3f} mm\n"
-            f"右: {measured['right_mm']:.3f} mm\n"
-            f"合計: {measured['total_mm']:.3f} mm"
-        )
+        for edge in ("left", "right", "total"):
+            length_mm = measured[f"{edge}_mm"]
+            result_table.set(edge, "length", f"{length_mm:.3f}")
         view.set("result")
         save_csv_button.state(["!disabled"])
         render()
@@ -403,7 +403,7 @@ def main() -> None:
         selected = filedialog.asksaveasfilename(
             parent=root,
             title="長さCSVの保存先",
-            initialdir=input_path.parent,
+            initialdir=output_directory,
             initialfile=f"{input_path.stem}_lengths.csv",
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
@@ -467,11 +467,23 @@ def main() -> None:
         row_frame.pack(fill="x", pady=3)
         ttk.Label(row_frame, text=label).pack(side="left")
         ttk.Entry(row_frame, textvariable=variable, width=12).pack(side="right")
-    ttk.Label(sidebar, text=f"固定倍率: {MM_PER_PX:g} mm/px").pack(anchor="w", pady=6)
     ttk.Button(sidebar, text="長さを計測", padding=(12, 8), command=calculate).pack(
         fill="x", pady=4
     )
-    ttk.Label(sidebar, textvariable=result_text).pack(anchor="w", pady=8)
+    result_table = ttk.Treeview(
+        sidebar,
+        columns=("edge", "length"),
+        show="headings",
+        height=3,
+        selectmode="none",
+    )
+    result_table.heading("edge", text="側辺")
+    result_table.heading("length", text="長さ (mm)")
+    result_table.column("edge", width=60, stretch=False)
+    result_table.column("length", width=130, anchor="e")
+    for edge, label in (("left", "左"), ("right", "右"), ("total", "左右合計")):
+        result_table.insert("", "end", iid=edge, values=(label, "—"))
+    result_table.pack(fill="x", pady=8)
     save_csv_button = ttk.Button(
         sidebar, text="長さCSVを保存", padding=(12, 8), command=save_csv
     )
@@ -495,6 +507,7 @@ def main() -> None:
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
     region_list.bind("<<ListboxSelect>>", show_initial)
+    output_directory.mkdir(parents=True, exist_ok=True)
     refresh_regions()
     root.mainloop()
 
