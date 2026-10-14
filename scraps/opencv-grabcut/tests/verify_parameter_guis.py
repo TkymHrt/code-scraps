@@ -483,6 +483,15 @@ def exercise_length_calibration(project, output, root, screenshots):
             for w in widgets
             if isinstance(w, ttk.Button) and str(w.cget("text")) == "選ぶ"
         ]
+        canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
+        slider = next(w for w in widgets if isinstance(w, ttk.Scale))
+        caption = next(
+            w
+            for w in widgets
+            if isinstance(w, ttk.Label) and str(w.cget("text")) == "基準物の実寸 (mm)"
+        )
+        siblings = caption.master.winfo_children()
+        reference = siblings[siblings.index(caption) + 1]
         table = next(w for w in widgets if isinstance(w, ttk.Treeview))
         status_label = root.winfo_children()[-1]
 
@@ -503,87 +512,125 @@ def exercise_length_calibration(project, output, root, screenshots):
                 tuple(table.item(item, "values")) for item in table.get_children()
             )
 
-        def calibrate(index, cancel=False, capture_image=False):
+        def current_view():
+            x0, y0, x1, y1 = canvas.coords("image_bounds")
+            return x0, y0, (x1 - x0) / (1920 - 1)
 
-            def drive():
-                popup = next(
-                    w
-                    for w in root.winfo_children()
-                    if isinstance(w, tk.Toplevel)
-                    and w.title() == "既知寸法から画像を校正"
+        def click_image(x, y):
+            offset_x, offset_y, scale = current_view()
+            screen_x = round(offset_x + x * scale)
+            screen_y = round(offset_y + y * scale)
+            assert 0 <= screen_x < canvas.winfo_width()
+            assert 0 <= screen_y < canvas.winfo_height()
+            canvas.event_generate("<Button-1>", x=screen_x, y=screen_y)
+            root.update()
+
+        def drag(dx, dy):
+            start_x = canvas.winfo_width() // 2
+            start_y = canvas.winfo_height() // 2
+            canvas.event_generate("<ButtonPress-3>", x=start_x, y=start_y)
+            canvas.event_generate("<B3-Motion>", x=start_x + dx, y=start_y + dy)
+            canvas.event_generate("<ButtonRelease-3>", x=start_x + dx, y=start_y + dy)
+            root.update()
+
+        def calibrate(index, capture_image=False):
+            assert not any(isinstance(w, tk.Toplevel) for w in descendants(root))
+            assert not any(isinstance(w, ttk.Combobox) for w in descendants(root))
+            invoke("点を消す")
+            invoke("全体表示")
+            canvas.event_generate("<Button-1>", x=1, y=1)
+            assert not canvas.find_withtag("reference")
+            slider.set(173.25)
+            root.update()
+            offset_x, offset_y, scale = current_view()
+            assert abs(scale - 1.7325) < 1e-10
+            anchor_x = canvas.winfo_width() // 2 + 17
+            anchor_y = canvas.winfo_height() // 2 - 11
+            before_anchor = (
+                (anchor_x - offset_x) / scale,
+                (anchor_y - offset_y) / scale,
+            )
+            canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=60)
+            root.update()
+            next_x, next_y, next_scale = current_view()
+            np.testing.assert_allclose(
+                ((anchor_x - next_x) / next_scale, (anchor_y - next_y) / next_scale),
+                before_anchor,
+                atol=1e-9,
+            )
+            assert next_scale > scale
+            canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=-60)
+            root.update()
+            np.testing.assert_allclose(
+                current_view(), (offset_x, offset_y, scale), atol=1e-9
+            )
+            drag(-35, 26)
+            np.testing.assert_allclose(
+                current_view(), (offset_x - 35, offset_y + 26, scale), atol=1e-9
+            )
+            assert not canvas.find_withtag("reference"), (
+                "右ドラッグが基準点を追加しました"
+            )
+            if index == 0:
+                slider.set(1600)
+                root.update()
+                canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=120)
+                root.update()
+                assert current_view()[2] == 16
+                photo = canvas.itemcget(canvas.find_withtag("source")[0], "image")
+                assert (
+                    int(root.tk.call("image", "width", photo)) == canvas.winfo_width()
                 )
-                try:
-                    root.update()
-                    children = descendants(popup)
-                    actions = {
-                        str(w.cget("text")): w
-                        for w in children
-                        if isinstance(w, ttk.Button)
-                    }
-                    if cancel:
-                        actions["キャンセル"].invoke()
-                        return
-                    canvas = next(w for w in children if isinstance(w, tk.Canvas))
-                    entry = next(w for w in children if isinstance(w, ttk.Entry))
-                    mode = next(w for w in children if isinstance(w, ttk.Combobox))
-                    source_item = canvas.find_withtag("source")[0]
-                    photo = canvas.itemcget(source_item, "image")
-                    display_width = int(root.tk.call("image", "width", photo))
-                    assert display_width < 1920
-                    canvas.event_generate("<Button-1>", x=1, y=1)
-                    mode.set("100%")
-                    mode.event_generate("<<ComboboxSelected>>")
-                    root.update()
-                    source_item = canvas.find_withtag("source")[0]
-                    photo = canvas.itemcget(source_item, "image")
-                    assert int(root.tk.call("image", "width", photo)) == 1920
-                    canvas.xview_moveto(0.45)
-                    canvas.yview_moveto(0.15)
-                    root.update()
-                    x0, y0 = canvas.coords(source_item)
-                    assert canvas.canvasx(0) > 0, "スクロールした座標を確認していません"
-                    actions["点を消す"].invoke()
-                    for x, y in ((1200, 400), (1200 + reference_lengths[index], 400)):
-                        display_x = round(x0 + x - canvas.canvasx(0))
-                        display_y = round(y0 + y - canvas.canvasy(0))
-                        assert (
-                            0 <= display_x < canvas.winfo_width()
-                            and 0 <= display_y < canvas.winfo_height()
-                        )
-                        canvas.event_generate("<Button-1>", x=display_x, y=display_y)
-                        root.update()
-                    root.setvar(str(entry.cget("textvariable")), "0")
-                    actions["この校正を使う"].invoke()
-                    root.update()
-                    assert popup.winfo_exists(), "0mmの校正が適用されました"
-                    root.setvar(str(entry.cget("textvariable")), "50")
-                    live_status = next(
-                        w
-                        for w in popup.winfo_children()
-                        if isinstance(w, ttk.Label) and str(w.cget("textvariable"))
-                    )
-                    factor_text = str(
-                        root.getvar(str(live_status.cget("textvariable")))
-                    )
-                    assert "mm/px" in factor_text and "有限値" not in factor_text
-                    if capture_image and screenshots:
-                        capture(popup, output / "length_calibration_points.png")
-                    actions["この校正を使う"].invoke()
-                except Exception as error:
-                    errors.append(error)
-                    if popup.winfo_exists():
-                        popup.destroy()
+                assert (
+                    int(root.tk.call("image", "height", photo)) == canvas.winfo_height()
+                )
+            invoke("100%")
+            offset_x, offset_y, scale = current_view()
+            assert scale == 1
+            midpoint_x = offset_x + (1200 + reference_lengths[index] / 2) * scale
+            midpoint_y = offset_y + 400 * scale
+            drag(
+                round(canvas.winfo_width() / 2 - midpoint_x),
+                round(canvas.winfo_height() / 2 - midpoint_y),
+            )
+            slider.set(200)
+            root.update()
+            click_image(1200, 400)
+            assert not table.get_children()
+            click_image(1200 + reference_lengths[index], 400)
+            root.setvar(str(reference.cget("textvariable")), "0")
+            root.update()
+            assert not table.get_children() and "有限値" in status_text()
+            assert buttons["校正済みCSVを保存"].instate(["disabled"])
+            root.setvar(str(reference.cget("textvariable")), "50")
+            root.update()
+            assert len(table.get_children()) == 3
+            before = values()
+            if capture_image and screenshots:
+                capture(root, output / "length_calibration_zoom.png")
+            slider.set(137.5)
+            root.update()
+            drag(30, -10)
+            canvas.event_generate("<MouseWheel>", x=anchor_x, y=anchor_y, delta=120)
+            root.update()
+            root.geometry("1050x730")
+            root.update()
+            assert values() == before
+            assert buttons["校正済みCSVを保存"].instate(["!disabled"])
+            assert len(canvas.find_withtag("reference")) == 5
+            invoke("全体表示")
+            assert values() == before
+            if capture_image and screenshots:
+                capture(root, output / "length_calibration_points.png")
 
-            root.after(40, drive)
-            invoke("既知寸法から校正")
-            assert not errors, errors
-
-        invoke("既知寸法から校正")
+        invoke("点を消す")
         assert "CSVと元画像" in status_text()
         assert buttons["校正済みCSVを保存"].instate(["disabled"])
         for index in range(5):
             choose(choose_buttons[0], paths[index])
             assert not table.get_children()
+            assert not canvas.find_all()
+            assert not reference.get()
             assert buttons["校正済みCSVを保存"].instate(["disabled"])
             choose(choose_buttons[1], images[index])
             assert not table.get_children()
@@ -596,8 +643,6 @@ def exercise_length_calibration(project, output, root, screenshots):
             )
             assert values() == expected, values()
             before = values()
-            calibrate(index, cancel=True)
-            assert values() == before
             for button in choose_buttons:
                 choose(button, "")
                 assert values() == before
@@ -617,8 +662,16 @@ def exercise_length_calibration(project, output, root, screenshots):
             with destination.open(encoding="utf-8-sig", newline="") as source:
                 row = next(csv.DictReader(source))
             assert float(row["mm_per_px"]) == factor
-            assert float(row["reference_x1"]) == 1200
-            assert float(row["reference_x2"]) == 1200 + reference_lengths[index]
+            assert abs(float(row["reference_x1"]) - 1200) <= 0.5
+            assert abs(float(row["reference_y1"]) - 400) <= 0.5
+            assert (
+                abs(
+                    float(row["reference_x2"])
+                    - float(row["reference_x1"])
+                    - reference_lengths[index]
+                )
+                < 1e-8
+            )
             assert row["input_csv"] == str(paths[index])
             assert row["image_path"] == str(images[index])
 
@@ -643,7 +696,7 @@ def exercise_length_calibration(project, output, root, screenshots):
         assert len(table.get_children()) == 3
         if screenshots:
             capture(root, output / "length_calibrated_values.png")
-        root.geometry("800x440")
+        root.geometry("1000x700")
         root.update()
         for name, button in buttons.items():
             assert button.winfo_ismapped(), name
@@ -658,7 +711,7 @@ def exercise_length_calibration(project, output, root, screenshots):
         ] == original
         assert not errors, errors
         print(
-            "校正GUI: 5画像・2点指定・100%表示とスクロール・mm換算・CSV保存・キャンセル・入力保護を確認"
+            "校正GUI: 一画面・5画像・自由ズームとカーソル中心・右ドラッグ・座標保持・mm換算・CSV保存・キャンセル・入力保護を確認"
         )
 
     with (

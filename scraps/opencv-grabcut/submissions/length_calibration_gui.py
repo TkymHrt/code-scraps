@@ -103,203 +103,15 @@ def point_on_image(
     return image_x, image_y
 
 
-def calibrate_image(
-    parent, image_path: Path, previous: dict | None = None
-) -> dict | None:
-    image_path = image_path.resolve()
-    image = cv.imdecode(
-        np.frombuffer(image_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
-    )
-    if image is None:
-        raise ValueError(f"校正画像を読み込めません: {image_path}")
-    height, width = image.shape[:2]
-    if width < 2 or height < 2:
-        raise ValueError("校正画像は縦横2画素以上が必要です")
-    window = tk.Toplevel(parent)
-    window.title("既知寸法から画像を校正")
-    window.geometry(
-        f"{min(1100, parent.winfo_screenwidth() - 80)}x"
-        f"{min(760, parent.winfo_screenheight() - 120)}+40+20"
-    )
-    window.minsize(800, 580)
-    window.transient(parent)
-    points = []
-    reference = tk.StringVar(master=window)
-    if (
-        previous is not None
-        and previous["image_path"] == str(image_path)
-        and previous["image_width"] == width
-        and previous["image_height"] == height
-    ):
-        points = list(previous["points"])
-        reference.set(str(previous["reference_mm"]))
-    mode = tk.StringVar(master=window, value="全体")
-    status = tk.StringVar(
-        master=window, value="定規などの既知寸法の両端をクリックしてください"
-    )
-    result = None
-    photo = None
-    bounds = (0, 0, 2, 2)
-
-    def draw_points() -> None:
-        canvas.delete("reference")
-        x0, y0, display_width, display_height = bounds
-        display_points = []
-        for index, (x, y) in enumerate(points):
-            display_x = x0 + x * (display_width - 1) / (width - 1)
-            display_y = y0 + y * (display_height - 1) / (height - 1)
-            display_points.append((display_x, display_y))
-            canvas.create_oval(
-                display_x - 5,
-                display_y - 5,
-                display_x + 5,
-                display_y + 5,
-                outline="#00ff88",
-                width=2,
-                tags="reference",
-            )
-            canvas.create_text(
-                display_x + 9,
-                display_y - 9,
-                text=f"P{index + 1}",
-                anchor="sw",
-                fill="#00ff88",
-                tags="reference",
-            )
-        if len(display_points) == 2:
-            canvas.create_line(
-                *display_points[0],
-                *display_points[1],
-                fill="#00ff88",
-                width=2,
-                tags="reference",
-            )
-            update_scale()
-
-    def update_scale(*args) -> None:
-        if len(points) != 2:
-            return
-        try:
-            calibration = calibration_from_points(
-                reference.get(), points, (width, height)
-            )
-        except ValueError as error:
-            status.set(str(error))
-            return
-        status.set(
-            f"画像上の距離: {calibration['reference_px']:.3f}px / "
-            f"実寸: {calibration['reference_mm']:g}mm → "
-            f"{calibration['mm_per_px']:.8g}mm/px"
-        )
-
-    def draw_image(event=None) -> None:
-        nonlocal photo, bounds
-        canvas_width = max(32, canvas.winfo_width())
-        canvas_height = max(32, canvas.winfo_height())
-        scale = 1.0
-        if mode.get() == "全体":
-            scale = min(1.0, (canvas_width - 24) / width, (canvas_height - 24) / height)
-        display_width = max(2, round(width * scale))
-        display_height = max(2, round(height * scale))
-        small = cv.resize(
-            image, (display_width, display_height), interpolation=cv.INTER_AREA
-        )
-        success, encoded = cv.imencode(".png", small)
-        if not success:
-            raise ValueError("画像の表示データを作れません")
-        photo = tk.PhotoImage(master=window, data=encoded.tobytes(), format="PNG")
-        x0 = max(12, (canvas_width - display_width) / 2)
-        y0 = max(12, (canvas_height - display_height) / 2)
-        bounds = (x0, y0, display_width, display_height)
-        canvas.delete("all")
-        canvas.create_image(x0, y0, image=photo, anchor="nw", tags="source")
-        canvas.configure(
-            scrollregion=(
-                0,
-                0,
-                max(canvas_width, x0 + display_width + 12),
-                max(canvas_height, y0 + display_height + 12),
-            )
-        )
-        draw_points()
-
-    def click(event) -> None:
-        point = point_on_image(
-            canvas.canvasx(event.x), canvas.canvasy(event.y), bounds, (width, height)
-        )
-        if point is None:
-            return
-        if len(points) == 2:
-            points.clear()
-        points.append(point)
-        if len(points) == 1:
-            status.set("もう一方の端をクリックしてください")
-        draw_points()
-
-    def clear_points() -> None:
-        points.clear()
-        draw_points()
-        status.set("既知寸法の両端をクリックしてください")
-
-    def change_mode(event=None) -> None:
-        canvas.xview_moveto(0)
-        canvas.yview_moveto(0)
-        draw_image()
-
-    def apply() -> None:
-        nonlocal result
-        try:
-            result = calibration_from_points(reference.get(), points, (width, height))
-        except ValueError as error:
-            status.set(str(error))
-            return
-        result["image_path"] = str(image_path)
-        window.destroy()
-
-    ttk.Label(window, text=str(image_path), padding=(12, 8), wraplength=1000).pack(
-        fill="x"
-    )
-    controls = ttk.Frame(window, padding=(12, 0))
-    controls.pack(fill="x")
-    ttk.Label(controls, text="基準物の実寸 (mm)").pack(side="left", padx=(0, 8))
-    ttk.Entry(controls, textvariable=reference, width=16).pack(side="left")
-    ttk.Label(controls, text="表示").pack(side="left", padx=(16, 8))
-    mode_box = ttk.Combobox(
-        controls, textvariable=mode, values=("全体", "100%"), state="readonly", width=8
-    )
-    mode_box.pack(side="left")
-    ttk.Button(controls, text="点を消す", command=clear_points).pack(
-        side="left", padx=8
-    )
-    frame = ttk.Frame(window, padding=12)
-    frame.pack(fill="both", expand=True)
-    frame.rowconfigure(0, weight=1)
-    frame.columnconfigure(0, weight=1)
-    canvas = tk.Canvas(frame, background="#242424", highlightthickness=0)
-    canvas.grid(row=0, column=0, sticky="nsew")
-    vertical = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-    vertical.grid(row=0, column=1, sticky="ns")
-    horizontal = ttk.Scrollbar(frame, orient="horizontal", command=canvas.xview)
-    horizontal.grid(row=1, column=0, sticky="ew")
-    canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
-    ttk.Label(window, textvariable=status, padding=(12, 0), wraplength=1000).pack(
-        fill="x"
-    )
-    actions = ttk.Frame(window, padding=12)
-    actions.pack(fill="x")
-    ttk.Button(actions, text="この校正を使う", command=apply, padding=(12, 8)).pack(
-        side="left"
-    )
-    ttk.Button(
-        actions, text="キャンセル", command=window.destroy, padding=(12, 8)
-    ).pack(side="left", padx=8)
-    canvas.bind("<Button-1>", click)
-    canvas.bind("<Configure>", draw_image)
-    mode_box.bind("<<ComboboxSelected>>", change_mode)
-    reference.trace_add("write", update_scale)
-    window.grab_set()
-    window.wait_window()
-    return result
+def zoomed_view(view: tuple, anchor: tuple, factor: float) -> tuple:
+    offset_x, offset_y, scale = view
+    anchor_x, anchor_y = anchor
+    new_scale = min(16.0, max(0.01, scale * factor))
+    change = new_scale / scale
+    # カーソル直下の元画像座標を、拡大・縮小の前後で同じ位置に保つ。
+    new_x = anchor_x - (anchor_x - offset_x) * change
+    new_y = anchor_y - (anchor_y - offset_y) * change
+    return new_x, new_y, new_scale
 
 
 def calibrate_lengths(csv_path: Path, calibration: dict) -> dict:
@@ -358,14 +170,23 @@ def main() -> None:
     directory = Path(__file__).resolve().parent
     root = tk.Tk()
     root.title("画像ごとの校正と長さのmm換算")
-    root.geometry("920x460")
-    root.minsize(800, 440)
+    root.geometry("1160x820")
+    root.minsize(1000, 700)
     csv_path = None
     image_path = None
-    calibration = None
+    image = None
+    width, height = 0, 0
+    points = []
+    view = (0.0, 0.0, 1.0)
+    bounds = (0.0, 0.0, 2.0, 2.0)
+    photo = None
+    pan_start = None
     row = {}
     selected_csv = tk.StringVar()
     selected_image = tk.StringVar()
+    reference = tk.StringVar()
+    zoom_percent = tk.DoubleVar(value=100)
+    zoom_text = tk.StringVar(value="100%")
     scale_text = tk.StringVar(value="未校正")
     status = tk.StringVar(value="03の長さCSVと、それを計測した元画像を選んでください")
 
@@ -374,16 +195,30 @@ def main() -> None:
         table.delete(*table.get_children())
         save_button.state(["disabled"])
 
-    def update_result() -> None:
+    def update_result(*args) -> None:
         nonlocal row
         invalidate_result()
-        if csv_path is None or calibration is None:
+        scale_text.set("未校正")
+        if csv_path is None or image is None:
+            status.set("03の長さCSVと元画像を選んでください")
+            return
+        if len(points) != 2:
+            status.set(f"既知寸法の両端をクリックしてください（{len(points)}/2点）")
             return
         try:
+            calibration = calibration_from_points(
+                reference.get(), points, (width, height)
+            )
+            calibration["image_path"] = str(image_path)
             row = calibrate_lengths(csv_path, calibration)
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
             return
+        scale_text.set(
+            f"基準物: {calibration['reference_mm']:g}mm\n"
+            f"画像上: {calibration['reference_px']:.3f}px\n"
+            f"換算値: {calibration['mm_per_px']:.8g}mm/px"
+        )
         for edge, label in (("left", "左"), ("right", "右"), ("total", "左右合計")):
             table.insert(
                 "",
@@ -393,8 +228,156 @@ def main() -> None:
         save_button.state(["!disabled"])
         status.set("mm換算しました。校正済みCSVを保存して比較GUIへ渡してください")
 
+    def draw_points() -> None:
+        canvas.delete("reference")
+        offset_x, offset_y, scale = view
+        display_points = []
+        for index, (x, y) in enumerate(points):
+            display_x = offset_x + x * scale
+            display_y = offset_y + y * scale
+            display_points.append((display_x, display_y))
+            canvas.create_oval(
+                display_x - 5,
+                display_y - 5,
+                display_x + 5,
+                display_y + 5,
+                outline="#00ff88",
+                width=2,
+                tags="reference",
+            )
+            canvas.create_text(
+                display_x + 9,
+                display_y - 9,
+                text=f"P{index + 1}",
+                anchor="sw",
+                fill="#00ff88",
+                tags="reference",
+            )
+        if len(display_points) == 2:
+            canvas.create_line(
+                *display_points[0],
+                *display_points[1],
+                fill="#00ff88",
+                width=2,
+                tags="reference",
+            )
+
+    def draw_image(event=None) -> None:
+        nonlocal photo, bounds
+        canvas.delete("all")
+        if image is None:
+            photo = None
+            return
+        canvas_width = max(2, canvas.winfo_width())
+        canvas_height = max(2, canvas.winfo_height())
+        offset_x, offset_y, scale = view
+        transform = np.array(
+            [[scale, 0, offset_x], [0, scale, offset_y]], dtype=np.float64
+        )
+        interpolation = cv.INTER_NEAREST if scale >= 1 else cv.INTER_LINEAR
+        # 表示範囲だけを作り、大きく拡大しても巨大な画像を確保しない。
+        shown = cv.warpAffine(
+            image,
+            transform,
+            (canvas_width, canvas_height),
+            flags=interpolation,
+            borderValue=(36, 36, 36),
+        )
+        success, encoded = cv.imencode(".png", shown)
+        if not success:
+            raise ValueError("画像の表示データを作れません")
+        photo = tk.PhotoImage(master=root, data=encoded.tobytes(), format="PNG")
+        canvas.create_image(0, 0, image=photo, anchor="nw", tags="source")
+        display_width = 1 + (width - 1) * scale
+        display_height = 1 + (height - 1) * scale
+        bounds = (offset_x, offset_y, display_width, display_height)
+        canvas.create_rectangle(
+            offset_x,
+            offset_y,
+            offset_x + display_width - 1,
+            offset_y + display_height - 1,
+            outline="#666666",
+            tags="image_bounds",
+        )
+        draw_points()
+        zoom_percent.set(scale * 100)
+        zoom_text.set(f"{scale * 100:.1f}%")
+
+    def fit_image() -> None:
+        nonlocal view
+        if image is None:
+            return
+        scale = min(
+            1.0,
+            max(2, canvas.winfo_width() - 24) / width,
+            max(2, canvas.winfo_height() - 24) / height,
+        )
+        offset_x = (canvas.winfo_width() - 1 - (width - 1) * scale) / 2
+        offset_y = (canvas.winfo_height() - 1 - (height - 1) * scale) / 2
+        view = (offset_x, offset_y, scale)
+        draw_image()
+
+    def change_zoom(anchor: tuple, factor: float) -> None:
+        nonlocal view
+        if image is None:
+            return
+        view = zoomed_view(view, anchor, factor)
+        draw_image()
+
+    def zoom_slider(value) -> None:
+        target_scale = float(value) / 100
+        anchor = (canvas.winfo_width() / 2, canvas.winfo_height() / 2)
+        change_zoom(anchor, target_scale / view[2])
+
+    def actual_size() -> None:
+        zoom_slider(100)
+
+    def wheel(event) -> str:
+        change_zoom((event.x, event.y), 1.1 ** (event.delta / 120))
+        return "break"
+
+    def focus_canvas(event) -> None:
+        canvas.focus_set()
+
+    def start_pan(event) -> None:
+        nonlocal pan_start
+        if image is not None:
+            pan_start = (event.x, event.y)
+
+    def pan(event) -> None:
+        nonlocal view, pan_start
+        if pan_start is None:
+            return
+        offset_x, offset_y, scale = view
+        moved_x = offset_x + event.x - pan_start[0]
+        moved_y = offset_y + event.y - pan_start[1]
+        view = (moved_x, moved_y, scale)
+        pan_start = (event.x, event.y)
+        draw_image()
+
+    def end_pan(event) -> None:
+        nonlocal pan_start
+        pan_start = None
+
+    def click(event) -> None:
+        if image is None:
+            return
+        point = point_on_image(event.x, event.y, bounds, (width, height))
+        if point is None:
+            return
+        if len(points) == 2:
+            points.clear()
+        points.append(point)
+        draw_points()
+        update_result()
+
+    def clear_points() -> None:
+        points.clear()
+        draw_points()
+        update_result()
+
     def choose_csv() -> None:
-        nonlocal csv_path, image_path, calibration
+        nonlocal csv_path, image_path, image, pan_start
         selected = filedialog.askopenfilename(
             parent=root,
             title="03の長さCSVを選ぶ",
@@ -411,16 +394,18 @@ def main() -> None:
             return
         if path != csv_path:
             image_path = None
-            calibration = None
+            image = None
+            pan_start = None
+            points.clear()
             selected_image.set("")
-            scale_text.set("未校正")
+            reference.set("")
+            draw_image()
         csv_path = path
         selected_csv.set(str(path))
-        status.set("このCSVを計測した元画像を選び、既知寸法から校正してください")
         update_result()
 
     def choose_image() -> None:
-        nonlocal image_path, calibration
+        nonlocal image_path, image, width, height, pan_start
         selected = filedialog.askopenfilename(
             parent=root,
             title="選択したCSVを計測した元画像を選ぶ",
@@ -434,39 +419,22 @@ def main() -> None:
             return
         path = Path(selected).resolve()
         try:
-            image = cv.imdecode(
+            loaded = cv.imdecode(
                 np.frombuffer(path.read_bytes(), np.uint8), cv.IMREAD_COLOR
             )
-            if image is None or min(image.shape[:2]) < 2:
+            if loaded is None or min(loaded.shape[:2]) < 2:
                 raise ValueError(f"校正できる画像を読み込めません: {path}")
         except (OSError, ValueError) as error:
             status.set(str(error))
             return
         image_path = path
-        calibration = None
+        image = loaded
+        height, width = image.shape[:2]
+        pan_start = None
+        points.clear()
         selected_image.set(str(path))
-        scale_text.set("未校正")
-        invalidate_result()
-        status.set("既知寸法から校正を押して、定規などの両端と実寸を指定してください")
-
-    def calibrate() -> None:
-        nonlocal calibration
-        if csv_path is None or image_path is None:
-            status.set("03の長さCSVと元画像を選んでください")
-            return
-        try:
-            result = calibrate_image(root, image_path, calibration)
-        except (OSError, ValueError) as error:
-            status.set(str(error))
-            return
-        if result is None:
-            return
-        calibration = result
-        scale_text.set(
-            f"{calibration['reference_mm']:g}mm / "
-            f"{calibration['reference_px']:.3f}px = "
-            f"{calibration['mm_per_px']:.8g}mm/px"
-        )
+        reference.set("")
+        fit_image()
         update_result()
 
     def save() -> None:
@@ -493,11 +461,6 @@ def main() -> None:
             return
         status.set(f"保存しました: {selected}")
 
-    ttk.Label(
-        root,
-        text="画像ごとに既知寸法で校正し、03のpx測定値をmmへ換算します。",
-        padding=12,
-    ).pack(anchor="w")
     for label, variable, command in (
         ("03の長さCSV", selected_csv, choose_csv),
         ("計測した元画像", selected_image, choose_image),
@@ -511,32 +474,69 @@ def main() -> None:
         ttk.Button(frame, text="選ぶ", command=command).pack(side="left")
     controls = ttk.Frame(root, padding=12)
     controls.pack(fill="x")
-    ttk.Button(
-        controls, text="既知寸法から校正", command=calibrate, padding=(12, 8)
-    ).pack(side="left")
-    ttk.Label(controls, textvariable=scale_text, padding=(16, 0)).pack(side="left")
-    frame = ttk.Frame(root, padding=(12, 0))
-    frame.pack(fill="both", expand=True)
-    table = ttk.Treeview(frame, columns=("edge", "px", "mm"), show="headings", height=3)
-    for column, label in (
-        ("edge", "側辺"),
-        ("px", "測定長 (px)"),
-        ("mm", "実寸長 (mm)"),
+    ttk.Label(controls, text="基準物の実寸 (mm)").pack(side="left", padx=(0, 8))
+    ttk.Entry(controls, textvariable=reference, width=12).pack(side="left")
+    for label, command in (
+        ("点を消す", clear_points),
+        ("全体表示", fit_image),
+        ("100%", actual_size),
+    ):
+        ttk.Button(controls, text=label, command=command).pack(side="left", padx=8)
+    ttk.Scale(
+        controls,
+        from_=1,
+        to=1600,
+        variable=zoom_percent,
+        command=zoom_slider,
+        length=180,
+    ).pack(side="left", fill="x", expand=True, padx=8)
+    ttk.Label(controls, textvariable=zoom_text, width=10).pack(side="left")
+    ttk.Label(
+        root,
+        text="左クリック: 基準点 / ホイール: 拡大・縮小 / 右ドラッグ: 移動",
+        padding=(12, 0),
+    ).pack(anchor="w")
+    content = ttk.Frame(root, padding=12)
+    content.pack(fill="both", expand=True)
+    content.rowconfigure(0, weight=1)
+    content.columnconfigure(0, weight=1)
+    canvas = tk.Canvas(
+        content, background="#242424", highlightthickness=0, cursor="crosshair"
+    )
+    canvas.grid(row=0, column=0, sticky="nsew")
+    side = ttk.Frame(content, padding=(12, 0, 0, 0))
+    side.grid(row=0, column=1, sticky="ns")
+    ttk.Label(side, text="校正結果", padding=(0, 8)).pack(anchor="w")
+    ttk.Label(side, textvariable=scale_text, wraplength=280, padding=(0, 8)).pack(
+        anchor="w"
+    )
+    table = ttk.Treeview(side, columns=("edge", "px", "mm"), show="headings", height=3)
+    for column, label, column_width in (
+        ("edge", "側辺", 64),
+        ("px", "測定長 (px)", 112),
+        ("mm", "実寸長 (mm)", 112),
     ):
         table.heading(column, text=label)
-        table.column(column, width=200, anchor="w" if column == "edge" else "e")
-    table.pack(fill="both", expand=True)
-    actions = ttk.Frame(root, padding=12)
-    actions.pack(fill="x")
+        table.column(
+            column,
+            width=column_width,
+            stretch=False,
+            anchor="w" if column == "edge" else "e",
+        )
+    table.pack(fill="x", pady=8)
     save_button = ttk.Button(
-        actions,
-        text="校正済みCSVを保存",
-        command=save,
-        state="disabled",
-        padding=(12, 8),
+        side, text="校正済みCSVを保存", command=save, state="disabled", padding=(12, 8)
     )
-    save_button.pack(side="left")
-    ttk.Label(root, textvariable=status, padding=12, wraplength=780).pack(fill="x")
+    save_button.pack(fill="x", pady=8)
+    ttk.Label(root, textvariable=status, padding=12, wraplength=960).pack(fill="x")
+    canvas.bind("<Button-1>", click)
+    canvas.bind("<Configure>", draw_image)
+    canvas.bind("<MouseWheel>", wheel)
+    canvas.bind("<Enter>", focus_canvas)
+    canvas.bind("<ButtonPress-3>", start_pan)
+    canvas.bind("<B3-Motion>", pan)
+    canvas.bind("<ButtonRelease-3>", end_pan)
+    reference.trace_add("write", update_result)
     root.mainloop()
 
 

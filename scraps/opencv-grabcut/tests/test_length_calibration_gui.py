@@ -150,6 +150,48 @@ class LengthCalibrationGuiTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         self.gui["read_lengths"](path)
 
+    def test_zoom_keeps_the_cursor_on_the_same_original_coordinate(self):
+        image_size = (1920, 1080)
+        view = (-125.5, 48.25, 0.73)
+        anchor = (312, 187)
+        before_bounds = (
+            view[0],
+            view[1],
+            1 + (image_size[0] - 1) * view[2],
+            1 + (image_size[1] - 1) * view[2],
+        )
+        before = self.gui["point_on_image"](*anchor, before_bounds, image_size)
+        changed = self.gui["zoomed_view"](view, anchor, 1.1**0.5)
+        after_bounds = (
+            changed[0],
+            changed[1],
+            1 + (image_size[0] - 1) * changed[2],
+            1 + (image_size[1] - 1) * changed[2],
+        )
+        after = self.gui["point_on_image"](*anchor, after_bounds, image_size)
+        assert before is not None and after is not None
+        self.assertAlmostEqual(before[0], after[0], places=10)
+        self.assertAlmostEqual(before[1], after[1], places=10)
+        restored = self.gui["zoomed_view"](changed, anchor, 1.1**-0.5)
+        for original, value in zip(view, restored):
+            self.assertAlmostEqual(original, value, places=10)
+
+    def test_large_and_small_zoom_keep_the_anchor_and_bound_render_scale(self):
+        anchor = (120, 80)
+        view = (-20, -15, 1)
+        for factor, expected_scale in ((100, 16), (0.0001, 0.01)):
+            with self.subTest(factor=factor):
+                changed = self.gui["zoomed_view"](view, anchor, factor)
+                self.assertEqual(changed[2], expected_scale)
+                self.assertAlmostEqual(
+                    (anchor[0] - changed[0]) / changed[2],
+                    (anchor[0] - view[0]) / view[2],
+                )
+                self.assertAlmostEqual(
+                    (anchor[1] - changed[1]) / changed[2],
+                    (anchor[1] - view[1]) / view[2],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
