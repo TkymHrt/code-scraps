@@ -15,7 +15,9 @@ import numpy as np
 
 
 def configured_source(project, filename, settings):
-    source = (project / "submissions" / filename).read_text(encoding="utf-8")
+    source = (project / "sandbox/previous_submissions" / filename).read_text(
+        encoding="utf-8"
+    )
     lines = source.splitlines(keepends=True)
     for node in reversed(ast.parse(source).body):
         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):

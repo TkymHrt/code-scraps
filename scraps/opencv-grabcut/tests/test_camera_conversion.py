@@ -86,7 +86,9 @@ def configure(rectification, matrix=MATRIX, distortion=DISTORTION):
 
 
 def copy_script(filename, directory, **settings):
-    source = (PROJECT / "submissions" / filename).read_text(encoding="utf-8")
+    source = (PROJECT / "sandbox/previous_submissions" / filename).read_text(
+        encoding="utf-8"
+    )
     lines = source.splitlines(keepends=True)
     for node in reversed(ast.parse(source).body):
         if isinstance(node, ast.Assign):
@@ -110,7 +112,9 @@ class CameraConversionTests(unittest.TestCase):
         (PROJECT / "tests/results").mkdir(parents=True, exist_ok=True)
         cls.temporary = tempfile.TemporaryDirectory(dir=PROJECT / "tests/results")
         cls.directory = Path(cls.temporary.name)
-        cls.camera = runpy.run_path(str(PROJECT / "submissions/camera_calibration.py"))
+        cls.camera = runpy.run_path(
+            str(PROJECT / "sandbox/previous_submissions/camera_calibration.py")
+        )
         cls.paths = calibration_photos(cls.directory)
         cls.calibration = cls.camera["calibrate"](cls.paths)
 
@@ -120,10 +124,10 @@ class CameraConversionTests(unittest.TestCase):
 
     def setUp(self):
         self.rectification = runpy.run_path(
-            str(PROJECT / "submissions/rectify_image.py")
+            str(PROJECT / "sandbox/previous_submissions/rectify_image.py")
         )
         self.converter = runpy.run_path(
-            str(PROJECT / "submissions/calibrate_lengths.py")
+            str(PROJECT / "sandbox/previous_submissions/calibrate_lengths.py")
         )
 
     def calibration_file(self, directory):
@@ -152,7 +156,9 @@ class CameraConversionTests(unittest.TestCase):
             directory = Path(temporary)
             generator = directory / "generate_charuco_board.py"
             generator.write_bytes(
-                (PROJECT / "submissions/generate_charuco_board.py").read_bytes()
+                (
+                    PROJECT / "sandbox/previous_submissions/generate_charuco_board.py"
+                ).read_bytes()
             )
             with contextlib.redirect_stdout(io.StringIO()):
                 settings = runpy.run_path(str(generator))
@@ -184,7 +190,9 @@ class CameraConversionTests(unittest.TestCase):
             # 係数算出の実行は、板を新規生成も上書きもしない。
             calibration = directory / "camera_calibration.py"
             calibration.write_bytes(
-                (PROJECT / "submissions/camera_calibration.py").read_bytes()
+                (
+                    PROJECT / "sandbox/previous_submissions/camera_calibration.py"
+                ).read_bytes()
             )
             board_path.write_bytes(b"keep existing board")
             with contextlib.redirect_stdout(io.StringIO()):
@@ -301,7 +309,7 @@ class CameraConversionTests(unittest.TestCase):
         )
         self.assertTrue(saved_path.read_bytes().startswith(b"\xef\xbb\xbf"))
         comparison = runpy.run_path(
-            str(PROJECT / "submissions/length_comparison_gui.py")
+            str(PROJECT / "sandbox/previous_submissions/length_comparison_gui.py")
         )
         saved = comparison["read_calibrated_lengths"](saved_path)
         self.assertEqual(saved["left_mm"], 150)

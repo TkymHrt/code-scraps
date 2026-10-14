@@ -19,10 +19,15 @@ class ParameterGuiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project = Path(__file__).resolve().parents[1]
         self.image_gui = runpy.run_path(
-            str(self.project / "submissions/measurement_settings_gui.py")
+            str(
+                self.project
+                / "sandbox/previous_submissions/measurement_settings_gui.py"
+            )
         )
         self.comparison_gui = runpy.run_path(
-            str(self.project / "submissions/comparison_settings_gui.py")
+            str(
+                self.project / "sandbox/previous_submissions/comparison_settings_gui.py"
+            )
         )
         self.settings: dict = {
             "INPUT_PATH": "input.png",
@@ -63,7 +68,9 @@ class ParameterGuiTests(unittest.TestCase):
         return values
 
     def copy_script(self, directory: Path, filename: str, values: dict) -> Path:
-        source = (self.project / "submissions" / filename).read_text(encoding="utf-8")
+        source = (self.project / "sandbox/previous_submissions" / filename).read_text(
+            encoding="utf-8"
+        )
         lines = source.splitlines(keepends=True)
         for node in reversed(ast.parse(source).body):
             if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):

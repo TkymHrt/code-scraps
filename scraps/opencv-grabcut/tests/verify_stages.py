@@ -50,7 +50,9 @@ def read_mask(path):
 
 def run_script(filename, folder, settings):
     """設定だけ変えた1本を専用フォルダへコピーし、別プロセスで実行する。"""
-    source = (PROJECT / filename).read_text(encoding="utf-8")
+    source = (PROJECT / "sandbox/previous_scripts" / filename).read_text(
+        encoding="utf-8"
+    )
     lines = source.splitlines()
     replacements = []
     found = set()
@@ -189,7 +191,9 @@ def verify(output, with_local_inputs):
         "opencv": cv.__version__,
         "numpy": np.__version__,
         "source_sha256": {
-            name: hashlib.sha256((PROJECT / name).read_bytes()).hexdigest()
+            name: hashlib.sha256(
+                (PROJECT / "sandbox/previous_scripts" / name).read_bytes()
+            ).hexdigest()
             for name in (*SCRIPTS, *EXTRA_SCRIPTS)
         },
         "synthetic": {},

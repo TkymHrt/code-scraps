@@ -32,7 +32,7 @@ class QuantitativeTests(unittest.TestCase):
 
     def run_script(self, filename: str, **settings: object) -> None:
         """設定だけを変えた独立ファイルを実行する."""
-        source_path = self.project / filename
+        source_path = self.project / "sandbox/previous_scripts" / filename
         lines = source_path.read_text(encoding="utf-8").splitlines()
         for name, value in settings.items():
             for index, line in enumerate(lines):

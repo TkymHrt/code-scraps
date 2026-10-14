@@ -12,7 +12,7 @@ class LengthCalibrationGuiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project = Path(__file__).resolve().parents[1]
         self.gui = runpy.run_path(
-            str(self.project / "submissions/length_calibration_gui.py")
+            str(self.project / "sandbox/previous_submissions/length_calibration_gui.py")
         )
         self.comparison = test_submission_comparison.SubmissionComparisonTests()
 
@@ -42,7 +42,10 @@ class LengthCalibrationGuiTests(unittest.TestCase):
             source_path, image_path, calibration = self.source(directory)
             copy = directory / "length_calibration_gui.py"
             copy.write_bytes(
-                (self.project / "submissions/length_calibration_gui.py").read_bytes()
+                (
+                    self.project
+                    / "sandbox/previous_submissions/length_calibration_gui.py"
+                ).read_bytes()
             )
             gui = runpy.run_path(str(copy))
             row = gui["calibrate_lengths"](source_path, calibration)

@@ -1,5 +1,7 @@
-"""01のGUI版。矩形で初期指定を作り、元画像へ重ねて確認・保存する."""
+"""補正画像の初期指定・区間を選び、左右側辺長の画像とCSVを保存する."""
 
+import csv
+import math
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -7,9 +9,14 @@ from tkinter import filedialog, ttk
 import cv2 as cv
 import numpy as np
 
+# rectify_image.pyで出力した補正画像と同じ倍率にする。
+MM_PER_PX = 0.25
+ITERATIONS = 5
+RANDOM_SEED = 0
+
 type Rect = tuple[float, float, float, float]
 
-# 01と同じBGRの色と重ねる順序。未指定部分は背景候補（灰）。
+# 未指定部分は背景候補（灰）。後から重ねる確実な指定を優先する。
 PALETTE = np.array(
     [(255, 80, 0), (0, 255, 0), (64, 64, 64), (0, 165, 255)], dtype=np.uint8
 )
@@ -20,7 +27,7 @@ REGION_NAMES = {
 }
 
 
-def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
+def initial_mask(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
     height, width = image.shape[:2]
     labels = np.full((height, width), cv.GC_PR_BGD, np.uint8)
     for label in REGION_NAMES:
@@ -32,7 +39,113 @@ def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.nda
             if x0 == x1 or y0 == y1:
                 raise ValueError("矩形が1画素未満です。指定範囲を広げてください")
             labels[y0:y1, x0:x1] = label
+    return labels
+
+
+def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
+    labels = initial_mask(image, regions)
     return cv.addWeighted(image, 0.65, PALETTE[labels], 0.35, 0)
+
+
+def measure_lengths(
+    image: np.ndarray, regions: dict[int, list[Rect]], start_y: int, end_y: int
+) -> tuple[dict, np.ndarray]:
+    height, width = image.shape[:2]
+    if not math.isfinite(MM_PER_PX) or MM_PER_PX <= 0:
+        raise ValueError("コード冒頭のMM_PER_PXを正の有限値にしてください")
+    if not 0 <= start_y < end_y < height:
+        raise ValueError(f"計測区間を0 ≤ 開始y < 終了y ≤ {height - 1}にしてください")
+    labels = initial_mask(image, regions)
+    foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
+    if not foreground.any() or foreground.all():
+        raise ValueError("試料の前景候補と、その外の背景を指定してください")
+    background_model = np.zeros((1, 65), np.float64)
+    foreground_model = np.zeros((1, 65), np.float64)
+    cv.setRNGSeed(RANDOM_SEED)
+    cv.grabCut(
+        image,
+        labels,
+        (0, 0, 0, 0),
+        background_model,
+        foreground_model,
+        ITERATIONS,
+        cv.GC_INIT_WITH_MASK,
+    )
+    raw_mask = ((labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)).astype(np.uint8) * 255
+    contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
+    if not contours:
+        raise ValueError("試料を抽出できません。初期指定を調整してください")
+    contour = contours[0]
+    largest_area = cv.contourArea(contour)
+    for candidate in contours[1:]:
+        area = cv.contourArea(candidate)
+        if area > largest_area:
+            contour = candidate
+            largest_area = area
+    mask = np.zeros((height, width), np.uint8)
+    cv.drawContours(mask, [contour], -1, 255, cv.FILLED)
+
+    left_points = []
+    right_points = []
+    for y in range(start_y, end_y + 1):
+        xs = np.flatnonzero(mask[y])
+        if len(xs) == 0:
+            raise ValueError(
+                f"y={y}に試料がありません。区間か初期指定を調整してください"
+            )
+        left_points.append((int(xs[0]), y))
+        right_points.append((int(xs[-1]), y))
+    left_px = 0.0
+    right_px = 0.0
+    for index in range(1, len(left_points)):
+        previous_left = left_points[index - 1]
+        current_left = left_points[index]
+        previous_right = right_points[index - 1]
+        current_right = right_points[index]
+        left_px += math.hypot(
+            current_left[0] - previous_left[0], current_left[1] - previous_left[1]
+        )
+        right_px += math.hypot(
+            current_right[0] - previous_right[0], current_right[1] - previous_right[1]
+        )
+    total_px = left_px + right_px
+    row = {
+        "image_width": width,
+        "image_height": height,
+        "mm_per_px": MM_PER_PX,
+        "start_y": start_y,
+        "end_y": end_y,
+        "left_px": left_px,
+        "left_mm": left_px * MM_PER_PX,
+        "right_px": right_px,
+        "right_mm": right_px * MM_PER_PX,
+        "total_px": total_px,
+        "total_mm": total_px * MM_PER_PX,
+    }
+    overlay = image.copy()
+    overlay[:start_y] //= 2
+    overlay[end_y + 1 :] //= 2
+    for y in (start_y, end_y):
+        cv.line(overlay, (0, y), (width - 1, y), (0, 255, 255), 1)
+    for points in (left_points, right_points):
+        cv.polylines(overlay, [np.array(points, np.int32)], False, (0, 0, 255), 2)
+    return row, overlay
+
+
+def write_csv(path: Path, image_path: Path, measurement: dict) -> None:
+    if path.resolve() == image_path.resolve():
+        raise ValueError("入力画像とは別の保存先を選んでください")
+    if path.suffix.lower() != ".csv":
+        raise ValueError("保存先の拡張子は .csv にしてください")
+    row = {"image_path": str(image_path.resolve())}
+    row.update(measurement)
+    for column, value in row.items():
+        if isinstance(value, float):
+            row[column] = f"{value:.12g}"
+    with path.open("w", encoding="utf-8-sig", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
 
 
 def main() -> None:
@@ -47,79 +160,25 @@ def main() -> None:
     display_bounds = (0, 0, 1, 1)
     drag_start: tuple[float, float] | None = None
 
-    root.title("01 — 初期指定の作成・確認")
-    root.geometry("1000x700")
-    root.minsize(900, 648)
+    measurement: dict | None = None
+    result_image: np.ndarray | None = None
+    root.title("01 — 初期指定と長さの計測")
+    root.geometry("1120x800")
+    root.minsize(1000, 760)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
     view = tk.StringVar(value="initial")
     status = tk.StringVar()
     file_text = tk.StringVar(value="未読込")
 
-    file_toolbar = ttk.Frame(root, padding=12)
-    file_toolbar.pack(fill="x")
-    ttk.Button(
-        file_toolbar,
-        text="画像を読み込む",
-        padding=(12, 8),
-        command=lambda: load_image(),
-    ).pack(side="left")
-    ttk.Label(file_toolbar, textvariable=file_text).pack(side="left", padx=8)
-    body = ttk.Frame(root, padding=(12, 0, 12, 0))
-    body.pack(fill="both", expand=True)
-    sidebar = ttk.Frame(body)
-    sidebar.pack(side="left", fill="y", padx=(0, 16))
-    preview = ttk.Frame(body)
-    preview.pack(side="left", fill="both", expand=True)
-    view_toolbar = ttk.Frame(preview)
-    view_toolbar.pack(fill="x", pady=(0, 8))
-    for value, name in (("initial", "初期指定"), ("original", "元画像")):
-        ttk.Radiobutton(
-            view_toolbar,
-            text=name,
-            variable=view,
-            value=value,
-            padding=4,
-            command=lambda: render(),
-        ).pack(side="left", padx=(0, 8))
-    canvas = tk.Canvas(preview, background="#242424", highlightthickness=0)
-    canvas.pack(fill="both", expand=True)
-
-    ttk.Label(sidebar, text="矩形の種類").pack(anchor="w", pady=(0, 4))
-    # 色見本は同じBGRパレットから作り、表示中の参照を残す。
-    swatches: list[tk.PhotoImage] = []
-    for label, name in REGION_NAMES.items():
-        blue, green, red = PALETTE[label]
-        swatch = tk.PhotoImage(master=root, width=16, height=16)
-        swatch.put(f"#{red:02x}{green:02x}{blue:02x}", to=(0, 0, 16, 16))
-        swatches.append(swatch)
-        ttk.Radiobutton(
-            sidebar,
-            text=name,
-            image=swatch,
-            compound="left",
-            variable=mode,
-            value=label,
-            padding=4,
-            command=lambda: show_initial(),
-        ).pack(anchor="w", pady=4)
-    region_list = tk.Listbox(sidebar, width=32, height=7, exportselection=False)
-    region_list.pack(fill="x", pady=(8, 12))
-    for name, action in (
-        ("選択した矩形を削除", lambda: delete_region()),
-        ("矩形をすべて削除", lambda: clear_regions()),
-        ("確認画像を保存", lambda: save_image()),
-        ("初期指定の設定をコピー", lambda: copy_settings()),
-    ):
-        ttk.Button(sidebar, text=name, padding=(12, 8), command=action).pack(
-            fill="x", pady=4
-        )
-    ttk.Label(root, textvariable=status, padding=12, wraplength=876).pack(fill="x")
+    start_text = tk.StringVar(value="0")
+    end_text = tk.StringVar()
+    result_text = tk.StringVar(value="未計測")
 
     def load_image() -> None:
         nonlocal image, input_path, height, width
         selected = filedialog.askopenfilename(
             parent=root,
-            title="入力画像を選ぶ",
+            title="補正画像を選ぶ",
             initialdir=directory,
             filetypes=[
                 ("画像", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
@@ -129,14 +188,19 @@ def main() -> None:
         if not selected:
             return
         # 日本語のパスにも対応するため、画像のバイト列を読み込む。
-        loaded = cv.imdecode(np.fromfile(selected, np.uint8), cv.IMREAD_COLOR)
-        if loaded is None:
-            status.set("画像を読み込めません。別の画像を選んでください")
+        try:
+            loaded = cv.imdecode(np.fromfile(selected, np.uint8), cv.IMREAD_COLOR)
+            if loaded is None:
+                raise ValueError("画像を読み込めません")
+        except (OSError, ValueError, cv.error) as error:
+            status.set(str(error))
             return
         image = loaded
         input_path = Path(selected).resolve()
         height, width = image.shape[:2]
         file_text.set(f"{input_path.name}  ({width} × {height} px)")
+        start_text.set("0")
+        end_text.set(str(height - 1))
         clear_regions()
 
     def refresh_regions() -> None:
@@ -146,25 +210,29 @@ def main() -> None:
             for index in range(len(regions[label])):
                 region_rows.append((label, index))
                 region_list.insert(tk.END, f"{name} {index + 1}")
-        show_initial()
-        status.set("")
+        view.set("initial")
+        invalidate()
 
     def clear_regions() -> None:
         for rectangles in regions.values():
             rectangles.clear()
         refresh_regions()
 
-    def show_initial() -> None:
+    def show_initial(_event=None) -> None:
         view.set("initial")
         render()
 
-    def render() -> None:
+    def render(_event=None) -> None:
         nonlocal photo, display_bounds, drag_start
         drag_start = None
         canvas.delete("all")
         if image is None:
             return
-        shown = initial_overlay(image, regions) if view.get() == "initial" else image
+        shown = image
+        if view.get() == "initial":
+            shown = initial_overlay(image, regions)
+        elif view.get() == "result" and result_image is not None:
+            shown = result_image
         scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
         display_width = max(1, int(width * scale))
         display_height = max(1, int(height * scale))
@@ -259,7 +327,7 @@ def main() -> None:
             parent=root,
             title="確認画像の保存先を選ぶ",
             initialdir=input_path.parent,
-            initialfile=f"{input_path.stem}_initial_regions.png",
+            initialfile=f"{input_path.stem}_measurement.png",
             defaultextension=".png",
             filetypes=[("PNG画像", "*.png")],
             confirmoverwrite=True,
@@ -273,31 +341,160 @@ def main() -> None:
         if output_path.suffix.lower() != ".png":
             status.set("保存先の拡張子は .png にしてください")
             return
-        success, encoded = cv.imencode(".png", initial_overlay(image, regions))
-        if not success:
-            raise OSError("PNG画像を作成できません")
-        encoded.tofile(output_path)
+        try:
+            shown = result_image
+            if shown is None:
+                shown = initial_overlay(image, regions)
+            success, encoded = cv.imencode(".png", shown)
+            if not success:
+                raise OSError("PNG画像を作成できません")
+            encoded.tofile(output_path)
+        except (OSError, ValueError, cv.error) as error:
+            status.set(str(error))
+            return
         status.set(f"保存しました: {output_path.name}")
 
-    def copy_settings() -> None:
-        if len(regions[cv.GC_PR_FGD]) != 1:
-            status.set("前景候補の矩形を1つ描いてください")
-            return
-        # 丸めずにコピーし、提出版でも同じ画素を指定する。
-        text = (
-            f"CANDIDATE_RECT = {regions[cv.GC_PR_FGD][0]!r}\n"
-            f"BACKGROUND_RECTS = {tuple(regions[cv.GC_BGD])!r}\n"
-            f"FOREGROUND_RECTS = {tuple(regions[cv.GC_FGD])!r}\n"
-        )
-        root.clipboard_clear()
-        root.clipboard_append(text)
-        status.set("矩形の設定をコピーしました")
+    def invalidate(*_args) -> None:
+        nonlocal measurement, result_image
+        measurement = None
+        result_image = None
+        result_text.set("未計測")
+        save_csv_button.state(["disabled"])
+        if view.get() == "result":
+            view.set("initial")
+        status.set("")
+        render()
 
-    canvas.bind("<Configure>", lambda event: render())
+    def calculate() -> None:
+        nonlocal measurement, result_image
+        invalidate()
+        if image is None:
+            status.set("補正画像を読み込んでください")
+            return
+        try:
+            start_y = int(start_text.get())
+            end_y = int(end_text.get())
+        except ValueError:
+            status.set("開始yと終了yは整数で入力してください")
+            return
+        status.set("計測中…")
+        root.update_idletasks()
+        try:
+            measured, overlay = measure_lengths(image, regions, start_y, end_y)
+        except (ValueError, cv.error) as error:
+            status.set(str(error))
+            return
+        measurement = measured
+        result_image = overlay
+        result_text.set(
+            f"左: {measured['left_mm']:.3f} mm\n"
+            f"右: {measured['right_mm']:.3f} mm\n"
+            f"合計: {measured['total_mm']:.3f} mm"
+        )
+        view.set("result")
+        save_csv_button.state(["!disabled"])
+        render()
+        status.set("計測しました。赤い側辺と黄色の区間を確認してください")
+
+    def save_csv() -> None:
+        if measurement is None or input_path is None:
+            status.set("計測してから保存してください")
+            return
+        selected = filedialog.asksaveasfilename(
+            parent=root,
+            title="長さCSVの保存先",
+            initialdir=input_path.parent,
+            initialfile=f"{input_path.stem}_lengths.csv",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            confirmoverwrite=True,
+        )
+        if not selected:
+            return
+        try:
+            write_csv(Path(selected), input_path, measurement)
+        except (OSError, ValueError) as error:
+            status.set(str(error))
+            return
+        status.set(f"保存しました: {Path(selected).name}")
+
+    file_toolbar = ttk.Frame(root, padding=12)
+    file_toolbar.pack(fill="x")
+    ttk.Button(
+        file_toolbar, text="補正画像を読み込む", padding=(12, 8), command=load_image
+    ).pack(side="left")
+    ttk.Label(file_toolbar, textvariable=file_text).pack(side="left", padx=8)
+    ttk.Label(file_toolbar, textvariable=status, wraplength=320).pack(side="right")
+    body = ttk.Frame(root, padding=(12, 0, 12, 12))
+    body.pack(fill="both", expand=True)
+    sidebar = ttk.Frame(body)
+    sidebar.pack(side="left", fill="y", padx=(0, 16))
+    canvas = tk.Canvas(body, background="#242424", highlightthickness=0)
+    canvas.pack(side="left", fill="both", expand=True)
+
+    ttk.Label(sidebar, text="矩形の種類（画像を左ドラッグ）").pack(anchor="w")
+    swatches: list[tk.PhotoImage] = []
+    for label, name in REGION_NAMES.items():
+        blue, green, red = PALETTE[label]
+        swatch = tk.PhotoImage(master=root, width=16, height=16)
+        swatch.put(f"#{red:02x}{green:02x}{blue:02x}", to=(0, 0, 16, 16))
+        swatches.append(swatch)
+        ttk.Radiobutton(
+            sidebar,
+            text=name,
+            image=swatch,
+            compound="left",
+            variable=mode,
+            value=label,
+            padding=4,
+            command=show_initial,
+        ).pack(anchor="w", pady=2)
+    region_list = tk.Listbox(sidebar, width=32, height=4, exportselection=False)
+    region_list.pack(fill="x", pady=8)
+    for name, action in (
+        ("選択した矩形を削除", delete_region),
+        ("矩形をすべて削除", clear_regions),
+    ):
+        ttk.Button(sidebar, text=name, padding=(12, 6), command=action).pack(
+            fill="x", pady=3
+        )
+
+    ttk.Label(sidebar, text="対応する材料区間（補正画像のy）").pack(
+        anchor="w", pady=(12, 4)
+    )
+    for label, variable in (("開始y", start_text), ("終了y", end_text)):
+        row_frame = ttk.Frame(sidebar)
+        row_frame.pack(fill="x", pady=3)
+        ttk.Label(row_frame, text=label).pack(side="left")
+        ttk.Entry(row_frame, textvariable=variable, width=12).pack(side="right")
+    ttk.Label(sidebar, text=f"固定倍率: {MM_PER_PX:g} mm/px").pack(anchor="w", pady=6)
+    ttk.Button(sidebar, text="長さを計測", padding=(12, 8), command=calculate).pack(
+        fill="x", pady=4
+    )
+    ttk.Label(sidebar, textvariable=result_text).pack(anchor="w", pady=8)
+    save_csv_button = ttk.Button(
+        sidebar, text="長さCSVを保存", padding=(12, 8), command=save_csv
+    )
+    save_csv_button.pack(fill="x", pady=4)
+    ttk.Button(
+        sidebar, text="確認画像を保存", padding=(12, 8), command=save_image
+    ).pack(fill="x", pady=4)
+    for value, name in (
+        ("initial", "初期指定"),
+        ("original", "元画像"),
+        ("result", "計測結果"),
+    ):
+        ttk.Radiobutton(
+            sidebar, text=name, variable=view, value=value, command=render
+        ).pack(anchor="w")
+
+    start_text.trace_add("write", invalidate)
+    end_text.trace_add("write", invalidate)
+    canvas.bind("<Configure>", render)
     canvas.bind("<ButtonPress-1>", start_draw)
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
-    region_list.bind("<<ListboxSelect>>", lambda event: show_initial())
+    region_list.bind("<<ListboxSelect>>", show_initial)
     refresh_regions()
     root.mainloop()
 

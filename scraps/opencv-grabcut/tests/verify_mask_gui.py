@@ -20,9 +20,9 @@ def main() -> None:
         if not directory.is_relative_to(results.resolve()):
             raise ValueError("検証用の一時領域が試験結果フォルダ外にあります")
         script = directory / "01_initial_regions_gui.py"
-        source = (project / "submissions/01_initial_regions_gui.py").read_text(
-            encoding="utf-8"
-        )
+        source = (
+            project / "sandbox/previous_submissions/01_initial_regions_gui.py"
+        ).read_text(encoding="utf-8")
         script.write_text(source, encoding="utf-8")
         gui = runpy.run_path(str(script))
         output_path = directory / "日本語の確認.png"

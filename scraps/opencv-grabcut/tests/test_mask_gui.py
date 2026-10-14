@@ -14,7 +14,7 @@ import numpy as np
 class MaskGuiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project = Path(__file__).resolve().parents[1]
-        self.submissions = self.project / "submissions"
+        self.submissions = self.project / "sandbox/previous_submissions"
         self.gui = runpy.run_path(str(self.submissions / "01_initial_regions_gui.py"))
         # 手動で指定した矩形を想定した検証用の値。
         self.regions = {

@@ -39,7 +39,9 @@ class PracticalTests(unittest.TestCase):
         image = np.full((*raw_mask.shape, 3), 100, np.uint8)
         input_path = self.directory / "input.png"
         self.assertTrue(cv.imwrite(str(input_path), image))
-        source = (self.project / filename).read_text(encoding="utf-8")
+        source = (self.project / "sandbox/previous_scripts" / filename).read_text(
+            encoding="utf-8"
+        )
         source = source.replace(
             'INPUT_PATH = "input.png"', f"INPUT_PATH = {str(input_path)!r}"
         )

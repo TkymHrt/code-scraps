@@ -1,0 +1,121 @@
+# 退避した旧版
+
+2026-10-14、現行の5工程から外れたコードと旧時点のコピーを保管しました。
+現在の実践手順は [submissions/README.md](../../submissions/README.md) です。
+以下は移動前の説明・検証記録です。実行する場合は題材フォルダから `uv run` を使い、コード冒頭の入力・保存先を現在の場所へ合わせてください。
+元の画像と結果は `submissions/input`・`submissions/results`・題材の `results` など、移動前の場所を維持しています。
+
+---
+
+# opencv-grabcut
+
+試料を抽出し、輪郭・左右側辺の長さ・幅を確認するスクリプトです。
+作成日：2026-10-08。依存関係はこのフォルダの `pyproject.toml` と `uv.lock` で管理します。
+
+金属圧延の左右端クラックをパスごとに評価することを目指し、まず静止画像の輪郭抽出と形状の定量化から進めます。
+撮影条件は単純背景、停止中のローラー上、稼働中の録画フレームの順で検証します。
+形状指標と欠陥の個数・大きさの評価は段階を分け、人の初期指定あり・追加指定なしの成果も分けて確認します。
+
+実際に使うコードはこのフォルダの直下、抽出方法の試作は `sandbox/`、自動検証は `tests/` にあります。
+
+現在の成果・確認した要件と、静止画のパス間比較から録画処理・位置追跡・リアルタイム解析までの工程は
+[PROGRESS.md](../../PROGRESS.md) にまとめています。
+実装の範囲は [PLAN.md](../previous_submissions/PLAN.md)、提出版01〜09の初期指定・長さ・幅・凹み候補・大きさ・比較と検証結果は [submissions/README.md](../previous_submissions/README.md) を参照してください。
+短いコードで段階ごとに提出する版は [submissions/README.md](../previous_submissions/README.md) にあります。
+初期指定の01 GUIに加え、計測範囲・正常部分・候補条件を決める画像設定GUIと、比較CSV・基準・保存先を選ぶ比較設定GUIがあります。
+画像別の既知寸法からのmm換算は [校正GUI](../previous_submissions/README.md#画像ごとに校正してmm換算するgui) で行い、校正済み長さCSVを保存します。
+ChArUcoを使う場合は、[カメラ校正と換算を分ける手順](../previous_submissions/README.md#charucoでカメラ校正と画像換算を分ける)を使います。板生成・カメラ係数算出・画像補正・長さCSV換算をそれぞれ独立スクリプトで行い、この工程にGUIは使いません。`rectify_image.py` の補正PNGを03で測定し、`calibrate_lengths.py` がその長さCSVと画像ごとの換算係数CSVから校正済みmm CSVを保存します。
+撮影回ごとの変化は、[長さ専用GUI](../previous_submissions/README.md#撮影ごとの長さを比較するgui)で複数の校正済みCSVを読み、初期区間長・初期厚さと各回の厚さから理想スラブを設定して比較できます。実寸・理想差・差率・前回差を表と推移グラフで確認・保存します。
+起動と操作は [提出版README](../previous_submissions/README.md#guiで計測パラメータを決める) にまとめています。
+[前処理の比較用スクリプト](../README.md#前処理の比較)は `sandbox/preprocess_comparison.py` にあります。単独・組み合わせを、抽出画像・端線と側辺長のCSVで比較できます。
+実画像の撮影条件、GoProの設定、画像ごとの調整・実行手順は [CAPTURE.md](../../CAPTURE.md) にまとめています。
+
+| スクリプト | 用途 |
+| --- | --- |
+| `outline.py` | 元の解像度で外側の輪郭を描く |
+| `side_edges.py` | 元の解像度で左右の端を描く |
+| `side_lengths.py` | 左右側辺の長さを画像・CSVに保存する |
+| `measure_batch.py` | 複数画像を同じ条件で計測する |
+| `compare_lengths.py` | 計測済みの長さを基準と比較する |
+| `compare_sampling.py` | 点を拾う間隔に対する長さの変化を比較する |
+| `compare_widths.py` | 相対高さを揃えて幅を比較する |
+
+各ファイルに設定から保存までを書き、1本を別フォルダへコピーしても実行できます。
+詳しい設定は [GUIDE.md](GUIDE.md)、複数画像の計測・比較は [BATCH.md](BATCH.md) を参照してください。
+
+## 動かす
+
+Python 3.14以降、NumPy、OpenCVを使います。提出版04・05・09のグラフにはMatplotlibを使います。**このフォルダから**実行します。
+
+```powershell
+uv sync
+uv run outline.py
+uv run side_edges.py
+uv run side_lengths.py
+```
+
+画像を `input.png` に置き、使うスクリプトの冒頭で入力・保存先・初期指定を調整します。
+相対パスはスクリプトがあるフォルダが基準です。
+輪郭・左右端・長さの3本は、同じ初期指定・反復回数・乱数シードで、縮小せずに抽出します。
+比較する場合は変更後も設定を揃えてください。
+
+結果は `results/` に保存します。出力名は `result_03`（輪郭）、`result_04`（左右端）、`result_05`（長さ）です。
+初期指定画像・マスク・実行条件JSONも保存します。まず画像を確認してから計測値を使ってください。
+
+一括計測では [samples.example.csv](samples.example.csv) を `samples.csv` にコピーして入力を指定します。
+同じ `results/` に長さ一覧と点列を保存し、比較の3本が読み込みます。手順は [BATCH.md](BATCH.md) にあります。
+
+## 試作・検証
+
+旧縮小版や反射除去の試作は [sandbox/README.md](../README.md) にまとめています。
+
+```powershell
+uv run sandbox/ex06_mask.py
+uv run sandbox/ex07_baseline.py
+uv run sandbox/ex08_seeded_mask.py
+uv run sandbox/ex09_vertical_open.py
+uv run sandbox/ex10_reflection_refine.py
+uv run sandbox/verify_quantitative.py
+```
+
+試作の入力は `sandbox/`、出力は `sandbox/results/` が基準です。
+AI画像や合成画像の確認は、実試料での抽出精度を保証するものではありません。
+
+```powershell
+uv run python -m unittest discover -s tests
+uv run tests/verify_stages.py --with-local-inputs --out tests/results/stages_new
+uv run tests/verify_shape_stages.py --out tests/results/shape_pipeline_new
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check .
+```
+
+自動試験は、独立実行、3本の抽出条件とマスクの一致、上下辺を含めない長さ、
+細い突起の保持、基準・左右差・mm換算・測定間隔・幅の補間など13件です。
+加えて、提出版の初期指定・GrabCut直後のマスク・内部の端座標と表示・側辺長・計測範囲・日本語パス・入力保護を確認する9件、
+提出版04の差分・棒グラフ・日本語パス・入力不備と入力保護を確認する5件があります。
+試作の前処理比較5件と、01 GUI2件、提出版05〜09の検証13件、設定GUIの数値・コピー・入力保護6件、校正GUI7件とスラブ基準の長さGUI9件、ChArUcoの板生成・カメラ校正・画像補正・CSV換算8件を加え、合計77件です。
+GUIの縮小表示上のドラッグ・保存などは `uv run tests/verify_mask_gui.py` で確認できます（Tkを起動できる環境で実行）。
+画像設定・比較設定・校正・長さ専用GUIの操作は `uv run tests/verify_parameter_guis.py --out tests/results/parameter_guis_new` で確認できます。
+ChArUcoの板生成・係数算出・画像補正・03実行・CSV換算の受け渡しは `uv run tests/verify_camera_pipeline.py --out tests/results/camera_cli_new` で確認できます。独立コピーを別プロセスで動かし、元画像がなくてもCSVだけで再換算できることと、複数のmm CSVを比較できることを確認します。
+元の生成画像の試料右隣に板を仮合成する確認は `uv run tests/verify_adjacent_board.py --out tests/results/adjacent_board_new` で再現できます。右側の背景を拡張し、正対・遠近変形・仮のレンズ歪みの3条件で補正・計測・CSV換算を実行します。寸法・カメラ係数・同一平面は仮の条件です。
+Ruffは構文・未使用名・インポート順だけをチェックします。
+計測条件は実画像に合わせて設定し、入力・保存先と生成物の更新を運用で確認します。
+
+2026-10-12の配置変更後に、自動試験、Lint・format、型チェックと合成画像の定量比較を再確認しました。
+2026-10-13に提出版を03の計測・04の比較へ整理し、全34件、Lint・format・型チェックを確認しました。
+同日の継続作業で05〜09を追加し、生成画像の仮算出まで実行しました。全47件、Lint・format・型チェックが通りました。
+元の生成画像は指定範囲で幅428.00〜520.00px、凹み候補9個・最大内向き偏差39.21pxでした。仮の正常部分・しきい値による値です。
+人工的な凹みを加えた比較画像と、正解の分かる形状も `tests/verify_shape_stages.py` で確認し、成果を保存しています。
+`submissions/input/` はテスト用の生成画像で、本番画像ではありません。旧04と新03の端座標・確認画像・長さCSVが一致することを確認しています。
+実試料での抽出精度は、この検証の対象に含みません。
+2026-10-14に計測と比較の設定GUIを追加し、全53件と実際のTkでの操作、Lint・format・型チェックを確認しました。
+同日に2枚の長さだけを表示・保存するGUIを追加し、全57件と3つのGUI操作、Lint・format・型チェックを確認しました。
+その後、長さGUIを複数撮影の一覧へ組み直し、撮影順・基準・前回からの変化と推移グラフを追加しました。全59件とGUI操作、Lint・format・型チェックを確認しました。
+続けて基準を幅一定・体積一定のスラブへ変更し、元画像の2点校正と画像別のmm換算を追加しました。対応する同じ材料区間で比較し、全62件とGUI操作、Lint・format・型チェックを確認しました。
+校正を別GUIへ分け、mm換算済みの長さCSVを比較へ渡す構成に変更しました。全67件と4つのGUI操作、Lint・format・型チェックを確認しました。元画像がなくても保存済みCSVから比較でき、条件を変更しても校正し直す必要はありません。
+校正GUIを一画面で操作できる構成にし、ホイール・連続倍率スライダーでのズームと右ドラッグでの移動を追加しました。全69件、GUI操作、Lint・format・型チェックを確認しました。表示を拡大・移動しても、校正点と測定値は元画像の座標で保持します。
+校正GUIの読み込みを上部、寸法・倍率・換算結果・保存を左サイドバー、画像を右側へ配置しました。不要な3ボタンと処理を削除し、表示・クリック座標の状態と校正計算を整理しました。全69件、GUI操作、Lint・format・型チェックを再確認しています。
+校正GUIの倍率スライダーとフルパス欄を外し、ファイル名の表示と読み込みバー右端のエラー・ステータスへ整理しました。拡大・縮小はホイールで行います。今回の関連16件、4つのGUI操作、Lint・format・型チェックが通りました。
+ChArUcoのカメラ校正スクリプトと換算GUIを独立して追加しました。係数は一度コードへ貼り、GUIでは操作しません。合成写真12枚からの校正と、板に使わない150mm区間の補正、実際のTkから03・mm CSVへの受け渡しを確認しました。実カメラの校正と実試料の精度は未確認です。
+続けてChArUcoの換算GUIを外し、画像補正と長さCSV換算をGUIなしの独立スクリプトにしました。換算係数は画像ごとのCSVへ保存し、03の長さCSVと合わせて校正済みmm CSVを返します。2撮影の独立実行と、画像がない状態での再換算を確認しました。

@@ -14,10 +14,10 @@ class LengthComparisonGuiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project = Path(__file__).resolve().parents[1]
         self.gui = runpy.run_path(
-            str(self.project / "submissions/length_comparison_gui.py")
+            str(self.project / "sandbox/previous_submissions/length_comparison_gui.py")
         )
         self.calibrator = runpy.run_path(
-            str(self.project / "submissions/length_calibration_gui.py")
+            str(self.project / "sandbox/previous_submissions/length_calibration_gui.py")
         )
         self.comparison = test_submission_comparison.SubmissionComparisonTests()
 
@@ -96,7 +96,10 @@ class LengthComparisonGuiTests(unittest.TestCase):
             ]
             copy = directory / "length_comparison_gui.py"
             copy.write_bytes(
-                (self.project / "submissions/length_comparison_gui.py").read_bytes()
+                (
+                    self.project
+                    / "sandbox/previous_submissions/length_comparison_gui.py"
+                ).read_bytes()
             )
             gui = runpy.run_path(str(copy))
             rows = gui["compare_lengths"](samples, 100, 10)

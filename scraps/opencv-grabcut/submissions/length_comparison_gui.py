@@ -1,4 +1,4 @@
-"""校正済みの長さCSVと撮影時の厚さから、複数撮影を理想スラブと比較する."""
+"""01の長さCSVと撮影時の厚さから、複数撮影を理想スラブと比較する."""
 
 import csv
 import math
@@ -21,17 +21,10 @@ def positive_value(value: float | str | None, name: str) -> float:
     return number
 
 
-def read_calibrated_lengths(path: Path) -> dict:
+def read_lengths(path: Path) -> dict:
     required = (
-        "input_csv",
         "image_path",
-        "reference_mm",
-        "reference_px",
         "mm_per_px",
-        "reference_x1",
-        "reference_y1",
-        "reference_x2",
-        "reference_y2",
         "image_width",
         "image_height",
         "start_y",
@@ -46,12 +39,10 @@ def read_calibrated_lengths(path: Path) -> dict:
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.DictReader(source)
         if not set(required).issubset(reader.fieldnames or []):
-            raise ValueError(
-                f"校正済みのcalibrated_lengths.csvを選んでください: {path}"
-            )
+            raise ValueError(f"01で保存した長さCSVを選んでください: {path}")
         saved_rows = list(reader)
     if len(saved_rows) != 1:
-        raise ValueError(f"校正済みCSVは1画像につき1行が必要です: {path}")
+        raise ValueError(f"長さCSVは1画像につき1行が必要です: {path}")
     saved = saved_rows[0]
     row: dict = {}
     for column in required:
@@ -60,8 +51,6 @@ def read_calibrated_lengths(path: Path) -> dict:
             raise ValueError(f"空欄のある項目を確認してください: {column}: {path}")
         row[column] = value
     for column in (
-        "reference_mm",
-        "reference_px",
         "mm_per_px",
         "left_px",
         "left_mm",
@@ -74,20 +63,16 @@ def read_calibrated_lengths(path: Path) -> dict:
     try:
         for column in ("image_width", "image_height", "start_y", "end_y"):
             row[column] = int(row[column])
-        for column in ("reference_x1", "reference_y1", "reference_x2", "reference_y2"):
-            row[column] = float(row[column])
-            if not math.isfinite(row[column]):
-                raise ValueError("基準点の座標は有限値が必要です")
     except ValueError as error:
         raise ValueError(
-            f"画像サイズ・計測範囲・基準点の数値を確認してください: {path}"
+            f"画像サイズ・計測範囲の数値を確認してください: {path}"
         ) from error
     if (
         row["image_width"] < 2
         or row["image_height"] < 2
         or not 0 <= row["start_y"] < row["end_y"] < row["image_height"]
     ):
-        raise ValueError(f"校正済みCSVの画像サイズ・計測範囲を確認してください: {path}")
+        raise ValueError(f"長さCSVの画像サイズ・計測範囲を確認してください: {path}")
     for edge in ("left", "right", "total"):
         if not math.isclose(
             row[f"{edge}_mm"],
@@ -95,13 +80,15 @@ def read_calibrated_lengths(path: Path) -> dict:
             rel_tol=1e-10,
             abs_tol=1e-10,
         ):
-            raise ValueError(f"校正済みCSVのpx値・mm値・倍率が一致しません: {path}")
-    # 03の左右・合計には、丸めによる最大0.01pxの差がある。
-    tolerance_mm = 0.011 * row["mm_per_px"] + 1e-10
-    if abs(row["left_mm"] + row["right_mm"] - row["total_mm"]) > tolerance_mm:
+            raise ValueError(f"長さCSVのpx値・mm値・倍率が一致しません: {path}")
+    if not math.isclose(
+        row["left_mm"] + row["right_mm"], row["total_mm"], rel_tol=1e-10, abs_tol=1e-10
+    ):
         raise ValueError(f"左右の実寸と合計が一致しません: {path}")
-    for column in ("input_csv", "image_path"):
-        row[column] = str(Path(row[column]).resolve())
+    image_path = Path(row["image_path"])
+    if not image_path.is_absolute():
+        image_path = path.parent / image_path
+    row["image_path"] = str(image_path.resolve())
     return row
 
 
@@ -113,7 +100,7 @@ def compare_lengths(
     initial_length_mm = positive_value(initial_length_mm, "初期区間長 (mm)")
     initial_thickness_mm = positive_value(initial_thickness_mm, "初期厚さ (mm)")
     if not samples:
-        raise ValueError("校正済みの長さCSVを1枚以上追加してください")
+        raise ValueError("01で保存した長さCSVを1枚以上追加してください")
     names = []
     paths = []
     rows = []
@@ -128,7 +115,7 @@ def compare_lengths(
         names.append(name)
         paths.append(path)
         thickness = positive_value(sample["thickness_mm"], f"{name}の厚さ (mm)")
-        measurement = read_calibrated_lengths(path)
+        measurement = read_lengths(path)
         elongation = positive_value(
             initial_thickness_mm / thickness, f"{name}の伸び倍率"
         )
@@ -137,7 +124,7 @@ def compare_lengths(
         )
         row = {
             "sample_id": name,
-            "calibrated_csv": str(path),
+            "measurement_csv": str(path),
         }
         row.update(measurement)
         row["initial_length_mm"] = initial_length_mm
@@ -174,11 +161,10 @@ def check_output(path: Path, rows: list[dict], suffix: str) -> Path:
         raise ValueError(f"保存先の拡張子は {suffix} にしてください")
     for row in rows:
         if path in (
-            Path(row["calibrated_csv"]),
-            Path(row["input_csv"]),
+            Path(row["measurement_csv"]),
             Path(row["image_path"]),
         ):
-            raise ValueError("入力CSV・校正画像と別の保存先を選んでください")
+            raise ValueError("入力CSV・補正画像と別の保存先を選んでください")
     return path
 
 
@@ -262,7 +248,7 @@ def write_graph(path: Path, rows: list[dict]) -> None:
 def main() -> None:
     directory = Path(__file__).resolve().parent
     root = tk.Tk()
-    root.title("校正済み長さと理想スラブの比較")
+    root.title("計測済み長さと理想スラブの比較")
     root.geometry("1160x820")
     root.minsize(1060, 760)
     samples = []
@@ -275,7 +261,7 @@ def main() -> None:
     selected_csv = tk.StringVar()
     selected_image = tk.StringVar()
     status = tk.StringVar(
-        value="初期区間長・初期厚さを入れ、対応する同じ材料区間の校正済みCSVを追加してください"
+        value="初期区間長・初期厚さを入れ、対応する同じ材料区間の計測済みCSVを追加してください"
     )
 
     def invalidate_result() -> None:
@@ -335,7 +321,7 @@ def main() -> None:
     def add_csvs() -> None:
         selected = filedialog.askopenfilenames(
             parent=root,
-            title="対応する同じ材料区間の校正済みCSVを選ぶ",
+            title="対応する同じ材料区間の計測済みCSVを選ぶ",
             initialdir=directory,
             filetypes=[("CSV", "*.csv")],
         )
@@ -353,7 +339,7 @@ def main() -> None:
                 path = Path(filename).resolve()
                 if path in existing_paths or path in new_paths:
                     continue
-                measurement = read_calibrated_lengths(path)
+                measurement = read_lengths(path)
                 new_paths.append(path)
                 measurements.append(measurement)
         except (OSError, ValueError, csv.Error) as error:
@@ -584,7 +570,7 @@ def main() -> None:
         ("name", "撮影名", 140),
         ("thickness", "厚さ (mm)", 100),
         ("scale", "mm/px", 130),
-        ("path", "校正済みCSV", 620),
+        ("path", "計測済みCSV", 620),
     ):
         input_table.heading(column, text=label)
         input_table.column(column, width=width, stretch=column == "path")
@@ -596,7 +582,7 @@ def main() -> None:
     input_table.configure(yscrollcommand=input_scroll.set)
     for label, variable in (
         ("選択中のCSV", selected_csv),
-        ("校正した元画像", selected_image),
+        ("計測した補正画像", selected_image),
     ):
         frame = ttk.Frame(root, padding=(12, 2))
         frame.pack(fill="x")

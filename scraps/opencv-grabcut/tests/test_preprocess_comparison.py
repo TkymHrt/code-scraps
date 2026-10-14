@@ -19,7 +19,7 @@ class PreprocessComparisonTests(unittest.TestCase):
         """コピーの設定だけを合成画像用に替え、手元の生成画像設定を使わない."""
         project = Path(__file__).resolve().parents[1]
         if filename == "03_side_lengths.py":
-            path = project / "submissions" / filename
+            path = project / "sandbox/previous_submissions" / filename
         else:
             path = project / "sandbox" / filename
         source = path.read_text(encoding="utf-8")

@@ -176,7 +176,9 @@ def main():
         "baseline_assumed_mm": baseline_lengths,
         "cases": [],
     }
-    comparison = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+    comparison = runpy.run_path(
+        str(project / "sandbox/previous_submissions/length_comparison_gui.py")
+    )
     samples = []
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard((7, 5), 30.0, 18.0, dictionary)

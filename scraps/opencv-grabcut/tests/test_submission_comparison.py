@@ -15,7 +15,10 @@ import numpy as np
 
 class SubmissionComparisonTests(unittest.TestCase):
     def script_source(self, **overrides: object) -> str:
-        path = Path(__file__).resolve().parents[1] / "submissions/04_compare_lengths.py"
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "sandbox/previous_submissions/04_compare_lengths.py"
+        )
         source = path.read_text(encoding="utf-8")
         settings = {
             "INPUT_CSVS": (("A", "A.csv"), ("B", "B.csv")),

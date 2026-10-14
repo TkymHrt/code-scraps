@@ -1,6 +1,5 @@
-"""固定したカメラ係数とChArUcoで、補正PNGと画像ごとの換算係数CSVを保存する."""
+"""固定したカメラ係数とChArUcoで、一定のmm/pxの補正PNGを保存する."""
 
-import csv
 import math
 from pathlib import Path
 
@@ -9,7 +8,6 @@ import numpy as np
 
 INPUT_PATH = "input/赤茶色の床と剥離した金属帯.png"
 OUTPUT_IMAGE_PATH = "results/rectified.png"
-OUTPUT_CSV_PATH = "results/image_calibration.csv"
 
 # camera_calibration.pyの出力を、この3設定へ一度貼り付ける。
 CALIBRATION_SIZE: tuple[int, int] | None = None
@@ -20,6 +18,7 @@ DIST_COEFFS: list[float] | None = None
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
+# 01_initial_regions_gui.pyにも同じ値を設定する。
 MM_PER_PX = 0.25
 
 
@@ -96,17 +95,8 @@ def rectify_image(image: np.ndarray) -> dict:
     corrected = cv.warpPerspective(
         undistorted, transform, (output_width, output_height), flags=cv.INTER_LINEAR
     )
-    # 既知の板上の2点を、比較CSVと共通の校正根拠として保存する。
-    reference_world = np.array([board_xy[0], board_xy[-1]], dtype=np.float64)
-    reference_pixels = cv.perspectiveTransform(
-        reference_world.reshape(-1, 1, 2), world_to_pixels
-    ).reshape(-1, 2)
-    reference_mm = float(np.linalg.norm(reference_world[1] - reference_world[0]))
     return {
         "image": corrected,
-        "points": reference_pixels,
-        "reference_mm": reference_mm,
-        "reference_px": reference_mm / MM_PER_PX,
         "mm_per_px": MM_PER_PX,
         "corner_count": len(ids),
         "error_px": error_px,
@@ -117,50 +107,26 @@ def main() -> None:
     directory = Path(__file__).resolve().parent
     input_path = (directory / INPUT_PATH).resolve()
     image_path = (directory / OUTPUT_IMAGE_PATH).resolve()
-    csv_path = (directory / OUTPUT_CSV_PATH).resolve()
-    if len({input_path, image_path, csv_path}) != 3:
-        raise ValueError("元画像・補正PNG・換算係数CSVは別のパスにしてください")
-    if image_path.suffix.lower() != ".png" or csv_path.suffix.lower() != ".csv":
-        raise ValueError("保存先の拡張子は画像を .png、換算係数を .csv にしてください")
+    if input_path == image_path:
+        raise ValueError("元画像と補正PNGは別のパスにしてください")
+    if image_path.suffix.lower() != ".png":
+        raise ValueError("保存先の拡張子は .png にしてください")
     image = cv.imdecode(
         np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
     )
     if image is None:
         raise ValueError(f"画像を読み込めません: {input_path}")
     correction = rectify_image(image)
-    height, width = correction["image"].shape[:2]
-    points = correction["points"]
-    row = {
-        "source_image_path": str(input_path),
-        "image_path": str(image_path),
-        "reference_mm": correction["reference_mm"],
-        "reference_px": correction["reference_px"],
-        "mm_per_px": correction["mm_per_px"],
-        "reference_x1": float(points[0, 0]),
-        "reference_y1": float(points[0, 1]),
-        "reference_x2": float(points[1, 0]),
-        "reference_y2": float(points[1, 1]),
-        "image_width": width,
-        "image_height": height,
-    }
-    for key, value in row.items():
-        if isinstance(value, float):
-            row[key] = f"{value:.12g}"
     success, encoded = cv.imencode(".png", correction["image"])
     if not success:
         raise OSError("補正画像をPNGにできません")
     image_path.parent.mkdir(parents=True, exist_ok=True)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(encoded.tobytes())
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=list(row))
-        writer.writeheader()
-        writer.writerow(row)
     print(
         f"検出した角: {correction['corner_count']}点、再投影誤差: {correction['error_px']:.3f}px"
     )
     print(f"補正PNG: {image_path}")
-    print(f"換算係数CSV: {csv_path}（{correction['mm_per_px']:g}mm/px）")
+    print(f"補正画像の倍率: {correction['mm_per_px']:g}mm/px")
 
 
 if __name__ == "__main__":

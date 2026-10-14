@@ -18,7 +18,11 @@ import numpy as np
 class SubmissionTests(unittest.TestCase):
     def submission_source(self, filename: str, **overrides: object) -> str:
         """コピーの設定だけを合成画像用に替え、手元の生成画像設定を使わない."""
-        path = Path(__file__).resolve().parents[1] / "submissions" / filename
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "sandbox/previous_submissions"
+            / filename
+        )
         source = path.read_text(encoding="utf-8")
         stem = path.stem
         settings = {

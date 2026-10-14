@@ -47,7 +47,9 @@ def capture(root, path):
 
 
 def exercise_measurement(project, output, root, screenshots):
-    gui = runpy.run_path(str(project / "submissions/measurement_settings_gui.py"))
+    gui = runpy.run_path(
+        str(project / "sandbox/previous_submissions/measurement_settings_gui.py")
+    )
     errors = []
 
     def exercise():
@@ -92,7 +94,7 @@ def exercise_measurement(project, output, root, screenshots):
         root.clipboard_append("before")
         invoke("設定をコピー")
         assert root.clipboard_get() == "before"
-        source = project / "submissions/08_candidate_sizes.py"
+        source = project / "sandbox/previous_submissions/08_candidate_sizes.py"
         with patch.object(filedialog, "askopenfilename", return_value=str(source)):
             invoke("スクリプトから設定を読む")
         assert ranges.size() == 4
@@ -272,7 +274,9 @@ def exercise_measurement(project, output, root, screenshots):
 
 
 def exercise_comparison(project, output, root, screenshots):
-    gui = runpy.run_path(str(project / "submissions/comparison_settings_gui.py"))
+    gui = runpy.run_path(
+        str(project / "sandbox/previous_submissions/comparison_settings_gui.py")
+    )
     errors = []
     sources = project / "tests/results/shape_pipeline_20261013"
     paths = []
@@ -432,7 +436,9 @@ def exercise_comparison(project, output, root, screenshots):
 
 
 def exercise_length_calibration(project, output, root, screenshots):
-    gui = runpy.run_path(str(project / "submissions/length_calibration_gui.py"))
+    gui = runpy.run_path(
+        str(project / "sandbox/previous_submissions/length_calibration_gui.py")
+    )
     errors = []
     paths = []
     images = []
@@ -769,7 +775,9 @@ def exercise_length_calibration(project, output, root, screenshots):
 
 
 def exercise_length_comparison(project, output, root, screenshots):
-    gui = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+    gui = runpy.run_path(
+        str(project / "sandbox/previous_submissions/length_comparison_gui.py")
+    )
     errors = []
     paths = []
     sources = []

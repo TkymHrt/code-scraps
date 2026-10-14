@@ -160,7 +160,9 @@ def main():
         )
         measured_paths.append(destination)
 
-    comparison = runpy.run_path(str(project / "submissions/length_comparison_gui.py"))
+    comparison = runpy.run_path(
+        str(project / "sandbox/previous_submissions/length_comparison_gui.py")
+    )
     samples = []
     for index, path in enumerate(measured_paths):
         samples.append(
