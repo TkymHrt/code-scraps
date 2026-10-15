@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from unittest.mock import patch
 
 import cv2 as cv
@@ -179,6 +179,16 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
             assert preview_lines()[0] == lines[1]
         set_field(root, start, interval_start)
         set_field(root, end, interval_end)
+        interval_labels = []
+        for widget in widgets:
+            if isinstance(widget, ttk.Label) and widget.cget("textvariable"):
+                value = str(root.getvar(str(widget.cget("textvariable"))))
+                if value.startswith("区間長："):
+                    interval_labels.append(widget)
+        assert len(interval_labels) == 1
+        interval_variable = str(interval_labels[0].cget("textvariable"))
+        expected_interval = (interval_end - interval_start) * gui["MM_PER_PX"]
+        assert root.getvar(interval_variable) == f"区間長：{expected_interval:.3f} mm"
         radios["元画像"].invoke()
         root.update()
         assert len(preview_lines()) == 2
@@ -186,7 +196,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
             capture(root, directory / "interval_preview_gui.png")
         invoke("長さを計測")
         assert "計測しました" in status(), status()
-        assert buttons["長さCSVを保存"].instate(["!disabled"])
+        assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
         root.geometry("1000x760")
         root.update()
         for button in list(buttons.values()) + list(radios.values()):
@@ -209,7 +219,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         if screenshots:
             capture(root, directory / "initial_regions_gui.png")
         for name, path in (
-            ("長さCSVを保存", csv_path),
+            ("CSV・確認PNGを保存", csv_path),
             ("確認画像を保存", directory / "output/measurement.png"),
         ):
             with patch.object(
@@ -218,6 +228,22 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
                 invoke(name)
             assert dialog.call_args.kwargs["initialdir"] == directory / "output"
             assert path.exists(), status()
+        paired_png = csv_path.with_suffix(".png")
+        assert paired_png.exists()
+        paired_before = (csv_path.read_bytes(), paired_png.read_bytes())
+        with (
+            patch.object(filedialog, "asksaveasfilename", return_value=str(csv_path)),
+            patch.object(messagebox, "askyesno", return_value=False) as confirm,
+        ):
+            invoke("CSV・確認PNGを保存")
+        assert confirm.call_count == 1
+        assert (csv_path.read_bytes(), paired_png.read_bytes()) == paired_before
+        with (
+            patch.object(filedialog, "asksaveasfilename", return_value=str(csv_path)),
+            patch.object(messagebox, "askyesno", return_value=True),
+        ):
+            invoke("CSV・確認PNGを保存")
+        assert "保存しました" in status()
         with patch.object(
             filedialog, "asksaveasfilename", return_value=str(image_path)
         ):
@@ -225,7 +251,8 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert "別のパス" in status()
         before = csv_path.read_bytes()
         set_field(root, start, -1)
-        assert buttons["長さCSVを保存"].instate(["disabled"])
+        assert root.getvar(interval_variable) == "区間長：—"
+        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
         assert result_table.set("left", "length") == "—"
         invoke("長さを計測")
         assert "計測区間" in status()
@@ -234,13 +261,13 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
 
         set_field(root, start, interval_start)
         invoke("長さを計測")
-        assert buttons["長さCSVを保存"].instate(["!disabled"])
+        assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
         region_list = next(w for w in widgets if isinstance(w, tk.Listbox))
         region_count = region_list.size()
         region_list.selection_set(0)
         invoke("選択した矩形を削除")
         assert region_list.size() == region_count - 1
-        assert buttons["長さCSVを保存"].instate(["disabled"])
+        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
         assert result_table.set("left", "length") == "—"
         invoke("矩形をすべて削除")
         assert region_list.size() == 0
@@ -249,7 +276,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert root.getvar(str(start.cget("textvariable"))) == "0"
         assert root.getvar(str(end.cget("textvariable"))) == str(height - 1)
         assert len(preview_lines()) == 2
-        assert buttons["長さCSVを保存"].instate(["disabled"])
+        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
         assert not errors, errors
 
     try:

@@ -4,7 +4,7 @@ import csv
 import math
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2 as cv
 import numpy as np
@@ -161,6 +161,25 @@ def write_csv(path: Path, image_path: Path, measurement: dict) -> None:
         writer.writerow(row)
 
 
+def write_measurement(
+    path: Path, image_path: Path, measurement: dict, overlay: np.ndarray
+) -> Path:
+    path = path.resolve()
+    png_path = path.with_suffix(".png")
+    if path.suffix.lower() != ".csv":
+        raise ValueError("保存先の拡張子は .csv にしてください")
+    if image_path.resolve() in (path, png_path):
+        raise ValueError("入力画像とは別の保存先を選んでください")
+    # PNGを作れることを確認してから、CSVと画像を書き出す。
+    success, encoded = cv.imencode(".png", overlay)
+    if not success:
+        raise OSError("確認PNGを作成できません")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_csv(path, image_path, measurement)
+    encoded.tofile(png_path)
+    return png_path
+
+
 def main() -> None:
     directory = Path(__file__).resolve().parent
     output_directory = directory / OUTPUT_DIRECTORY
@@ -186,6 +205,7 @@ def main() -> None:
 
     start_text = tk.StringVar(value="0")
     end_text = tk.StringVar()
+    interval_text = tk.StringVar(value="区間長：—")
 
     def load_image() -> None:
         nonlocal image, input_path, height, width
@@ -425,6 +445,20 @@ def main() -> None:
         save_csv_button.state(["disabled"])
 
     def on_interval_changed(*_args) -> None:
+        interval_text.set("区間長：—")
+        try:
+            start_y = int(start_text.get())
+            end_y = int(end_text.get())
+        except ValueError:
+            start_y = end_y = -1
+        if (
+            image is not None
+            and 0 <= start_y < end_y < height
+            and math.isfinite(MM_PER_PX)
+            and MM_PER_PX > 0
+        ):
+            interval_mm = (end_y - start_y) * MM_PER_PX
+            interval_text.set(f"区間長：{interval_mm:.3f} mm")
         clear_measurement()
         if view.get() == "result":
             view.set("initial")
@@ -464,26 +498,40 @@ def main() -> None:
         status.set("計測しました。赤い側辺と黄色の区間を確認してください")
 
     def save_csv() -> None:
-        if measurement is None or input_path is None:
+        if measurement is None or input_path is None or result_image is None:
             status.set("計測してから保存してください")
             return
         selected = filedialog.asksaveasfilename(
             parent=root,
-            title="長さCSVの保存先",
+            title="CSV・確認PNGの保存先（同じ名前で保存）",
             initialdir=output_directory,
             initialfile=f"{input_path.stem}_lengths.csv",
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
-            confirmoverwrite=True,
+            confirmoverwrite=False,
         )
         if not selected:
             return
+        csv_path = Path(selected).resolve()
+        png_path = csv_path.with_suffix(".png")
+        existing_names = []
+        for path in (csv_path, png_path):
+            if path.exists():
+                existing_names.append(path.name)
+        if existing_names:
+            overwrite = messagebox.askyesno(
+                "保存先の確認",
+                "次のファイルを上書きしますか？\n" + "\n".join(existing_names),
+                parent=root,
+            )
+            if not overwrite:
+                return
         try:
-            write_csv(Path(selected), input_path, measurement)
-        except (OSError, ValueError) as error:
-            status.set(str(error))
+            write_measurement(csv_path, input_path, measurement, result_image)
+        except (OSError, ValueError, cv.error) as error:
+            status.set(f"保存できません: {error}。CSV・PNGの保存状態を確認してください")
             return
-        status.set(f"保存しました: {Path(selected).name}")
+        status.set(f"保存しました: {csv_path.name} / {png_path.name}")
 
     file_toolbar = ttk.Frame(root, padding=12)
     file_toolbar.pack(fill="x")
@@ -517,23 +565,22 @@ def main() -> None:
             command=show_initial,
         ).pack(anchor="w", pady=2)
     region_list = tk.Listbox(sidebar, width=32, height=4, exportselection=False)
-    region_list.pack(fill="x", pady=8)
+    region_list.pack(fill="x", pady=4)
     for name, action in (
         ("選択した矩形を削除", delete_region),
         ("矩形をすべて削除", clear_regions),
     ):
-        ttk.Button(sidebar, text=name, padding=(12, 6), command=action).pack(
+        ttk.Button(sidebar, text=name, padding=(12, 5), command=action).pack(
             fill="x", pady=3
         )
 
-    ttk.Label(sidebar, text="対応する材料区間（補正画像のy）").pack(
-        anchor="w", pady=(12, 4)
-    )
+    ttk.Label(sidebar, text="計測する区間（補正画像のy）").pack(anchor="w", pady=(8, 4))
     for label, variable in (("開始y", start_text), ("終了y", end_text)):
         row_frame = ttk.Frame(sidebar)
         row_frame.pack(fill="x", pady=3)
         ttk.Label(row_frame, text=label).pack(side="left")
         ttk.Entry(row_frame, textvariable=variable, width=12).pack(side="right")
+    ttk.Label(sidebar, textvariable=interval_text).pack(anchor="w", pady=1)
     ttk.Button(sidebar, text="長さを計測", padding=(12, 8), command=calculate).pack(
         fill="x", pady=4
     )
@@ -550,9 +597,9 @@ def main() -> None:
     result_table.column("length", width=130, anchor="e")
     for edge, label in (("left", "左"), ("right", "右"), ("total", "左右合計")):
         result_table.insert("", "end", iid=edge, values=(label, "—"))
-    result_table.pack(fill="x", pady=8)
+    result_table.pack(fill="x", pady=4)
     save_csv_button = ttk.Button(
-        sidebar, text="長さCSVを保存", padding=(12, 8), command=save_csv
+        sidebar, text="CSV・確認PNGを保存", padding=(12, 8), command=save_csv
     )
     save_csv_button.pack(fill="x", pady=4)
     ttk.Button(
