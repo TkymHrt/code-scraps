@@ -210,6 +210,34 @@ uv run submissions/length_comparison_simple.py
 Tkinterを使えない状態で単独コピーを別プロセスから実行し、PNG保存を確認しています。Ruff・format・tyも通過しました。
 生成した確認用グラフは `tests/results/headless_graph_20261015/output/length_comparison_simple.png` です。実測データの比較は未確認です。
 
+## 厚さなしで左右の長さをグラフに保存
+
+`length_comparison_no_thickness.py` は、現行の長さCSVから左右側辺長の2本線をPNGへ保存するGUIなしの単独スクリプトです。
+厚さや初期値の設定は不要で、理想長は計算しません。
+
+コード冒頭のCSVを実際のファイル名へ置き換え、撮影順に並べます。
+
+```python
+INPUT_CSVS = [
+    "output/shot1_lengths.csv",
+    "output/shot2_lengths.csv",
+]
+OUTPUT_PATH = "output/length_comparison_no_thickness.png"
+```
+
+```powershell
+# opencv-grabcutフォルダから実行
+uv run submissions/length_comparison_no_thickness.py
+```
+
+横軸は指定した撮影順、縦軸はCSVに保存された側辺長(mm)です。CSV名と左右の値をターミナルにも表示します。
+相対パスは `submissions/` を基準にします。計測GUIの1画像1行のCSVから `image_path`・`left_mm`・`right_mm` を読み、元画像は不要です。
+PNGは再実行時に上書きします。入力CSV・元画像への上書きや不正値は止めるので、設定やCSVを直して再実行します。
+
+2026-10-15、厚さ列を持たない既知の数値CSVで左右の値、1撮影・20撮影の指定順、不正値と入力保護を確認しました。
+Tkinterを使えない状態で単独コピーを実行し、PNG保存も確認しています。比較関連の自動試験19件とRuff・format・tyが通過しました。
+確認用PNGは `tests/results/no_thickness_graph_20261015/output/length_comparison_no_thickness.png` です。実測データでの比較は未確認です。
+
 ## 最小比較GUI：厚さから理想長を計算
 
 `length_comparison_simple_gui.py` は、初期区間長・初期厚さと各撮影の厚さから理想片側長を求め、
