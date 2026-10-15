@@ -1,5 +1,6 @@
 """ChArUcoの複数写真から、魚眼モデルのカメラ行列と4つの歪み係数を求める."""
 
+import re
 from pathlib import Path
 
 import cv2 as cv
@@ -23,7 +24,7 @@ def calibrate(paths: list[Path], output_directory: Path) -> tuple:
     object_points = []
     image_points = []
     image_size = None
-    for path in paths:
+    for index, path in enumerate(paths):
         image = cv.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"画像を読み込めません: {path.name}")
@@ -59,7 +60,7 @@ def calibrate(paths: list[Path], output_directory: Path) -> tuple:
             raise OSError(f"PNGにできません: {check_path.name}")
         check_path.parent.mkdir(parents=True, exist_ok=True)
         check_path.write_bytes(encoded.tobytes())
-        print(f"読取確認: {check_path.name} / {status} / 角{corner_count}点")
+        print(f"読取確認 {index + 1}: {path.name} / {status} / 角{corner_count}点")
         if not usable:
             raise ValueError(f"板の角を縦横に6点以上読める写真が必要です: {path.name}")
         board_points = all_board_points[ids.astype(np.int32).ravel()]
@@ -76,15 +77,29 @@ def calibrate(paths: list[Path], output_directory: Path) -> tuple:
     matrix = np.zeros((3, 3), dtype=np.float64)
     distortion = np.zeros((4, 1), dtype=np.float64)
     flags = cv.CALIB_RECOMPUTE_EXTRINSIC | cv.CALIB_CHECK_COND | cv.CALIB_FIX_SKEW
-    rms, matrix, distortion, rotations, translations = cv.fisheye.calibrate(
-        object_points,
-        image_points,
-        image_size,
-        matrix,
-        distortion,
-        flags=flags,
-        criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-8),
-    )
+    try:
+        rms, matrix, distortion, rotations, translations = cv.fisheye.calibrate(
+            object_points,
+            image_points,
+            image_size,
+            matrix,
+            distortion,
+            flags=flags,
+            criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-8),
+        )
+    except cv.error as error:
+        match = re.search(r"Ill-conditioned matrix for input array (\d+)", str(error))
+        if match is None:
+            raise
+        photo_index = int(match.group(1))
+        photo_path = paths[photo_index]
+        check_path = output_directory / f"{photo_path.name}_detected.png"
+        raise ValueError(
+            f"魚眼校正で姿勢を安定して求められません: {photo_index + 1}枚目 / {photo_path.name}\n"
+            f"確認画像: {check_path}\n"
+            "角を読めても校正できない場合があります。確認画像を見て、この写真を入力フォルダ外へ移すか撮り直し、"
+            "残り10枚以上で再実行してください。"
+        ) from error
     if (
         not np.isfinite(rms)
         or not np.isfinite(matrix).all()

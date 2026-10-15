@@ -8,6 +8,7 @@ import runpy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2 as cv
 import numpy as np
@@ -412,6 +413,57 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.assertIn("NG / 角0点", log.getvalue())
         self.assertTrue((output / "板なし.png_detected.png").is_file())
         self.assertEqual(good.read_bytes(), original)
+
+    def test_calibration_condition_error_identifies_photo_and_keeps_other_errors(self):
+        camera = runpy.run_path(
+            str(copy_current("camera_calibration.py", self.directory))
+        )
+        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
+        _, encoded = cv.imencode(".png", image)
+        paths = []
+        for index in range(12):
+            path = self.directory / f"校正写真 {index + 1:02d}.png"
+            path.write_bytes(encoded.tobytes())
+            paths.append(path)
+        output = self.directory / "確認"
+        # 先頭・途中・末尾と、写真を除いた後の読込順を確認する。
+        for current_paths, failed_index in (
+            (paths, 0),
+            (paths, 5),
+            (paths, 11),
+            (paths[1:], 0),
+        ):
+            expected_path = current_paths[failed_index]
+            error = cv.error(
+                f"CALIB_CHECK_COND - Ill-conditioned matrix for input array {failed_index}"
+            )
+            with (
+                self.subTest(index=failed_index, count=len(current_paths)),
+                contextlib.redirect_stdout(io.StringIO()) as log,
+                patch.object(cv.fisheye, "calibrate", side_effect=error),
+                self.assertRaises(ValueError) as caught,
+            ):
+                camera["calibrate"](current_paths, output)
+            self.assertIn(
+                f"{failed_index + 1}枚目 / {expected_path.name}", str(caught.exception)
+            )
+            self.assertIn(
+                f"読取確認 {failed_index + 1}: {expected_path.name}", log.getvalue()
+            )
+            self.assertIn(
+                str(output / f"{expected_path.name}_detected.png"),
+                str(caught.exception),
+            )
+            self.assertIs(caught.exception.__cause__, error)
+        self.assertEqual(len(list(output.glob("*.png"))), len(paths))
+        other_error = cv.error("Unexpected OpenCV error")
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch.object(cv.fisheye, "calibrate", side_effect=other_error),
+            self.assertRaises(cv.error) as caught_other,
+        ):
+            camera["calibrate"](paths, output)
+        self.assertIs(caught_other.exception, other_error)
 
     def test_batch_rejects_missing_empty_same_directory_and_name_collisions(self):
         rectifier = runpy.run_path(
