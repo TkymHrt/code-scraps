@@ -1,4 +1,4 @@
-"""現行5本の単発スクリプトの画像・CSV受け渡しと既知の長さを確認する."""
+"""現行の校正・補正・計測と、保管した比較版へのCSV受け渡しを確認する。"""
 
 import ast
 import contextlib
@@ -25,8 +25,8 @@ from fisheye_scene import (
 PROJECT = Path(__file__).resolve().parents[1]
 
 
-def copy_current(filename, directory, **settings):
-    source = (PROJECT / "submissions" / filename).read_text(encoding="utf-8")
+def copy_current(filename, directory, *, source_directory="submissions", **settings):
+    source = (PROJECT / source_directory / filename).read_text(encoding="utf-8")
     lines = source.splitlines(keepends=True)
     for node in reversed(ast.parse(source).body):
         if isinstance(node, ast.Assign):
@@ -52,10 +52,16 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.gui = runpy.run_path(
-            str(copy_current("initial_regions_gui.py", self.directory))
+            str(copy_current("02_measure_edge_lengths_gui.py", self.directory))
         )
         self.comparison = runpy.run_path(
-            str(copy_current("length_comparison_gui.py", self.directory))
+            str(
+                copy_current(
+                    "length_comparison_gui.py",
+                    self.directory,
+                    source_directory="sandbox/previous_submissions/comparison_variants",
+                )
+            )
         )
         self.regions = {
             cv.GC_PR_FGD: [(0.3, 0, 0.7, 1)],
@@ -206,7 +212,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_corrected_image_has_known_scale_without_metadata_csv(self):
         script = copy_current(
-            "rectify_image.py",
+            "01_rectify_images.py",
             self.directory,
             INPUT_DIRECTORY="input",
             OUTPUT_DIRECTORY="output/rectified",
@@ -243,13 +249,13 @@ class CurrentWorkflowTests(unittest.TestCase):
             self.assertAlmostEqual(width_mm, 40, delta=1)
 
     def test_board_generation_and_camera_settings_copy_remain_independent(self):
-        generator = copy_current("generate_charuco_board.py", self.directory)
+        generator = copy_current("00_1_generate_charuco_board.py", self.directory)
         with contextlib.redirect_stdout(io.StringIO()):
             runpy.run_path(str(generator), run_name="__main__")
         board_path = self.directory / "output/charuco_board.png"
         before = board_path.read_bytes()
         camera = runpy.run_path(
-            str(copy_current("camera_calibration.py", self.directory))
+            str(copy_current("00_2_calibrate_camera.py", self.directory))
         )
         size, matrix, distortion, rms, _ = camera["calibrate"](
             calibration_photos(self.directory), self.directory / "camera_detection"
@@ -266,7 +272,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         red_points = cv.inRange(check_image, (0, 0, 250), (5, 5, 255))
         self.assertGreater(cv.countNonZero(red_points), 100)
         rectifier = runpy.run_path(
-            str(copy_current("rectify_image.py", self.directory))
+            str(copy_current("01_rectify_images.py", self.directory))
         )
         settings = rectifier["rectify_image"].__globals__
         exec(camera["parameter_text"](size, matrix, distortion), settings)
@@ -286,7 +292,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_fisheye_rejects_old_coefficients_and_handles_partial_board(self):
         rectifier = runpy.run_path(
-            str(copy_current("rectify_image.py", self.directory))
+            str(copy_current("01_rectify_images.py", self.directory))
         )
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400), partial=True)
         configure(rectifier, distortion=np.zeros(5))
@@ -302,7 +308,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_rectification_keeps_photo_orientation_for_rotated_boards(self):
         rectifier = runpy.run_path(
-            str(copy_current("rectify_image.py", self.directory))
+            str(copy_current("01_rectify_images.py", self.directory))
         )
         configure(rectifier)
         dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
@@ -357,7 +363,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         nested.mkdir()
         (nested / "対象外.png").write_bytes(b"not read")
         script = copy_current(
-            "rectify_image.py",
+            "01_rectify_images.py",
             self.directory,
             INPUT_DIRECTORY="input",
             CALIBRATION_SIZE=IMAGE_SIZE,
@@ -401,7 +407,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         output_directory.mkdir(parents=True)
         (output_directory / "00_板なし.png").write_bytes(b"keep previous output")
         script = copy_current(
-            "rectify_image.py",
+            "01_rectify_images.py",
             self.directory,
             INPUT_DIRECTORY="input",
             CALIBRATION_SIZE=IMAGE_SIZE,
@@ -437,7 +443,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_calibration_saves_checks_before_rejecting_bad_or_insufficient_photos(self):
         camera = runpy.run_path(
-            str(copy_current("camera_calibration.py", self.directory))
+            str(copy_current("00_2_calibrate_camera.py", self.directory))
         )
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
         good = self.directory / "校正.png"
@@ -465,7 +471,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_calibration_condition_error_identifies_photo_and_keeps_other_errors(self):
         camera = runpy.run_path(
-            str(copy_current("camera_calibration.py", self.directory))
+            str(copy_current("00_2_calibrate_camera.py", self.directory))
         )
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
         _, encoded = cv.imencode(".png", image)
@@ -516,7 +522,7 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_batch_rejects_missing_empty_same_directory_and_name_collisions(self):
         rectifier = runpy.run_path(
-            str(copy_current("rectify_image.py", self.directory))
+            str(copy_current("01_rectify_images.py", self.directory))
         )
         main = rectifier["main"]
         settings = main.__globals__

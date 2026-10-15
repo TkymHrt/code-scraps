@@ -1,35 +1,36 @@
 # 現行の実行順
 
-2026-10-15、床置きの局所写真から左右側辺長を比較するPoCへ基本の実行順を更新しました。
-同じ材料区間の追跡や厚さの入力を必須にせず、実測長と100mmあたりの側辺長を比べます。
-設定・入力・処理・保存を各ファイルに書いた独立した5本を使います。
-2026-10-15、同じ長さCSVを使う分析の別案として `length_analysis_gui.py` を追加しました。
-同日、数値表と1枚のグラフに絞った最小比較として `length_comparison_simple_gui.py` も追加しました。
-同日、カメラ校正と画像補正を魚眼レンズ前提のOpenCV魚眼モデルへ変更しました。
-同日、校正・補正の読取確認PNGを追加し、エラー時は止めて入力を直す流れへ簡素化しました。
-その後、補正側の確認PNGは削除し、写真内の向きを保った補正PNGだけを保存する形にしました。
+2026-10-16、床置きの局所写真から左右側辺長を比較するPoCに使う6本へ整理しました。
+同じ材料区間の追跡を必須にせず、実測長と100mmあたりの側辺長を比べます。
+板作成・カメラ校正・補正・計測の4本と、比較GUIの2本があります。
+比較は厚さなしの局所版か、実測厚さと累積圧下率も使う厚さ版を選びます。
+`00_1`・`00_2` は初回準備、`01`～`03` は撮影後に使う番号です。同じ番号の比較GUIは用途に応じて選びます。
+各ファイルに設定・入力・処理・保存を書き、校正とレンズ歪み補正にはOpenCV魚眼モデルを使います。
 自作モジュールや一括実行スクリプトは使わず、画像とCSVで結果を渡します。
 
-| 順 | スクリプト | 入力 → 出力 | 実行する時期 |
+| 番号 | スクリプト | 入力 → 出力 | 実行する時期 |
 | --- | --- | --- | --- |
-| 1 | [generate_charuco_board.py](generate_charuco_board.py) | 板の設定 → 印刷用PNG | 板を作るとき |
-| 2 | [camera_calibration.py](camera_calibration.py) | 校正板の複数写真 → 読取確認PNG・コピペするカメラ係数 | 撮影条件を決めたとき |
-| 3 | [rectify_image.py](rectify_image.py) | 撮影画像フォルダ → 写真内の向きを保った固定倍率の補正PNG群 | 写真をまとめて補正 |
-| 4 | [initial_regions_gui.py](initial_regions_gui.py) | 補正PNG・矩形・区間 → 長さCSV・確認PNG | 各撮影 |
-| 5 | [length_comparison_local_gui.py](length_comparison_local_gui.py) | 複数の長さCSV → 区間長・左右長さの表、実測長／100mm換算のグラフ | 局所区間を比較するとき |
+| 00_1 | [00_1_generate_charuco_board.py](00_1_generate_charuco_board.py) | 板の設定 → 印刷用PNG | 板を作るとき |
+| 00_2 | [00_2_calibrate_camera.py](00_2_calibrate_camera.py) | 校正板の複数写真 → 読取確認PNG・コピペするカメラ係数 | 撮影条件を決めたとき |
+| 01 | [01_rectify_images.py](01_rectify_images.py) | 撮影画像フォルダ → 写真内の向きを保った固定倍率の補正PNG群 | 写真をまとめて補正 |
+| 02 | [02_measure_edge_lengths_gui.py](02_measure_edge_lengths_gui.py) | 補正PNG・矩形・区間 → 長さCSV・確認PNG | 各撮影 |
+| 03 | [03_compare_edge_lengths_gui.py](03_compare_edge_lengths_gui.py) | 複数の長さCSV → 区間長・左右長さの表、実測長／100mm換算のグラフ | 局所区間を比較するとき |
+| 03（厚さあり） | [03_compare_edge_lengths_with_thickness_gui.py](03_compare_edge_lengths_with_thickness_gui.py) | 同じ長さCSV・初期厚さ・各撮影の厚さ → 撮影順／累積圧下率のグラフ | 厚さとの関係も比較するとき |
 
 `opencv-grabcut` フォルダから実行します。各スクリプトの相対パスは、そのファイルがあるフォルダを基準にします。
 
 ```powershell
 uv sync
-uv run submissions/generate_charuco_board.py
-uv run submissions/camera_calibration.py
-uv run submissions/rectify_image.py
-uv run submissions/initial_regions_gui.py
-uv run submissions/length_comparison_local_gui.py
+uv run submissions/00_1_generate_charuco_board.py
+uv run submissions/00_2_calibrate_camera.py
+uv run submissions/01_rectify_images.py
+uv run submissions/02_measure_edge_lengths_gui.py
+uv run submissions/03_compare_edge_lengths_gui.py
+# 厚さとの関係も見る場合は、比較をこちらで行う
+uv run submissions/03_compare_edge_lengths_with_thickness_gui.py
 ```
 
-## 1. 板を作る
+## 00_1. 板を作る（初回準備）
 
 ChArUco板は横7・縦5マス、1マス30mm、マーカー18mm、辞書 `DICT_4X4_50` です。
 `output/charuco_board.png` を保存します。板本体210×150mm、余白込み230×170mmです。
@@ -37,7 +38,7 @@ ChArUco板は横7・縦5マス、1マス30mm、マーカー18mm、辞書 `DICT_4
 印刷時は自動縮小を避け、実物の1マスが30mmであることを測って確認します。
 寸法を変える場合は、板生成・カメラ校正・画像補正の3本の設定を同じ仕様へ手で揃えます。
 
-## 2. カメラ係数を求めて貼る
+## 00_2. カメラ係数を求めて貼る（初回準備）
 
 同じ撮影モード・画角・解像度で、板の位置・傾き・距離を変えた写真を10枚以上用意します。
 魚眼の歪みが残った画像を使います。中央だけでなく上下左右の周辺にも板を写し、ピントと角の読取りを確認します。
@@ -51,7 +52,7 @@ ChArUco板は横7・縦5マス、1マス30mm、マーカー18mm、辞書 `DICT_4
 点とIDが板の正しい位置に付いているか、画像を開いて確認します。
 写真が10枚未満でも、読取確認PNGを保存してから枚数不足で止まります。
 
-`camera_calibration.py` の表示から、次の3設定を `rectify_image.py` の冒頭へコピペします。
+`00_2_calibrate_camera.py` の表示から、次の3設定を `01_rectify_images.py` の冒頭へコピペします。
 
 ```python
 CALIBRATION_SIZE = ...
@@ -76,13 +77,13 @@ DIST_COEFFS = ...
 エラー時には係数を表示せず停止します。写真の除外と再実行は運用で行います。
 番号と条件数確認の仕様は [OpenCVの実装](https://github.com/opencv/opencv/blob/5.0.0/modules/calib/src/fisheye.cpp) と [魚眼校正API](https://docs.opencv.org/5.0/main_modules/calib3d_fisheye.html) に基づきます。
 
-## 3. フォルダの写真を一括補正する
+## 01. フォルダの写真を一括補正する
 
 板を試料の計測面と同じ高さ・同じ平面に置きます。
 板の位置・写真内での向きは任意ですが、試料を隠さず、角を縦横に6点以上読めるようにします。
 写真で見えていた向きを保つため、**試料の長手方向は撮影時に画像の縦方向へ揃えます**。計測GUIは開始y・終了yで区間を選びます。
 
-`rectify_image.py` の冒頭でフォルダを指定して実行します。
+`01_rectify_images.py` の冒頭でフォルダを指定して実行します。
 
 ```python
 INPUT_DIRECTORY = "input"
@@ -120,9 +121,9 @@ Linearなどで既に歪み補正された画像や、撮影ごとに画角が�
 補正後に黒い余白や周辺の欠けが出る場合があります。補正範囲が大きすぎる場合は安全のため保存を止めるので、撮影距離・角度・固定倍率を見直します。
 魚眼モデルの仕様は [OpenCV公式ドキュメント](https://docs.opencv.org/5.0/main_modules/calib3d_fisheye.html) を参照してください。
 
-## 4. 初期指定GUIで長さCSVを作る
+## 02. 計測GUIで長さCSVを作る
 
-`initial_regions_gui.py` で、上部から**補正済みPNG**を読み込み、左サイドバーと右の画像で操作します。
+`02_measure_edge_lengths_gui.py` で、上部から**補正済みPNG**を読み込み、左サイドバーと右の画像で操作します。
 画像選択は `output/rectified` から始まります。
 ファイル名とサイズだけを表示し、エラー・ステータスは読み込みボタンの右端へ表示します。
 
@@ -177,17 +178,17 @@ GUIで未補正画像や違う倍率の画像を判定する仕組みはあり�
 実Tkで数値プレビュー、230mmの計測、保存、矩形の個別削除・全削除、画像の再読込を確認しました。
 変更前のコード、比較記録、画面画像は `tests/results/readability_20261015/` にあります。
 
-## 5. 局所区間の左右長さを比較する
+## 03. 局所区間の左右長さを比較する
 
 ```powershell
-uv run submissions/length_comparison_local_gui.py
+uv run submissions/03_compare_edge_lengths_gui.py
 ```
 
 1. 「CSVを追加」で、計測GUIから保存した長さCSVを比較したい順に追加する。
 2. 自動表示される表で、CSV名・区間長・左右側辺長を確認する。
 3. 「実測長」「100mm換算」でグラフを切り替える。左右の長さと、灰色の破線「基準（直線の目安）」を表示する。表は実測値のまま表示する。
 4. 不要なCSVは表で選び、「選択したCSVを削除」を押す。複数選択もできる。
-5. 「比較CSVを保存」「グラフを保存」で結果を保存する。
+5. 「グラフを保存」で、表示中のグラフをPNGに保存する。
 
 初期長さ・厚さ・理想長は入力しません。既存CSVの開始・終了yと倍率を使います。
 
@@ -202,18 +203,18 @@ uv run submissions/length_comparison_local_gui.py
 基準線は、実測長では各CSVの区間長、100mm換算では100mmの水平線です。
 画面と保存PNGの両方へ表示します。厚さから予測した伸びの理想値とは別の目安です。
 
-横軸はCSV名・追加順です。追加した順をパス番号へ自動変換しません。
+横軸はCSV名・追加順で、左右それぞれの点を線で結びます。追加した順をパス番号へ自動変換しません。
 同じパスの複数箇所は `p01_a_lengths.csv`・`p01_b_lengths.csv` などで区別できます。
 複数選択時の順序はダイアログの返す順です。順番を確実に指定する場合は1件ずつ追加します。
 同じCSVの追加は重複させず、異なるCSVなら同じ画像の別区間も比較できます。
 
-既定の保存名は比較表が `length_comparison_local.csv`、グラフが `length_comparison_local.png`、
+既定の保存名はグラフが `length_comparison_local.png`、
 100mm換算のグラフが `length_comparison_local_100mm.png` です。
-比較CSVには追加順・CSV名・入力CSVと補正画像のパス・倍率・開始/終了y・区間長・左右実測長・左右100mm換算値を保存します。
-グラフの表示モードによらず、比較CSVには実測長と100mm換算値の両方を保存します。
+比較CSVは出力しません。計測元のCSVは引き続き入力に使います。
 
 比較時には画像を読み直しません。確認PNGは別に開いてグラフと照合できます。
-入力CSVを外部で直した場合は「比較し直す」で読み直します。読込みに失敗した場合は古い結果を消し、保存を無効にします。
+CSVの追加・削除で表とグラフを自動更新します。入力CSVを外部で直した場合は、そのCSVを外して追加し直します。
+読込みに失敗したCSVは追加しません。比較全体の読込みに失敗した場合は古い結果を消し、保存を無効にします。
 入力CSV・補正画像への上書きは止めます。計測CSVの形式を変える必要はありません。
 
 ```powershell
@@ -229,274 +230,90 @@ uv run tests/verify_current_workflow.py --out tests/results/measurement_new
 比較画面と出力は `tests/results/local_comparison_poc_20261015/`、既存工程の操作確認は `tests/results/local_measurement_workflow_20261015_v2/` にあります。
 実機・本番画像の精度や、パス間の形状変化は未確認です。
 
-## 厚さと理想長を使う従来の比較
+2026-10-16、再比較ボタンと比較CSV出力を削除しました。関連5件と実Tkでの追加・削除による自動更新、PNG保存、20件表示を確認しています。
+今回の画面と出力は `tests/results/local_comparison_simple_20261016/` にあります。
 
-`length_comparison_gui.py` は、対応する同じ材料区間と厚さを使う別案として残しています。
+## 03（厚さあり）. 厚さと累積圧下率を使って比較する
 
-「CSVを追加」で計測GUIの長さCSVを複数追加し、各行へ撮影時の厚さを直接入力します。
-左サイドバーに初期区間長・初期厚さを入力し、「比較する」を押します。
-行の選択や適用ボタンは使いません。間違えたCSVは、その行の「削除」で除外できます。
+`03_compare_edge_lengths_with_thickness_gui.py` は、局所比較GUIと同じ計測CSVを使う独立した別スクリプトです。
+初期厚さと各撮影の実測厚さを入力し、厚さの減少と左右側辺長の関係を確認します。
 
-**追加した順が撮影順**です。複数選択では選択ダイアログが返した順になります。
-順番を明確に指定するときは、CSVを1つずつ追加します。
-撮影名は番号とファイル名で表示し、並べ替え・名前編集・フルパス表示は置きません。
+```powershell
+uv run submissions/03_compare_edge_lengths_with_thickness_gui.py
+```
 
-幅方向の変化を無視し、幅一定・体積一定の基準スラブを使います。
+1. 「CSVを追加」で、計測GUIから保存した長さCSVを比較したい順に追加する。
+2. 「初期厚さ (mm)」と、各CSVの行の「厚さ (mm)」へ数値を入力する。
+3. 入力が揃うと、各行の区間長・左右実測長・累積圧下率とグラフが自動表示される。
+4. グラフの実測長／100mm換算、横軸の撮影順／累積圧下率を切り替える。
+5. 「グラフを保存」で表示中のグラフをPNGに保存する。不要なCSVは行の「削除」で外す。
 
 ```text
-理想の片側長 = 初期区間長 × 初期厚さ ÷ 各回の厚さ
-理想の左右合計 = 理想の片側長 × 2
+累積圧下率(%) = (初期厚さ − 現在の厚さ) ÷ 初期厚さ × 100
 ```
 
-実寸・理想との差・差率・前回との差を表のタブで確認します。
-「推移グラフ」タブも同じ画面内にあります。比較CSVとPNGグラフの保存先は既定で `output` です。
-条件やCSVを変えたら結果を無効にし、比較し直してから保存します。
-比較時は画像を読み直さず、保存済みCSVだけで計算します。
-各画像のy座標を揃える必要はありませんが、**対応する同じ材料区間**を計測してください。
-左右側辺の凹凸を含む長さを、滑らかな理想区間長と比較する値です。
+初期厚さ10mmなら、厚さ10・8・6mmに対する累積圧下率は0・20・40%です。
+初期長さや理想伸びは計算しません。区間長・左右長さ・100mm換算の定義は局所比較GUIと同じです。
+同じパスの複数箇所に同じ代表厚さを入力しても比較できます。区間近くの実測値かパス代表値かは撮影記録へ残します。
+現在の厚さが初期厚さを上回った場合は、計算結果を負の圧下率として表示します。
 
-## GUIなしでシンプルグラフを保存
+撮影順の横軸ではCSV名を、累積圧下率の横軸では数値の位置を使います。
+どちらもCSV追加順に点を線で結びます。同じ圧下率の点は縦に結ばれ、圧下率が前後する追加順では線も折り返します。
+線は採取した区間の違いを見比べる目安で、同じ材料区間を追跡した変化ではありません。撮影順に1件ずつ追加すると順番を確実に指定できます。
+100mm換算の基準は100mmの灰色破線です。実測長の基準は各CSVの区間長を灰色の破線で結びます。
+各行の区間長と左右側辺長は、グラフのモードにかかわらず実測値を表示します。
 
-`length_comparison_simple.py` は、現行の長さCSVから左側辺・右側辺・理想片側長の3本線を描き、1枚のPNGに保存する単独スクリプトです。
-ファイル選択ダイアログやグラフのウィンドウは開きません。既存のMatplotlibだけで描画し、自作モジュールへ依存しません。
+初期厚さ・各行の厚さ・CSVの追加や削除に合わせて自動で再計算します。
+空欄・不正値・CSVの読込失敗時は古いグラフ・計算値を消し、入力を直すと再表示します。
+入力CSVと補正画像は変更しません。厚さはこのGUIで入力するため、既存の計測CSV形式はそのまま使えます。
+厚さの入力値は終了時に保存されません。撮影記録にも値を残してください。
 
-コード冒頭の初期区間長・初期厚さ・入力CSVと各撮影の厚さを、実際の値へ置き換えます。初期値とファイル名は記入例です。
-
-```python
-INITIAL_LENGTH_MM = 100.0
-INITIAL_THICKNESS_MM = 10.0
-INPUT_CSVS = [
-    ("output/shot1_lengths.csv", 10.0),
-    ("output/shot2_lengths.csv", 5.0),
-]
-OUTPUT_PATH = "output/length_comparison_simple.png"
-```
+比較CSVは出力せず、表示中の軸と長さモードのグラフをPNGにします。
+既定名は `length_comparison_thickness.png` で、累積圧下率の横軸では `_reduction`、100mm換算では `_100mm` が付きます。
+例えば両方を切り替えた場合は `length_comparison_thickness_reduction_100mm.png` です。
 
 ```powershell
-# opencv-grabcutフォルダから実行
-uv run submissions/length_comparison_simple.py
+uv run python -m unittest discover -s tests -p test_length_comparison_thickness_gui.py
+uv run tests/verify_length_comparison_thickness_gui.py --out tests/results/thickness_comparison_new
 ```
 
-`INPUT_CSVS` に書いた順が撮影順です。相対パスはスクリプトのある `submissions/` を基準にします。
-計測GUIの1画像1行のCSVから `image_path`・`left_mm`・`right_mm` を読み、画像自体は読み直しません。
-理想片側長は幅一定・体積一定として、`初期区間長 × 初期厚さ ÷ 撮影時の厚さ` で求めます。
-横軸は撮影順、縦軸は長さ(mm)です。CSVと厚さ・左右・理想の対応はターミナルにも表示します。
-保存するのはPNGだけです。同じ保存先は再実行時に上書きし、入力CSV・元画像への上書きは止めます。
-入力・値に問題があればエラーで止まるので、コードの設定またはCSVを直して再実行します。
+操作検証では `tests/results/` 内のまだ存在しない保存先を指定します。
+確認には数値CSVを使います。実材料の厚さと形状の関係は、今後の実測で確認します。
+2026-10-16、累積圧下率・4表示・線の接続・PNG保存・入力保護など新規5件と局所版5件の関連10件が通りました。
+実Tkで厚さ入力の自動反映・表示切替・保存・削除・20件表示、不正入力や読込失敗時の保存無効化を確認しました。
+960×640でも操作でき、確認画面と保存結果は `tests/results/thickness_comparison_simple_20261016/` にあります。
+Ruff・format・tyも通過しています。
 
-旧版のGUIなし棒グラフは `sandbox/previous_submissions/04_compare_lengths.py` にあります。こちらは旧3行形式のpx CSVと基準との差分を扱います。
+## 保管したコード
 
-2026-10-15、既知の3撮影で左・右・理想の値、1撮影と20撮影の順序、不正値・入力保護を含む3件の自動試験を確認しました。
-Tkinterを使えない状態で単独コピーを別プロセスから実行し、PNG保存を確認しています。Ruff・format・tyも通過しました。
-生成した確認用グラフは `tests/results/headless_graph_20261015/output/length_comparison_simple.png` です。実測データの比較は未確認です。
+現在のPoCでは上記6本を使います。理想長との比較・分析・GUIなし版の5本は
+[sandbox/previous_submissions/comparison_variants](../sandbox/previous_submissions/comparison_variants/README.md) へ移動し、説明もまとめました。
+それ以前の幅・凹み候補・旧校正などは [previous_submissions](../sandbox/previous_submissions/README.md)、
+題材直下にあった旧7本は [previous_scripts](../sandbox/previous_scripts/README.md) に保管しています。
+入力・出力・過去の結果の保存場所は維持しています。
 
-## 厚さなしで左右の長さをグラフに保存
-
-`length_comparison_no_thickness.py` は、現行の長さCSVから左右側辺長の2本線をPNGへ保存するGUIなしの単独スクリプトです。
-厚さや初期値の設定は不要で、理想長は計算しません。
-
-コード冒頭のCSVを実際のファイル名へ置き換え、撮影順に並べます。
-
-```python
-INPUT_CSVS = [
-    "output/shot1_lengths.csv",
-    "output/shot2_lengths.csv",
-]
-OUTPUT_PATH = "output/length_comparison_no_thickness.png"
-```
-
-```powershell
-# opencv-grabcutフォルダから実行
-uv run submissions/length_comparison_no_thickness.py
-```
-
-横軸は指定した撮影順、縦軸はCSVに保存された側辺長(mm)です。CSV名と左右の値をターミナルにも表示します。
-相対パスは `submissions/` を基準にします。計測GUIの1画像1行のCSVから `image_path`・`left_mm`・`right_mm` を読み、元画像は不要です。
-PNGは再実行時に上書きします。入力CSV・元画像への上書きや不正値は止めるので、設定やCSVを直して再実行します。
-
-2026-10-15、厚さ列を持たない既知の数値CSVで左右の値、1撮影・20撮影の指定順、不正値と入力保護を確認しました。
-Tkinterを使えない状態で単独コピーを実行し、PNG保存も確認しています。比較関連の自動試験19件とRuff・format・tyが通過しました。
-確認用PNGは `tests/results/no_thickness_graph_20261015/output/length_comparison_no_thickness.png` です。実測データでの比較は未確認です。
-
-## 最小比較GUI：厚さから理想長を計算
-
-`length_comparison_simple_gui.py` は、初期区間長・初期厚さと各撮影の厚さから理想片側長を求め、
-CSVの左右側辺長と比較する独立スクリプトです。数値表と1枚の推移グラフに絞っています。
-
-```powershell
-# opencv-grabcutフォルダから実行
-uv run submissions/length_comparison_simple_gui.py
-```
-
-1. 「初期区間長 (mm)」「初期厚さ (mm)」を入力する。
-2. 「CSVを追加」で、計測GUIの長さCSVを撮影順に追加する。
-3. 各CSVの行に、撮影時の厚さをmmで入力する。
-4. 「比較する」を押す。数値表には撮影ごとの理想長・左右側辺長・理想との差、グラフには左・右・理想長の3本を表示する。
-5. 必要に応じて「比較CSVを保存」「グラフを保存」を使う。
-
-幅一定・体積一定を仮定して計算します。
-
-```text
-理想片側長 = 初期区間長 × 初期厚さ ÷ 撮影時の厚さ
-左右の理想差 = それぞれの側辺長 − その撮影の理想片側長
-```
-
-例えば初期区間長100mm・初期厚さ10mmの場合、厚さ5mmでの理想片側長は200mmです。
-すべての長さ・厚さ・差の単位はmmです。
-撮影順はCSV追加順で、複数選択ではダイアログが返した順になります。
-順番を確実に指定するときは1枚ずつ追加します。不要なCSVはその行の「削除」を押します。
-初期条件・厚さ・CSVを変更すると結果を消し、再比較するまで保存を無効にします。
-
-読み込むのは1画像1行の長さCSVです。`image_path`・`left_mm`・`right_mm` を使い、
-左右合計、差率、前回差、区間長や形状指標は計算しません。画像の読み直しや新しい依存関係もありません。
-理想片側長は撮影ごとの厚さで変わり、その撮影の左右で共通です。
-既定の保存先は `output`、名前は `length_comparison_simple.csv` と `length_comparison_simple.png` です。
-比較CSVには撮影名・入力CSV・画像パス・初期区間長・初期厚さ・撮影時の厚さ・左右側辺長・理想片側長・左右の理想差を保存します。
-入力CSV・補正画像への上書きは止めます。
-
-```powershell
-uv run python -m unittest discover -s tests -p test_length_comparison_simple_gui.py
-uv run tests/verify_length_comparison_simple_gui.py
-```
-
-2026-10-15、既知の数値CSVによる4件の自動試験で、厚さから求める理想長との比較、左右と理想長の推移、
-1画像と20画像、不正な初期条件・厚さ、単独コピー実行、CSV/PNG保存と入力保護を確認しました。
-実Tkで初期条件・各行の厚さ入力、変更後の再比較、保存、削除、20撮影表示と、1060×720・最小960×640の画面を確認しました。
-Ruffの検査・整形確認とtyの型検査も通過しています。
-確認画像と保存結果は `tests/results/length_comparison_simple_thickness_20261015/` にあります。
-本番試料を使った比較は未確認です。
-
-## 長さ分析の別案：伸びと側辺形状を分ける
-
-`length_analysis_gui.py` は既存の比較GUIとは別の独立スクリプトです。
-`initial_regions_gui.py` の長さCSVを使い、理想長・区間長・左右側辺長の数値表、
-伸びと左右側辺形状の推移、直前パスからの指標の変化を一画面に表示します。
-新しい依存関係や他の自作モジュールは使いません。
-
-```powershell
-# opencv-grabcutフォルダから実行
-uv run submissions/length_analysis_gui.py
-```
-
-1. 「CSVを追加」で、対応する同じ材料区間の長さCSVを圧延パス順に追加する。
-2. 初期区間長・初期厚さと、各行の撮影時の厚さをmmで入力する。
-3. 「分析する」を押し、上の数値表と下の4枚のグラフを確認する。
-4. 「分析CSVを保存」「分析グラフを保存」で結果を残す。
-
-追加順が横軸のパス番号です。初期状態のCSVも追加すれば、実測した初期形状からの推移を確認できます。
-複数選択時はダイアログの返した順になるため、順番を確実に指定するときは1枚ずつ追加します。
-厚さ・初期条件・CSVを変更すると数値表とグラフを消し、再分析するまで保存を無効にします。
-入力行と数値表にはスクロールがあり、多数のパスも同じ画面で扱います。
-
-区間長は圧延方向（補正画像のy方向）に投影した、開始・終了の画素中心間の距離です。
-CSVの両端の行を含めて計測していても、行数の `+1` は加えません。
-
-```text
-理想長 L* = 初期区間長 × 初期厚さ ÷ 各パスの厚さ
-区間長 D = (end_y − start_y) × mm_per_px
-伸びの差率 (%) = (D − L*) ÷ L* × 100
-側辺の余分な経路長 (mm) = 側辺長 S − D
-左右の側辺形状 (%) = (S − D) ÷ D × 100
-直前パスからの変化 (ポイント) = 今回の指標 (%) − 前回の指標 (%)
-```
-
-例えば理想長200mm・区間長210mm・左側辺210mmなら、伸び差率は+5%、左形状は0%です。
-理想長200mm・区間長200mm・左側辺210mmなら、伸び差率は0%、左形状は5%です。
-区間の伸びと、側辺が直線より長い経路になった分を分けて読みます。
-側辺形状には曲がりや凹凸が入り、クラック数や損傷率を表す指標ではありません。
-
-グラフの上段は伸び差率と左右の側辺形状、下段はそれぞれの直前パスからの変化です。
-5%から10%への変化は+5ポイントとなり、1回目は前回がないため棒を表示しません。
-実寸が倍になっても側辺形状の割合が同じなら、その指標の前回変化は0です。
-
-分析CSVは入力の長さ・倍率・区間に加えて、以下を保存します。
-
-| 列 | 内容・単位 |
-| --- | --- |
-| `pass_number`, `sample_id` | 追加順の番号、番号とCSV名 |
-| `initial_length_mm`, `initial_thickness_mm`, `thickness_mm` | 初期条件・各パスの厚さ (mm) |
-| `ideal_length_mm`, `interval_length_mm` | 理想長・区間長 (mm) |
-| `stretch_delta_mm`, `stretch_pct` | 区間長−理想長 (mm)、伸び差率 (%) |
-| `left_excess_mm`, `right_excess_mm` | 左右の側辺長−区間長 (mm) |
-| `left_shape_pct`, `right_shape_pct` | 左右の側辺形状 (%) |
-| `previous_id` | 直前のCSVの識別名。1回目は空欄 |
-| `previous_delta_stretch_pp` | 伸び差率の前回変化 (ポイント) |
-| `previous_delta_left_shape_pp`, `previous_delta_right_shape_pp` | 左右形状の前回変化 (ポイント) |
-
-前回変化の1回目はCSVでも空欄です。既定の保存先は `output`、名前は `length_analysis.csv` と
-`length_analysis.png` です。入力CSV・補正画像への上書きは止めます。
-分析時に画像は読み直さず、CSVの開始・終了yと倍率から区間長を求めます。
-幅一定・体積一定を仮定し、区間の対応と輪郭が正しく与えられるレベル1の分析です。
-幅・中心線・局所的な凹みの解析や、区間選択・撮影・抽出の誤差評価は含めません。
-
-### 新規分析GUIの検証
-
-```powershell
-uv run python -m unittest discover -s tests -p test_length_analysis_gui.py
-uv run tests/verify_length_analysis_gui.py
-```
-
-2026-10-15、既知の寸法による6件の自動試験で、伸びと側辺形状の分離、区間長の端点間隔、
-割合の前回差、1パスと20パス、入力の不整合、単独コピー実行、CSV/PNG保存、入力保護を確認しました。
-実Tkで初期条件・厚さの入力、再分析、保存、20パス表示、削除を確認しました。
-1320×920と最小1100×840の画面も確認し、結果と画面画像は `tests/results/length_analysis_20261015/` に保存しています。
-既存分を含む全93件の自動試験、Ruffの検査と整形確認、tyの型検査も通過しました。
-これらは既知の数値CSVによる確認であり、本番試料の圧延前後の計測精度は未確認です。
-
-## 退避したコード
-
-幅・基準線・凹み候補・エッジ表示、旧手動校正、設定コピー用GUI、旧CSV換算は
-[sandbox/previous_submissions](../sandbox/previous_submissions/README.md) へ移動しました。
-変更した3本の旧版と、板生成・カメラ校正の旧時点のコピーも、過去の検証を再現するため同じ場所へ保存しています。
-題材直下の旧計測・比較7本は [sandbox/previous_scripts](../sandbox/previous_scripts/README.md) へ移動しました。
-現行5本の標準出力先は `submissions/output/` です。カメラ校正の係数は従来どおり画面表示してコピペします。
-過去の `submissions/results/` の内容は保管し、検証用の出力は従来どおり `tests/results/` へ保存します。
-
-## 検証
+## 検証と初回撮影
 
 ```powershell
 uv run python -m unittest discover -s tests
-uv run tests/verify_current_workflow.py --out tests/results/current_workflow_new
+uv run tests/verify_current_workflow.py --out tests/results/poc_workflow_new
+uv run tests/verify_length_comparison_local_gui.py --out tests/results/local_comparison_new
+uv run tests/verify_length_comparison_thickness_gui.py --out tests/results/thickness_comparison_new
 uv run ruff check .
 uv run ruff format --check .
 uv run ty check .
 ```
 
-読取確認PNGの追加時点では、基本工程12件・旧版77件・分析GUI6件・最小比較GUI4件、合計99件を確認しています。
-実Tkでの矩形操作・区間変更・保存・3撮影の比較は `verify_current_workflow.py` で確認します。
-12枚の合成魚眼写真からカメラ係数を算出し、独立した補正スクリプトへ貼って2枚を一括補正する工程も含みます。
-破損画像・板なし・出力名の衝突、厚さの直接入力・再比較・20CSVの追加と削除も確認しています。
+操作検証は `tests/results/` 内のまだ存在しないフォルダを指定します。
+`verify_current_workflow.py` は、合成魚眼写真12枚でのカメラ校正・2枚の一括補正、
+生成試料3条件の実Tkでの計測とCSV保存、そのCSVの局所比較を確認します。
+比較GUIごとの操作検証では、自動更新・表示切替・PNG保存・削除・20件表示を確認します。
+保管版の自動試験も引き続き移動先を参照して実行できます。
+過去の検証結果は [PROGRESS.md](../PROGRESS.md) にあります。
+2026-10-16の整理後に全118件と、現行工程・厚さGUIの実Tk操作、Ruff・format・tyが通りました。
+今回の結果は `tests/results/poc_cleanup_workflow_20261016/` と `tests/results/poc_cleanup_thickness_20261016/` にあります。
 
-2026-10-15、`rectify_image.py` の確認PNG・描画処理・保存用の補助関数を外し、補正PNGだけを保存する形へ変更しました。
-魚眼補正後の板中央の横軸の向きに合わせて平面座標を置き、写真全体を板基準へ回転させないようにしました。
-正向き・90度・180度・270度・斜めの5条件で、試料と板の位置関係、画像の横長方向、150×40mmの寸法を確認しました。
-関連14件、Ruff・format・tyが通り、独立CLIから実Tkでの計測・CSV保存・3撮影の比較も確認しました。
-寸法確認は向きのある最小外接矩形の辺長を使い、補正した2画像は長さ150.870・150.312mm、幅40.677・40.360mmでした。
-結果は `tests/results/rectify_orientation_20261015/`、試験ログは `tests/results/rectify_orientation_20261015_unittest.log` です。
-撮影時の向きを残すため、区間と初期指定は補正後の画像に合わせて選び直します。実機での向き・精度は未確認です。
-
-2026-10-15、校正条件エラーへの対応として、OpenCVの0始まりの番号を元写真の名前・確認PNGの場所へ変換して表示するようにしました。
-同じ形式のエラーを模擬し、先頭・途中・末尾・2桁の番号と、写真を除いた後の読込順でも名前と確認PNGが対応すること、別のOpenCVエラーは元のまま通知することを含む関連13件とRuff・format・tyを確認しました。
-既存の合成写真による校正・補正も含みます。ログは `tests/results/calibration_condition_20261015_unittest.log` です。
-提供されたのはエラー画面の写真のため、実機写真での原因特定・再校正は未確認です。
-
-2026-10-15、読取確認画像の追加と簡素化後の全99件、Ruff・format・tyが通りました。
-マーカー枠・赤い角とID・点数の描画、板なしのNG画像保存、10枚未満でも確認画像を保存する動作、停止後に入力を直して再実行する流れを確認しました。
-独立CLIで校正写真12枚と補正写真5枚の確認PNGを作り、校正・補正それぞれの表示を目視確認しました。
-実Tkでの計測・CSV保存・3撮影の比較も通り、補正後の既知寸法と生成試料の側辺長は簡素化前と一致しました。
-結果は `tests/results/detection_checks_20261015/`、全試験のログは `tests/results/detection_checks_20261015_unittest.log` です。実機での読取精度は未確認です。
-
-2026-10-15、魚眼モデルへ変更後の全98件、Ruffの検査・整形確認、tyの型検査が通りました。
-既知の魚眼係数で5構図、合成写真から求めた係数で中央・周辺の3構図を補正し、板に使わない150×40mmの試料を各寸法1mm以内で確認しました。
-一部が隠れた板と、通常モデルの5係数を拒否する動作も確認しました。
-独立CLIでの校正RMSは0.2538px、補正した2画像の150mm区間の上下間隔は150.25・150.50mm、40mm幅の行幅中央値はともに39.50mmでした。
-さらに、魚眼投影した生成試料3条件で実Tkの計測・保存・比較・20CSVの操作を確認しました。画面撮影は省略しています。
-結果は `tests/results/fisheye_workflow_20261015/`、全試験のログは `tests/results/fisheye_20261015_unittest.log` です。
-同じ魚眼モデルで合成した画像による動作確認であり、実機へのモデルの適合性や測定精度の保証ではありません。
-
-2026-10-14、変更前の通常モデルでは、元の生成画像に仮の板を隣接させ、正対・遠近・レンズ歪みの3条件を確認しました。
-正対の仮算出は左314.873mm、右323.533mm、合計638.406mmです。
-今回の結果とGUI確認画像は `tests/results/simple_ui_20261014/` に保存しています。
-板4px/mm・同一平面・カメラ係数・理想区間230mm・全撮影厚さ10mmは仮定です。
-同じ生成試料の撮影条件を変えた確認で、圧延前後の実測ではありません。
-実カメラの校正精度と、本番試料での抽出精度は未確認です。
+PoCの処理は一通り揃っています。実カメラでの校正と、本番画像での寸法・抽出精度は未確認です。
+初回は [撮影手順](../CAPTURE.md) に沿って板の実寸を確認し、カメラ係数を求めて補正側へ貼ります。
+板と試料の計測面の高さ、補正・計測の `MM_PER_PX` を揃えます。
+既知寸法と同じ条件での撮り直しを確認してから、各パスの区間を比較します。

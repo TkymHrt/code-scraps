@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 import cv2 as cv
 import numpy as np
 
-# rectify_image.pyで出力した補正画像と同じ倍率にする。
+# 01_rectify_images.pyで出力した補正画像と同じ倍率にする。
 MM_PER_PX = 0.25
 OUTPUT_DIRECTORY = "output"
 ITERATIONS = 5

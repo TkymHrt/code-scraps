@@ -1,7 +1,6 @@
-"""実Tkで局所比較GUIの追加・削除・換算切替・保存・再読込を確認する。"""
+"""実Tkで局所比較GUIの追加・削除・自動更新・換算切替・PNG保存を確認する。"""
 
 import argparse
-import csv
 import runpy
 import tkinter as tk
 from pathlib import Path
@@ -32,7 +31,7 @@ def main():
         sample_csv(output, "p01_b", 100, 108, 106),
     ]
     originals = [path.read_bytes() for path in paths]
-    script = copy_current("length_comparison_local_gui.py", output)
+    script = copy_current("03_compare_edge_lengths_gui.py", output)
     gui = runpy.run_path(str(script))
     root = tk.Tk()
     root.attributes("-alpha", 0)
@@ -64,7 +63,7 @@ def main():
             ):
                 invoke("CSVを追加")
 
-        assert buttons["比較CSVを保存"].instate(["disabled"])
+        assert set(buttons) == {"CSVを追加", "選択したCSVを削除", "グラフを保存"}
         assert buttons["グラフを保存"].instate(["disabled"])
         assert not any(isinstance(w, ttk.Entry) for w in widgets)
         add(paths)
@@ -89,22 +88,13 @@ def main():
         assert table.item("1", "values")[2] == "208.000"
         if not args.no_screenshots:
             capture(root, output / "comparison_100mm_gui.png")
-        for label, filename in (
-            ("比較CSVを保存", "comparison.csv"),
-            ("グラフを保存", "comparison_100mm.png"),
-        ):
-            path = output / filename
-            with patch.object(
-                filedialog, "asksaveasfilename", return_value=str(path)
-            ) as dialog:
-                invoke(label)
-            assert path.exists()
-            if path.suffix == ".png":
-                assert dialog.call_args.kwargs["initialfile"].endswith("_100mm.png")
-        with (output / "comparison.csv").open(encoding="utf-8-sig", newline="") as file:
-            saved = list(csv.DictReader(file))
-        assert saved[1]["left_per_100mm"] == "104"
-        assert saved[1]["left_mm"] == "208"
+        path = output / "comparison_100mm.png"
+        with patch.object(
+            filedialog, "asksaveasfilename", return_value=str(path)
+        ) as dialog:
+            invoke("グラフを保存")
+        assert path.exists()
+        assert dialog.call_args.kwargs["initialfile"].endswith("_100mm.png")
         radios["実測長"].invoke()
         root.update()
         with patch.object(
@@ -116,19 +106,20 @@ def main():
         if not args.no_screenshots:
             capture(root, output / "comparison_raw_gui.png")
 
-        # 外部でCSVを直した場合は、再比較で読み直す。失敗時は古い値を保存させない。
-        paths[0].write_text("bad csv", encoding="utf-8")
-        invoke("比較し直す")
-        assert table.item("0", "values")[1] == "—"
-        assert buttons["比較CSVを保存"].instate(["disabled"])
-        paths[0].write_bytes(originals[0])
-        invoke("比較し直す")
-        assert buttons["比較CSVを保存"].instate(["!disabled"])
-        table.selection_set("1")
+        # 外部でCSVを直した場合は、そのCSVを外して追加し直す。
+        table.selection_set("0")
         invoke("選択したCSVを削除")
+        assert len(table.get_children()) == 2
+        paths[0].write_text("bad csv", encoding="utf-8")
+        add([paths[0]])
+        assert len(table.get_children()) == 2
+        paths[0].write_bytes(originals[0])
+        add([paths[0]])
+        assert buttons["グラフを保存"].instate(["!disabled"])
         assert [table.item(i, "values")[0] for i in table.get_children()] == [
-            "p00_a.csv",
+            "p01_a.csv",
             "p01_b.csv",
+            "p00_a.csv",
         ]
         table.selection_set(*table.get_children())
         invoke("選択したCSVを削除")
@@ -170,7 +161,9 @@ def main():
         root.destroy()
     for path, original in zip(paths, originals):
         assert path.read_bytes() == original
-    print(f"実Tkで局所比較・100mm換算・保存・再読込・削除・20件表示を確認: {output}")
+    print(
+        f"実Tkで局所比較・100mm換算・PNG保存・自動更新・削除・20件表示を確認: {output}"
+    )
 
 
 if __name__ == "__main__":

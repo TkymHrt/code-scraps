@@ -25,6 +25,7 @@ class HeadlessGraphTests(unittest.TestCase):
         script = copy_current(
             "length_comparison_simple.py",
             self.directory,
+            source_directory="sandbox/previous_submissions/comparison_variants",
             INPUT_CSVS=inputs,
             **settings,
         )

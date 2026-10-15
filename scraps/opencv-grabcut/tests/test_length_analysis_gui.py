@@ -42,7 +42,10 @@ class LengthAnalysisTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
-        self.script = PROJECT / "submissions/length_analysis_gui.py"
+        self.script = (
+            PROJECT
+            / "sandbox/previous_submissions/comparison_variants/length_analysis_gui.py"
+        )
         self.gui = runpy.run_path(str(self.script))
 
     def test_straight_extension_and_side_detour_are_separate_quantities(self):

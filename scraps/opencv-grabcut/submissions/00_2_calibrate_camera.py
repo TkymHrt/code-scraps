@@ -10,7 +10,7 @@ import numpy as np
 INPUT_DIRECTORY = "input/camera_calibration"
 OUTPUT_DIRECTORY = "output/camera_detection"
 
-# generate_charuco_board.pyとrectify_image.pyと同じ板。
+# 00_1_generate_charuco_board.pyと01_rectify_images.pyと同じ板。
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
@@ -154,7 +154,7 @@ def main() -> None:
     print(f"魚眼モデル / 再投影誤差 RMS: {rms:.4f}px（実寸精度の保証値ではありません）")
     for path, error in zip(paths, errors):
         print(f"  {path.name}: {error:.4f}px")
-    print("\nrectify_image.pyの冒頭の3設定を、以下に置き換えてください。\n")
+    print("\n01_rectify_images.pyの冒頭の3設定を、以下に置き換えてください。\n")
     print(parameter_text(image_size, matrix, distortion))
 
 

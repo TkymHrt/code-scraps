@@ -108,20 +108,6 @@ def check_output(path: Path, rows: list[dict], suffix: str) -> Path:
     return path
 
 
-def write_csv(path: Path, rows: list[dict]) -> None:
-    path = check_output(path, rows, ".csv")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
-        writer.writeheader()
-        for row in rows:
-            saved = row.copy()
-            for column, value in row.items():
-                if isinstance(value, float):
-                    saved[column] = f"{value:.12g}"
-            writer.writerow(saved)
-
-
 def create_graph(rows: list[dict], normalized: bool = False) -> Figure:
     rcParams["font.sans-serif"] = ["Meiryo", "DejaVu Sans"]
     figure = Figure(figsize=(9, 5), layout="constrained")
@@ -202,7 +188,6 @@ def main() -> None:
     def compare() -> None:
         rows.clear()
         table.delete(*table.get_children())
-        csv_button.state(["disabled"])
         graph_button.state(["disabled"])
         draw_graph()
         for index, path in enumerate(paths):
@@ -222,7 +207,6 @@ def main() -> None:
                 values.append(f"{row[column]:.3f}")
             table.item(str(index), values=values)
         draw_graph()
-        csv_button.state(["!disabled"])
         graph_button.state(["!disabled"])
         status.set(f"{len(rows)}件を比較しました。区間長は開始・終了yの間隔です")
 
@@ -260,49 +244,37 @@ def main() -> None:
         paths[:] = remaining
         compare()
 
-    def save(suffix: str) -> None:
+    def save_graph() -> None:
         stem = "length_comparison_local"
-        if suffix == ".png" and mode.get() == "100mm換算":
+        if mode.get() == "100mm換算":
             stem += "_100mm"
         selected = filedialog.asksaveasfilename(
             parent=root,
-            title="比較結果を保存",
+            title="グラフを保存",
             initialdir=output_directory,
-            initialfile=stem + suffix,
-            defaultextension=suffix,
-            filetypes=[("比較結果", "*" + suffix)],
+            initialfile=stem + ".png",
+            defaultextension=".png",
+            filetypes=[("PNG画像", "*.png")],
             confirmoverwrite=True,
         )
         if not selected:
             return
         try:
-            if suffix == ".csv":
-                write_csv(Path(selected), rows)
-            else:
-                write_graph(Path(selected), rows, mode.get() == "100mm換算")
-        except (OSError, ValueError, csv.Error) as error:
+            write_graph(Path(selected), rows, mode.get() == "100mm換算")
+        except (OSError, ValueError) as error:
             status.set(str(error))
             return
         status.set(f"保存しました: {Path(selected).name}")
-
-    def save_csv() -> None:
-        save(".csv")
-
-    def save_graph() -> None:
-        save(".png")
 
     toolbar = ttk.Frame(root, padding=12)
     toolbar.pack(fill="x")
     for label, action in (
         ("CSVを追加", add_csvs),
         ("選択したCSVを削除", remove_csvs),
-        ("比較し直す", compare),
     ):
         ttk.Button(toolbar, text=label, command=action, padding=(10, 6)).pack(
             side="left", padx=(0, 8)
         )
-    csv_button = ttk.Button(toolbar, text="比較CSVを保存", command=save_csv)
-    csv_button.pack(side="left", padx=(12, 8))
     graph_button = ttk.Button(toolbar, text="グラフを保存", command=save_graph)
     graph_button.pack(side="left")
     options = ttk.Frame(root, padding=(12, 0, 12, 8))
@@ -336,7 +308,6 @@ def main() -> None:
     )
     graph_frame = ttk.Frame(root, padding=(12, 0, 12, 12))
     graph_frame.pack(fill="both", expand=True)
-    csv_button.state(["disabled"])
     graph_button.state(["disabled"])
     output_directory.mkdir(parents=True, exist_ok=True)
     root.mainloop()

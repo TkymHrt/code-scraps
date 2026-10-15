@@ -29,7 +29,15 @@ def main():
     for sample in samples:
         path = sample["csv_path"]
         source_bytes[path] = path.read_bytes()
-    gui = runpy.run_path(str(copy_current("length_analysis_gui.py", directory)))
+    gui = runpy.run_path(
+        str(
+            copy_current(
+                "length_analysis_gui.py",
+                directory,
+                source_directory="sandbox/previous_submissions/comparison_variants",
+            )
+        )
+    )
     root = tk.Tk()
     root.attributes("-alpha", 0)
     errors = []

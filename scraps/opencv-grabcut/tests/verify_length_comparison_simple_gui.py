@@ -29,7 +29,13 @@ def main():
         samples.append(write_sample(directory, name, interval, left, right, thickness))
     paths = [sample["csv_path"] for sample in samples]
     gui = runpy.run_path(
-        str(copy_current("length_comparison_simple_gui.py", directory))
+        str(
+            copy_current(
+                "length_comparison_simple_gui.py",
+                directory,
+                source_directory="sandbox/previous_submissions/comparison_variants",
+            )
+        )
     )
     root = tk.Tk()
     root.attributes("-alpha", 0)

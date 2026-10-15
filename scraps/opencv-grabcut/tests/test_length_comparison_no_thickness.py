@@ -32,6 +32,7 @@ class NoThicknessGraphTests(unittest.TestCase):
         script = copy_current(
             "length_comparison_no_thickness.py",
             self.directory,
+            source_directory="sandbox/previous_submissions/comparison_variants",
             INPUT_CSVS=[str(path) for path in paths],
             **settings,
         )

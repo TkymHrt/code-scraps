@@ -1,12 +1,15 @@
 # 比較試験用
 
 旧方式、AI生成画像の反射対策、前処理の比較を行う独立スクリプトをまとめています。
-実践用の5本は [../submissions/README.md](../submissions/README.md) を使ってください。
+実践用の6本（5工程、比較GUIは厚さの有無で選択）は [../submissions/README.md](../submissions/README.md) を使ってください。
 
 2026-10-14、現行の流れに含まれないコードを次へ退避しました。
 
 - [previous_submissions](previous_submissions/README.md)：旧01〜09、設定GUI、手動校正、CSV換算と変更前のスナップショット。
 - [previous_scripts](previous_scripts/README.md)：題材直下にあった輪郭・左右端・一括計測・比較7本と、その説明。
+
+2026-10-16、理想長との比較・分析・GUIなし版の5本を
+[previous_submissions/comparison_variants](previous_submissions/comparison_variants/README.md) へ追加で移動しました。
 
 旧版の自動試験は移動先を参照します。過去の入力・結果の保存場所は維持しました。
 

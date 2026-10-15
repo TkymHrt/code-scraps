@@ -6,7 +6,7 @@ import cv2 as cv
 
 OUTPUT_PATH = "output/charuco_board.png"
 
-# camera_calibration.pyとrectify_image.pyと同じ仕様にする。
+# 00_2_calibrate_camera.pyと01_rectify_images.pyと同じ仕様にする。
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0

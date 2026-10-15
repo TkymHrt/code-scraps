@@ -16,7 +16,10 @@ class SimpleLengthComparisonTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
-        self.script = PROJECT / "submissions/length_comparison_simple_gui.py"
+        self.script = (
+            PROJECT
+            / "sandbox/previous_submissions/comparison_variants/length_comparison_simple_gui.py"
+        )
         self.gui = runpy.run_path(str(self.script))
 
     def test_thickness_changes_ideal_with_independent_left_and_right_lengths(self):

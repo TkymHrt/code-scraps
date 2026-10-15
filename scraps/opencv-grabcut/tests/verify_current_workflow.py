@@ -57,7 +57,7 @@ def set_field(root, widget, value):
 
 
 def measure_with_gui(directory, image_path, transform, original_size, screenshots):
-    script = copy_current("initial_regions_gui.py", directory)
+    script = copy_current("02_measure_edge_lengths_gui.py", directory)
     gui = runpy.run_path(str(script))
     root = tk.Tk()
     root.attributes("-alpha", 0)
@@ -297,7 +297,9 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
 
 
 def compare_with_gui(directory, csv_paths, screenshots):
-    gui = runpy.run_path(str(copy_current("length_comparison_gui.py", directory)))
+    gui = runpy.run_path(str(copy_current("03_compare_edge_lengths_gui.py", directory)))
+    expected_rows = gui["compare_lengths"](csv_paths)
+    source_bytes = [path.read_bytes() for path in csv_paths]
     root = tk.Tk()
     root.attributes("-alpha", 0)
     errors = []
@@ -306,12 +308,12 @@ def compare_with_gui(directory, csv_paths, screenshots):
         root.update()
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
-        tables = [w for w in widgets if isinstance(w, ttk.Treeview)]
-        length_table = tables[0]
-        set_field(root, field(root, widgets, "初期区間長 (mm)"), 230)
-        set_field(root, field(root, widgets, "初期厚さ (mm)"), 10)
-        assert "上へ" not in buttons and "下へ" not in buttons
-        assert "撮影名・厚さを適用" not in buttons
+        radios = {
+            str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Radiobutton)
+        }
+        table = next(w for w in widgets if isinstance(w, ttk.Treeview))
+        assert set(buttons) == {"CSVを追加", "選択したCSVを削除", "グラフを保存"}
+        assert buttons["グラフを保存"].instate(["disabled"])
 
         def add(paths):
             with patch.object(
@@ -322,99 +324,64 @@ def compare_with_gui(directory, csv_paths, screenshots):
                 buttons["CSVを追加"].invoke()
             root.update()
 
-        def thickness_entries():
-            entries = [w for w in descendants(root) if isinstance(w, ttk.Entry)]
-            return entries[2:]
-
         add(csv_paths)
-        assert len(thickness_entries()) == 3
-        buttons["比較する"].invoke()
-        root.update()
-        assert not length_table.get_children()
-        for entry in thickness_entries():
-            set_field(root, entry, 10)
-        buttons["比較する"].invoke()
-        root.update()
-        assert len(length_table.get_children()) == 3
-        actual_names = [
-            length_table.item(item, "values")[0] for item in length_table.get_children()
-        ]
-        assert actual_names == [
-            f"{i + 1}. {path.name}" for i, path in enumerate(csv_paths)
-        ]
+        assert len(table.get_children()) == 3
+        for item, expected in zip(table.get_children(), expected_rows):
+            values = table.item(item, "values")
+            assert values == (
+                expected["csv_name"],
+                f"{expected['interval_length_mm']:.3f}",
+                f"{expected['left_mm']:.3f}",
+                f"{expected['right_mm']:.3f}",
+            )
+        assert buttons["グラフを保存"].instate(["!disabled"])
         add(csv_paths)
-        assert len(thickness_entries()) == 3 and len(length_table.get_children()) == 3
         add([])
-        assert len(length_table.get_children()) == 3
-        root.geometry("1000x760")
+        assert len(table.get_children()) == 3
+        root.geometry("960x640")
         root.update()
         for button in buttons.values():
             assert button.winfo_height() >= button.winfo_reqheight()
-        for name, suffix in (("比較CSVを保存", ".csv"), ("推移グラフを保存", ".png")):
-            path = directory / f"output/comparison{suffix}"
+        for label, stem in (
+            ("実測長", "comparison"),
+            ("100mm換算", "comparison_100mm"),
+        ):
+            radios[label].invoke()
+            root.update()
+            path = directory / f"output/{stem}.png"
             with patch.object(
                 filedialog, "asksaveasfilename", return_value=str(path)
             ) as dialog:
-                buttons[name].invoke()
+                buttons["グラフを保存"].invoke()
             root.update()
-            assert path.exists()
+            assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
             assert dialog.call_args.kwargs["initialdir"] == directory / "output"
-        notebook = next(w for w in widgets if isinstance(w, ttk.Notebook))
-        if screenshots:
-            capture(root, directory / "comparison_gui.png")
-        notebook.select(4)
-        root.update()
-        assert not any(isinstance(w, tk.Toplevel) for w in root.winfo_children())
-        if screenshots:
-            capture(root, directory / "comparison_graph.png")
-        notebook.select(0)
-        root.update()
-        set_field(root, thickness_entries()[1], 5)
-        assert not length_table.get_children()
-        assert buttons["比較CSVを保存"].instate(["disabled"])
-        buttons["比較する"].invoke()
-        root.update()
-        second = length_table.item(length_table.get_children()[1], "values")
-        assert second[1] == "460.000"
-        set_field(root, thickness_entries()[1], 10)
+            if screenshots:
+                capture(root, directory / f"{stem}_gui.png")
 
-        # 多数のCSVでも、厚さ入力の値と追加順が保たれる。
         extra_paths = []
         for index in range(17):
             path = directory / f"output/extra{index + 1:02}.csv"
             path.write_bytes(csv_paths[0].read_bytes())
             extra_paths.append(path)
         add(extra_paths)
-        assert len(thickness_entries()) == 20
-        for entry in thickness_entries()[3:]:
-            set_field(root, entry, 10)
-        buttons["比較する"].invoke()
+        assert len(table.get_children()) == 20
+        assert table.item(table.get_children()[-1], "values")[0] == "extra17.csv"
+        table.yview_moveto(1)
         root.update()
-        assert len(length_table.get_children()) == 20
-        assert (
-            length_table.item(length_table.get_children()[-1], "values")[0]
-            == "20. extra17.csv"
-        )
-        input_canvas = next(w for w in descendants(root) if isinstance(w, tk.Canvas))
-        input_canvas.yview_moveto(1)
-        root.update()
+        assert table.yview()[1] == 1
         if screenshots:
             capture(root, directory / "comparison_twenty.png")
-        delete_buttons = [
-            w
-            for w in descendants(root)
-            if isinstance(w, ttk.Button) and str(w.cget("text")) == "削除"
-        ]
-        delete_buttons[3].invoke()
+        table.selection_set(table.get_children()[3])
+        buttons["選択したCSVを削除"].invoke()
         root.update()
-        assert len(thickness_entries()) == 19 and not length_table.get_children()
-        assert all(
-            root.getvar(str(entry.cget("textvariable"))) == "10"
-            for entry in thickness_entries()
-        )
-        buttons["比較する"].invoke()
+        assert len(table.get_children()) == 19
+        assert buttons["グラフを保存"].instate(["!disabled"])
+        table.selection_set(*table.get_children())
+        buttons["選択したCSVを削除"].invoke()
         root.update()
-        assert len(length_table.get_children()) == 19
+        assert not table.get_children()
+        assert buttons["グラフを保存"].instate(["disabled"])
         assert not errors, errors
 
     try:
@@ -430,6 +397,7 @@ def compare_with_gui(directory, csv_paths, screenshots):
             gui["main"]()
     finally:
         root.destroy()
+    assert [path.read_bytes() for path in csv_paths] == source_bytes
 
 
 def main():
@@ -450,7 +418,9 @@ def main():
     photos = camera_folder / "photos"
     photos.mkdir()
     calibration_photos(photos)
-    log = execute("camera_calibration.py", camera_folder, INPUT_DIRECTORY=str(photos))
+    log = execute(
+        "00_2_calibrate_camera.py", camera_folder, INPUT_DIRECTORY=str(photos)
+    )
     assert len(list((camera_folder / "output/camera_detection").glob("*.png"))) == 12
     block = log[log.index("CALIBRATION_SIZE =") :]
     settings = {}
@@ -468,7 +438,7 @@ def main():
         rendered_scene((-0.20, 0.18, -0.10), (-150, -100, 450)),
     )
     execute(
-        "rectify_image.py",
+        "01_rectify_images.py",
         camera_folder,
         INPUT_DIRECTORY="input",
         OUTPUT_DIRECTORY="output/rectified",
@@ -495,7 +465,7 @@ def main():
     height, width = image.shape[:2]
     board_folder = output / "board"
     board_folder.mkdir()
-    execute("generate_charuco_board.py", board_folder, PIXELS_PER_MM=4)
+    execute("00_1_generate_charuco_board.py", board_folder, PIXELS_PER_MM=4)
     board_image = cv.imdecode(
         np.frombuffer(
             (board_folder / "output/charuco_board.png").read_bytes(), np.uint8
@@ -558,7 +528,7 @@ def main():
         corrected_path = folder / f"output/rectified/{name}.png"
         save_image(source_path, scene)
         execute(
-            "rectify_image.py",
+            "01_rectify_images.py",
             folder,
             INPUT_DIRECTORY=str(input_directory),
             CALIBRATION_SIZE=(output_width, height),
@@ -602,7 +572,7 @@ def main():
         "detection_checks": "12 calibration photos only; rectification saves corrected PNGs only",
         "orientation": "preserves the board horizontal-axis direction in the undistorted photo",
         "adjacent_board_assumptions": "4px/mm, same plane, hypothetical camera coefficients",
-        "analysis_assumptions": "same unrolled sample, initial interval 230mm, all thicknesses 10mm",
+        "comparison_basis": "local intervals in CSV addition order, raw and per-100mm lengths; no ideal stretch model",
         "measurements": rows,
     }
     (output / "report.json").write_text(

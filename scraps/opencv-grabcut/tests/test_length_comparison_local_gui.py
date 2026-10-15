@@ -41,7 +41,7 @@ class LocalComparisonTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
-        self.script = PROJECT / "submissions/length_comparison_local_gui.py"
+        self.script = PROJECT / "submissions/03_compare_edge_lengths_gui.py"
         self.gui = runpy.run_path(str(self.script))
 
     def test_different_intervals_have_the_same_normalized_lengths(self):
@@ -77,23 +77,16 @@ class LocalComparisonTests(unittest.TestCase):
         before = path.read_bytes()
         rows = gui["compare_lengths"]([path])
         self.assertEqual(rows[0]["image_path"], str(path.with_suffix(".png")))
-        output = self.directory / "output/比較.csv"
-        gui["write_csv"](output, rows)
-        with output.open(encoding="utf-8-sig", newline="") as source:
-            saved = list(csv.DictReader(source))
-        self.assertEqual(saved[0]["interval_length_mm"], "100")
-        self.assertEqual(saved[0]["left_per_100mm"], "104")
-        self.assertTrue(output.read_bytes().startswith(b"\xef\xbb\xbf"))
         for normalized in (False, True):
             graph = self.directory / f"output/比較_{normalized}.png"
             gui["write_graph"](graph, rows, normalized)
             self.assertEqual(graph.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
         with self.assertRaises(ValueError):
-            gui["write_csv"](path, rows)
+            gui["write_graph"](path, rows)
         with self.assertRaises(ValueError):
             gui["write_graph"](path.with_suffix(".png"), rows)
         with self.assertRaises(ValueError):
-            gui["write_csv"](output, [])
+            gui["write_graph"](self.directory / "output/空.png", [])
         self.assertEqual(path.read_bytes(), before)
 
     def test_single_twenty_and_repeated_csv_keep_observation_order(self):
@@ -145,7 +138,7 @@ class LocalComparisonTests(unittest.TestCase):
 
     def test_measurement_pair_keeps_csv_schema_and_protects_source_image(self):
         measurement_gui = runpy.run_path(
-            str(PROJECT / "submissions/initial_regions_gui.py")
+            str(PROJECT / "submissions/02_measure_edge_lengths_gui.py")
         )
         image = np.full((160, 140, 3), 35, np.uint8)
         image[20:141, 50:91] = 200

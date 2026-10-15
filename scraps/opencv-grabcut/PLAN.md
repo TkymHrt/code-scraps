@@ -1,16 +1,19 @@
 # 現在の実装方針
 
-2026-10-15更新。床置きの局所写真で左右側辺長を測り、確認画像と数値の推移を見比べるPoCを進める。
+2026-10-16更新。床置きの局所写真で左右側辺長を測り、確認画像と数値の推移を見比べるPoCを進める。
 ルート・題材のREADMEと、`submissions/AGENTS.md` の方針に従う。
 初心者が上から処理を追える、独立した単発スクリプトを順番に使う。
 
-## 現行の5工程
+## 現行の5工程・6本
 
-1. `generate_charuco_board.py`：ChArUco板のPNGを作る。
-2. `camera_calibration.py`：魚眼モデルの係数を求め、読取確認PNGとコピペ用の係数を出す。
-3. `rectify_image.py`：固定係数と板で画像を補正し、写真内の向きを保ったPNGへ揃える。
-4. `initial_regions_gui.py`：初期指定と計測区間を操作し、左右側辺長のCSVと確認PNGを同じ名前で保存する。
-5. `length_comparison_local_gui.py`：CSVを選択し、区間長と左右実測長の表、実測長／100mm換算のグラフを表示・保存する。
+初回準備は `00_1`・`00_2`、撮影後は `01` 補正 → `02` 計測 → `03` 比較の順にする。
+比較は2本とも `03` とし、厚さを使う版は `with_thickness` で区別する。
+
+1. `00_1_generate_charuco_board.py`：ChArUco板のPNGを作る。
+2. `00_2_calibrate_camera.py`：魚眼モデルの係数を求め、読取確認PNGとコピペ用の係数を出す。
+3. `01_rectify_images.py`：固定係数と板で画像を補正し、写真内の向きを保ったPNGへ揃える。
+4. `02_measure_edge_lengths_gui.py`：初期指定と計測区間を操作し、左右側辺長のCSVと確認PNGを同じ名前で保存する。
+5. 比較は `03_compare_edge_lengths_gui.py` または `03_compare_edge_lengths_with_thickness_gui.py` を選ぶ。前者は局所区間、後者は厚さ・累積圧下率も使う。
 
 板生成・カメラ校正・画像補正は変更しない。
 計測GUIには区間長のmm表示を加え、材料区間の対応を必須としない呼び名にする。
@@ -31,7 +34,8 @@ GrabCut、最大の外側輪郭、各行の最左・最右の連結を使い、�
 比較GUIの横軸はCSV名と追加順にする。追加順をパス番号と呼ばない。
 同じパスの複数箇所はファイル名で区別する。計測GUIに識別情報の入力欄は増やさない。
 表は区間長と左右実測長、グラフは実測長と100mm換算を切り替える。
-比較CSVには両方の値を保存し、PNGは表示中のモードで保存する。
+CSVの追加・削除に合わせて結果を自動更新し、点はCSV追加順に線で結ぶ。
+保存は表示中のグラフPNGに絞り、比較CSVの出力と再比較ボタンは設けない。
 平均・欠陥数・凹み深さなどの指標は追加しない。
 
 ## 運用と検証
@@ -44,13 +48,29 @@ GrabCut、最大の外側輪郭、各行の最左・最右の連結を使い、�
 実践用は `submissions/`、検証は `tests/`、標準出力は `submissions/output/`。
 既存CSVと生成画像で数値・保存・実Tk操作を確認する。合成データの結果を実機の精度として扱わない。
 
-## 残している別案
+## 厚さも使う比較
 
-`length_comparison_gui.py`・`length_comparison_simple_gui.py`・`length_comparison_simple.py` は、
-対応する同じ材料区間について幅一定・体積一定の理想長と比較する従来の別案。
-`length_analysis_gui.py` は同じ前提で伸びと側辺形状を分ける別案。
-`length_comparison_no_thickness.py` は左右実測長だけをPNGへ保存するGUIなしの別案。
-これらへ今回のPoCの変更を広げない。
+2026-10-16、`03_compare_edge_lengths_with_thickness_gui.py` を厚さデータを使う独立した別案として追加する。
+既存の計測CSVと初期厚さ・各撮影の実測厚さから累積圧下率を求める。
+横軸を撮影順／累積圧下率、長さを実測長／100mm換算で切り替える。
+どちらの横軸でもCSV追加順に点を線で結び、厚さの入力に合わせて自動更新する。
+保存はグラフPNGのみ。厚さの入力値は保存せず、撮影記録で保持する。
+計測・補正は変更しない。厚さは比較GUIの行へ直接入力する。
+
+## 保管した別案
+
+2026-10-16、PoCに使わない次の5本は `sandbox/previous_submissions/comparison_variants/` へ移動した。
+`submissions/` に残す実行用は上記6本だけにする。
+
+- `length_comparison_gui.py`：同じ材料区間と厚さから理想長を求める比較。
+- `length_analysis_gui.py`：伸びと側辺形状を分ける分析。
+- `length_comparison_simple_gui.py`：理想長を使う最小比較GUI。
+- `length_comparison_simple.py`：理想長を使うGUIなし版。
+- `length_comparison_no_thickness.py`：左右実測長だけを保存するGUIなし版。
+
+スクリプトの内容は維持し、同名の旧版を上書きしない。説明は移動先のREADMEに置く。
+検証は `tests/` に残して参照先を更新し、入力・出力・過去の結果は移動しない。
+現行工程の操作検証は計測CSVを局所比較GUIへ渡し、実際に使う流れを確認する。
 
 以前のコードは `sandbox/previous_submissions/` と `sandbox/previous_scripts/` に残す。
 操作手順は [submissions/README.md](submissions/README.md)、検証履歴は [PROGRESS.md](PROGRESS.md) を参照する。

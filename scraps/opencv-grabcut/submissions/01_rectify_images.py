@@ -9,7 +9,7 @@ import numpy as np
 INPUT_DIRECTORY = "input"
 OUTPUT_DIRECTORY = "output/rectified"
 
-# camera_calibration.pyの出力を、この3設定へ一度貼り付ける。
+# 00_2_calibrate_camera.pyの出力を、この3設定へ一度貼り付ける。
 # DIST_COEFFSは魚眼モデルのk1, k2, k3, k4。通常モデルの係数は使わない。
 CALIBRATION_SIZE: tuple[int, int] | None = None
 CAMERA_MATRIX: list[list[float]] | None = None
@@ -19,13 +19,15 @@ DIST_COEFFS: list[float] | None = None
 BOARD_SQUARES = (7, 5)
 SQUARE_MM = 30.0
 MARKER_MM = 18.0
-# initial_regions_gui.pyにも同じ値を設定する。
+# 02_measure_edge_lengths_gui.pyにも同じ値を設定する。
 MM_PER_PX = 0.25
 
 
 def rectify_image(image: np.ndarray) -> dict:
     if CALIBRATION_SIZE is None or CAMERA_MATRIX is None or DIST_COEFFS is None:
-        raise ValueError("コード冒頭へcamera_calibration.pyの3設定を貼り付けてください")
+        raise ValueError(
+            "コード冒頭へ00_2_calibrate_camera.pyの3設定を貼り付けてください"
+        )
     height, width = image.shape[:2]
     if (width, height) != tuple(CALIBRATION_SIZE):
         raise ValueError("カメラ校正と同じ解像度・撮影モードの画像を指定してください")

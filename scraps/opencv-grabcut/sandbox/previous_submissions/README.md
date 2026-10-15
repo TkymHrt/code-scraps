@@ -2,6 +2,8 @@
 
 2026-10-14、現行の5工程から外れたコードと旧時点のコピーを保管しました。
 現在の実践手順は [submissions/README.md](../../submissions/README.md) です。
+2026-10-16に移動した理想長との比較・分析・GUIなし版の5本は [comparison_variants](comparison_variants/README.md) にあります。
+このフォルダ直下にある同名の比較GUIは、さらに古い版として保持しています。
 以下は移動前の説明・検証記録です。実行する場合は題材フォルダから `uv run` を使い、コード冒頭の入力・保存先を現在の場所へ合わせてください。
 元の画像と結果は `submissions/input`・`submissions/results`・題材の `results` など、移動前の場所を維持しています。
 
