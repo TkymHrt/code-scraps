@@ -1,4 +1,4 @@
-"""指定フォルダの写真を、固定カメラ係数とChArUcoで補正してPNGへ保存する."""
+"""指定フォルダの写真を、魚眼モデルの固定係数とChArUcoで補正してPNGへ保存する."""
 
 import math
 from pathlib import Path
@@ -10,6 +10,7 @@ INPUT_DIRECTORY = "input"
 OUTPUT_DIRECTORY = "output/rectified"
 
 # camera_calibration.pyの出力を、この3設定へ一度貼り付ける。
+# DIST_COEFFSは魚眼モデルのk1, k2, k3, k4。通常モデルの係数は使わない。
 CALIBRATION_SIZE: tuple[int, int] | None = None
 CAMERA_MATRIX: list[list[float]] | None = None
 DIST_COEFFS: list[float] | None = None
@@ -32,7 +33,7 @@ def rectify_image(image: np.ndarray) -> dict:
     distortion = np.array(DIST_COEFFS, dtype=np.float64)
     if (
         matrix.shape != (3, 3)
-        or distortion.size != 5
+        or distortion.shape != (4,)
         or not np.isfinite(matrix).all()
         or not np.isfinite(distortion).all()
         or matrix[0, 0] <= 0
@@ -40,8 +41,16 @@ def rectify_image(image: np.ndarray) -> dict:
         or not math.isfinite(MM_PER_PX)
         or MM_PER_PX <= 0
     ):
-        raise ValueError("貼り付けたカメラ係数とMM_PER_PXを確認してください")
-    undistorted = cv.undistort(image, matrix, distortion, None, matrix)
+        raise ValueError(
+            "魚眼モデルのカメラ係数（歪み係数4個）とMM_PER_PXを確認してください"
+        )
+    # 周辺をなるべく残す画角で、魚眼画像を平面の画像へ直す。
+    new_matrix = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
+        matrix, distortion, (width, height), np.eye(3), balance=1.0
+    )
+    undistorted = cv.fisheye.undistortImage(
+        image, matrix, distortion, Knew=new_matrix, new_size=(width, height)
+    )
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
     detector = cv.aruco.CharucoDetector(board)

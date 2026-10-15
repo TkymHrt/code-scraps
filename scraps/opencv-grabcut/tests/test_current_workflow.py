@@ -11,13 +11,14 @@ from pathlib import Path
 
 import cv2 as cv
 import numpy as np
-from test_camera_conversion import (
+from fisheye_scene import (
     DISTORTION,
     IMAGE_SIZE,
     MATRIX,
     calibration_photos,
     configure,
     rendered_scene,
+    specimen_size,
 )
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -195,7 +196,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             CAMERA_MATRIX=MATRIX.tolist(),
             DIST_COEFFS=DISTORTION.tolist(),
         )
-        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
+        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
         _, encoded = cv.imencode(".png", image)
         input_directory = self.directory / "input"
         input_directory.mkdir()
@@ -210,16 +211,18 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.assertEqual(rectifier["MM_PER_PX"], self.gui["MM_PER_PX"])
         configure(rectifier)
         for rotation, translation in [
-            ((0.12, -0.22, 0.03), (-170, -65, 600)),
-            ((-0.20, 0.18, -0.10), (-150, -100, 650)),
-            ((0.20, 0.15, 0.12), (-160, -90, 560)),
+            ((0.12, -0.22, 0.03), (-170, -65, 400)),
+            ((-0.20, 0.18, -0.10), (-150, -100, 450)),
+            ((0.20, 0.15, 0.12), (-160, -90, 410)),
+            ((0.05, -0.10, 0.02), (20, 20, 450)),
+            ((-0.05, 0.10, -0.02), (-350, -200, 450)),
         ]:
             corrected = rectifier["rectify_image"](
                 rendered_scene(rotation, translation)
             )["image"]
-            ys, xs = np.nonzero(cv.inRange(corrected, (20, 75, 145), (90, 145, 220)))
-            self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
-            self.assertAlmostEqual((xs.max() - xs.min()) * 0.25, 40, delta=1)
+            length_mm, width_mm = specimen_size(corrected)
+            self.assertAlmostEqual(length_mm, 150, delta=1)
+            self.assertAlmostEqual(width_mm, 40, delta=1)
 
     def test_board_generation_and_camera_settings_copy_remain_independent(self):
         generator = copy_current("generate_charuco_board.py", self.directory)
@@ -234,23 +237,49 @@ class CurrentWorkflowTests(unittest.TestCase):
             calibration_photos(self.directory)
         )
         self.assertLess(rms, 0.5)
+        self.assertEqual(distortion.size, 4)
         rectifier = runpy.run_path(
             str(copy_current("rectify_image.py", self.directory))
         )
         settings = rectifier["rectify_image"].__globals__
         exec(camera["parameter_text"](size, matrix, distortion), settings)
-        corrected = rectifier["rectify_image"](
-            rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
-        )
-        self.assertLess(corrected["error_px"], 1)
+        for rotation, translation in [
+            ((0.12, -0.22, 0.03), (-170, -65, 400)),
+            ((0.05, -0.10, 0.02), (20, 20, 450)),
+            ((-0.05, 0.10, -0.02), (-350, -200, 450)),
+        ]:
+            corrected = rectifier["rectify_image"](
+                rendered_scene(rotation, translation)
+            )
+            self.assertLess(corrected["error_px"], 1)
+            length_mm, width_mm = specimen_size(corrected["image"])
+            self.assertAlmostEqual(length_mm, 150, delta=1)
+            self.assertAlmostEqual(width_mm, 40, delta=1)
         self.assertEqual(board_path.read_bytes(), before)
+
+    def test_fisheye_rejects_old_coefficients_and_handles_partial_board(self):
+        rectifier = runpy.run_path(
+            str(copy_current("rectify_image.py", self.directory))
+        )
+        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400), partial=True)
+        configure(rectifier, distortion=np.zeros(5))
+        with self.assertRaisesRegex(ValueError, "歪み係数4個"):
+            rectifier["rectify_image"](image)
+        configure(rectifier)
+        correction = rectifier["rectify_image"](image)
+        self.assertGreaterEqual(correction["corner_count"], 6)
+        self.assertLess(correction["corner_count"], 24)
+        ys, _ = np.nonzero(
+            cv.inRange(correction["image"], (20, 75, 145), (90, 145, 220))
+        )
+        self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
 
     def test_batch_converts_multiple_formats_and_skips_nested_and_other_files(self):
         input_directory = self.directory / "input"
         input_directory.mkdir()
         poses = [
-            ((0.12, -0.22, 0.03), (-170, -65, 600)),
-            ((-0.20, 0.18, -0.10), (-150, -100, 650)),
+            ((0.12, -0.22, 0.03), (-170, -65, 400)),
+            ((-0.20, 0.18, -0.10), (-150, -100, 450)),
         ]
         original = {}
         for name, (rotation, translation) in zip(("撮影1.png", "撮影2.bmp"), poses):
@@ -299,7 +328,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         )
         (input_directory / "00_板なし.png").write_bytes(encoded.tobytes())
         _, encoded = cv.imencode(
-            ".png", rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600))
+            ".png", rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
         )
         (input_directory / "01_正常.png").write_bytes(encoded.tobytes())
         (input_directory / "02_破損.png").write_bytes(b"bad image")

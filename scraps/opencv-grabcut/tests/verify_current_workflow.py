@@ -16,9 +16,9 @@ from unittest.mock import patch
 
 import cv2 as cv
 import numpy as np
-from test_camera_conversion import calibration_photos, rendered_scene
+from fisheye_scene import calibration_photos, distort, rendered_scene, specimen_size
 from test_current_workflow import copy_current
-from verify_adjacent_board import distort, save_image
+from verify_adjacent_board import save_image
 from verify_parameter_guis import capture, descendants
 
 
@@ -365,11 +365,11 @@ def main():
     batch_input.mkdir()
     save_image(
         batch_input / "shot1.png",
-        rendered_scene((0.12, -0.22, 0.03), (-170, -65, 600)),
+        rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400)),
     )
     save_image(
         batch_input / "shot2.png",
-        rendered_scene((-0.20, 0.18, -0.10), (-150, -100, 650)),
+        rendered_scene((-0.20, 0.18, -0.10), (-150, -100, 450)),
     )
     execute(
         "rectify_image.py",
@@ -378,8 +378,18 @@ def main():
         OUTPUT_DIRECTORY="output/rectified",
         **settings,
     )
-    assert (camera_folder / "output/rectified/shot1.png").is_file()
-    assert (camera_folder / "output/rectified/shot2.png").is_file()
+    known_dimensions = []
+    for name in ("shot1", "shot2"):
+        image_path = camera_folder / f"output/rectified/{name}.png"
+        corrected = cv.imdecode(
+            np.frombuffer(image_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+        )
+        length_mm, width_mm = specimen_size(corrected)
+        assert abs(length_mm - 150) < 1
+        assert abs(width_mm - 40) < 1
+        known_dimensions.append(
+            {"image": name, "length_mm": float(length_mm), "width_mm": float(width_mm)}
+        )
 
     input_path = project / "submissions/input/赤茶色の床と剥離した金属帯.png"
     original_bytes = input_path.read_bytes()
@@ -429,16 +439,18 @@ def main():
         (output_width, height),
         borderValue=background,
     )
-    matrix = np.array([[1800.0, 0, width / 2], [0, 1800.0, height / 2], [0, 0, 1]])
-    coefficients = np.array([-0.12, 0.025, 0.0005, -0.0008, 0.0])
+    matrix = np.array(
+        [[1800.0, 0, output_width / 2], [0, 1800.0, height / 2], [0, 0, 1]]
+    )
+    coefficients = np.array([-0.04, 0.005, -0.001, 0.0001])
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard((7, 5), 30.0, 18.0, dictionary)
     detector = cv.aruco.CharucoDetector(board)
     rows = []
     paths = []
     for name, scene, distortion in (
-        ("front", composite, np.zeros(5)),
-        ("perspective", tilted, np.zeros(5)),
+        ("front", distort(composite, matrix, np.zeros(4), background), np.zeros(4)),
+        ("perspective", distort(tilted, matrix, np.zeros(4), background), np.zeros(4)),
         ("lens", distort(tilted, matrix, coefficients, background), coefficients),
     ):
         folder = output / name
@@ -482,7 +494,9 @@ def main():
     report = {
         "input_kind": "generated_test_image_not_production",
         "original_sha256": hashlib.sha256(original_bytes).hexdigest(),
-        "camera_calibration": "12 synthetic photos, parameters copied to standalone rectifier",
+        "camera_model": "opencv_fisheye",
+        "camera_calibration": "12 synthetic fisheye photos, parameters copied to standalone rectifier",
+        "known_dimensions": known_dimensions,
         "adjacent_board_assumptions": "4px/mm, same plane, hypothetical camera coefficients",
         "analysis_assumptions": "same unrolled sample, initial interval 230mm, all thicknesses 10mm",
         "measurements": rows,

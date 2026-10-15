@@ -1,4 +1,4 @@
-"""ChArUcoの複数写真から、画像補正コードへ貼るカメラ行列と歪み係数を求める."""
+"""ChArUcoの複数写真から、魚眼モデルのカメラ行列と4つの歪み係数を求める."""
 
 from pathlib import Path
 
@@ -36,16 +36,31 @@ def calibrate(paths: list[Path]) -> tuple:
         corners, ids, _, _ = detector.detectBoard(image)
         if ids is None or len(ids) < 6 or board.checkCharucoCornersCollinear(ids):
             raise ValueError(f"板の角を縦横に6点以上読める写真が必要です: {path.name}")
-        all_board_points = np.array(board.getChessboardCorners(), dtype=np.float32)
+        all_board_points = np.array(board.getChessboardCorners(), dtype=np.float64)
         board_points = all_board_points[ids.astype(np.int32).ravel()]
-        detected_points = corners
-        object_points.append(board_points)
+        # OpenCV 5の魚眼校正へ、1行に全点を並べた形で渡す。
+        detected_points = np.array(corners, dtype=np.float64).reshape(1, -1, 2)
+        object_points.append(board_points.reshape(1, -1, 3))
         image_points.append(detected_points)
 
     assert image_size is not None
-    rms, matrix, distortion, rotations, translations = cv.calibrateCamera(
-        object_points, image_points, image_size, None, None
-    )
+    matrix = np.zeros((3, 3), dtype=np.float64)
+    distortion = np.zeros((4, 1), dtype=np.float64)
+    flags = cv.CALIB_RECOMPUTE_EXTRINSIC | cv.CALIB_CHECK_COND | cv.CALIB_FIX_SKEW
+    try:
+        rms, matrix, distortion, rotations, translations = cv.fisheye.calibrate(
+            object_points,
+            image_points,
+            image_size,
+            matrix,
+            distortion,
+            flags=flags,
+            criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-8),
+        )
+    except cv.error as error:
+        raise ValueError(
+            "魚眼校正できません。板の位置・傾き・距離を変えて撮り直してください"
+        ) from error
     if (
         not np.isfinite(rms)
         or not np.isfinite(matrix).all()
@@ -59,7 +74,7 @@ def calibrate(paths: list[Path]) -> tuple:
     # 全体のRMSだけでは、読取りの悪い1枚を見落とすため各写真も表示する。
     errors = []
     for index, points in enumerate(object_points):
-        projected, _ = cv.projectPoints(
+        projected, _ = cv.fisheye.projectPoints(
             points, rotations[index], translations[index], matrix, distortion
         )
         difference = projected.reshape(-1, 2) - image_points[index].reshape(-1, 2)
@@ -103,7 +118,7 @@ def main() -> None:
         )
         return
     image_size, matrix, distortion, rms, errors = calibrate(paths)
-    print(f"再投影誤差 RMS: {rms:.4f}px（実寸精度の保証値ではありません）")
+    print(f"魚眼モデル / 再投影誤差 RMS: {rms:.4f}px（実寸精度の保証値ではありません）")
     for path, error in zip(paths, errors):
         print(f"  {path.name}: {error:.4f}px")
     print("\nrectify_image.pyの冒頭の3設定を、以下に置き換えてください。\n")

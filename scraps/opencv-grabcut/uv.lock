@@ -301,7 +301,7 @@ dev = [
 requires-dist = [
     { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "numpy" },
-    { name = "opencv-python" },
+    { name = "opencv-python", specifier = ">=5.0" },
 ]
 
 [package.metadata.requires-dev]
