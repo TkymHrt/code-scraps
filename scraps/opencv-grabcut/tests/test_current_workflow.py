@@ -100,6 +100,23 @@ class CurrentWorkflowTests(unittest.TestCase):
         cropped, _ = self.gui["measure_lengths"](self.image, self.regions, 80, 120)
         self.assertEqual(cropped["total_mm"], 20)
 
+    def test_overlapping_regions_keep_priority_when_display_order_changes(self):
+        image = np.zeros((8, 8, 3), np.uint8)
+        regions = {
+            cv.GC_PR_FGD: [(0.125, 0.125, 0.875, 0.875)],
+            cv.GC_BGD: [(0.25, 0.25, 0.75, 0.75)],
+            cv.GC_FGD: [(0.375, 0.375, 0.625, 0.625)],
+        }
+        make_mask = self.gui["initial_mask"]
+        labels = make_mask(image, regions)
+        self.assertEqual(labels[0, 0], cv.GC_PR_BGD)
+        self.assertEqual(labels[1, 1], cv.GC_PR_FGD)
+        self.assertEqual(labels[2, 2], cv.GC_BGD)
+        self.assertEqual(labels[3, 3], cv.GC_FGD)
+        reordered_names = dict(reversed(list(self.gui["REGION_NAMES"].items())))
+        with patch.dict(make_mask.__globals__, {"REGION_NAMES": reordered_names}):
+            np.testing.assert_array_equal(make_mask(image, regions), labels)
+
     def test_empty_rows_bad_ranges_and_missing_seeds_stop_measurement(self):
         for start, end in ((-1, 140), (140, 20), (20, 160), (20, 20)):
             with self.subTest(start=start, end=end), self.assertRaises(ValueError):

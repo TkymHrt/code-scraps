@@ -15,12 +15,14 @@ OUTPUT_DIRECTORY = "output"
 ITERATIONS = 5
 RANDOM_SEED = 0
 
-type Rect = tuple[float, float, float, float]
+type RectRatios = tuple[float, float, float, float]
 
-# 未指定部分は背景候補（灰）。後から重ねる確実な指定を優先する。
-PALETTE = np.array(
-    [(255, 80, 0), (0, 255, 0), (64, 64, 64), (0, 165, 255)], dtype=np.uint8
-)
+# OpenCVの色指定はBGR順。
+PALETTE = np.zeros((4, 3), dtype=np.uint8)
+PALETTE[cv.GC_BGD] = (255, 80, 0)
+PALETTE[cv.GC_FGD] = (0, 255, 0)
+PALETTE[cv.GC_PR_BGD] = (64, 64, 64)
+PALETTE[cv.GC_PR_FGD] = (0, 165, 255)
 REGION_NAMES = {
     cv.GC_PR_FGD: "前景候補（橙）",
     cv.GC_BGD: "確実な背景（青）",
@@ -28,28 +30,36 @@ REGION_NAMES = {
 }
 
 
-def initial_mask(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
+def initial_mask(image: np.ndarray, regions: dict[int, list[RectRatios]]) -> np.ndarray:
     height, width = image.shape[:2]
     labels = np.full((height, width), cv.GC_PR_BGD, np.uint8)
-    for label in REGION_NAMES:
-        for left, top, right, bottom in regions[label]:
-            if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+    for label in (cv.GC_PR_FGD, cv.GC_BGD, cv.GC_FGD):
+        for left_ratio, top_ratio, right_ratio, bottom_ratio in regions[label]:
+            if not (
+                0 <= left_ratio < right_ratio <= 1
+                and 0 <= top_ratio < bottom_ratio <= 1
+            ):
                 raise ValueError("矩形は0〜1の範囲で、左 < 右、上 < 下にしてください")
-            x0, y0 = int(width * left), int(height * top)
-            x1, y1 = int(width * right), int(height * bottom)
-            if x0 == x1 or y0 == y1:
+            left_px = int(width * left_ratio)
+            top_px = int(height * top_ratio)
+            right_px = int(width * right_ratio)
+            bottom_px = int(height * bottom_ratio)
+            if left_px == right_px or top_px == bottom_px:
                 raise ValueError("矩形が1画素未満です。指定範囲を広げてください")
-            labels[y0:y1, x0:x1] = label
+            labels[top_px:bottom_px, left_px:right_px] = label
     return labels
 
 
-def initial_overlay(image: np.ndarray, regions: dict[int, list[Rect]]) -> np.ndarray:
+def initial_overlay(
+    image: np.ndarray, regions: dict[int, list[RectRatios]]
+) -> np.ndarray:
     labels = initial_mask(image, regions)
-    return cv.addWeighted(image, 0.65, PALETTE[labels], 0.35, 0)
+    color_mask = PALETTE[labels]
+    return cv.addWeighted(image, 0.65, color_mask, 0.35, 0)
 
 
 def measure_lengths(
-    image: np.ndarray, regions: dict[int, list[Rect]], start_y: int, end_y: int
+    image: np.ndarray, regions: dict[int, list[RectRatios]], start_y: int, end_y: int
 ) -> tuple[dict, np.ndarray]:
     height, width = image.shape[:2]
     if not math.isfinite(MM_PER_PX) or MM_PER_PX <= 0:
@@ -57,13 +67,13 @@ def measure_lengths(
     if not 0 <= start_y < end_y < height:
         raise ValueError(f"計測区間を0 ≤ 開始y < 終了y ≤ {height - 1}にしてください")
     labels = initial_mask(image, regions)
-    foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
-    if not foreground.any() or foreground.all():
+    initial_foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
+    if not initial_foreground.any() or initial_foreground.all():
         raise ValueError("試料の前景候補と、その外の背景を指定してください")
     background_model = np.zeros((1, 65), np.float64)
     foreground_model = np.zeros((1, 65), np.float64)
     cv.setRNGSeed(RANDOM_SEED)
-    cv.grabCut(
+    labels, _, _ = cv.grabCut(
         image,
         labels,
         (0, 0, 0, 0),
@@ -72,7 +82,9 @@ def measure_lengths(
         ITERATIONS,
         cv.GC_INIT_WITH_MASK,
     )
-    raw_mask = ((labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)).astype(np.uint8) * 255
+    extracted_foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
+    raw_mask = np.zeros((height, width), np.uint8)
+    raw_mask[extracted_foreground] = 255
     contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
     if not contours:
         raise ValueError("試料を抽出できません。初期指定を調整してください")
@@ -156,11 +168,11 @@ def main() -> None:
     input_path: Path | None = None
     image: np.ndarray | None = None
     height = width = 1
-    regions: dict[int, list[Rect]] = {label: [] for label in REGION_NAMES}
+    regions: dict[int, list[RectRatios]] = {label: [] for label in REGION_NAMES}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
     display_bounds = (0, 0, 1, 1)
-    drag_start: tuple[float, float] | None = None
+    drag_start_ratios: tuple[float, float] | None = None
 
     measurement: dict | None = None
     result_image: np.ndarray | None = None
@@ -204,28 +216,30 @@ def main() -> None:
         end_text.set(str(height - 1))
         clear_regions()
 
-    def refresh_regions() -> None:
+    def on_regions_changed() -> None:
         region_rows.clear()
         region_list.delete(0, tk.END)
         for label, name in REGION_NAMES.items():
             for index in range(len(regions[label])):
                 region_rows.append((label, index))
                 region_list.insert(tk.END, f"{name} {index + 1}")
+        clear_measurement()
         view.set("initial")
-        invalidate()
+        status.set("")
+        render()
 
     def clear_regions() -> None:
         for rectangles in regions.values():
             rectangles.clear()
-        refresh_regions()
+        on_regions_changed()
 
     def show_initial(_event=None) -> None:
         view.set("initial")
         render()
 
     def render(_event=None) -> None:
-        nonlocal photo, display_bounds, drag_start
-        drag_start = None
+        nonlocal photo, display_bounds, drag_start_ratios
+        drag_start_ratios = None
         canvas.delete("all")
         if image is None:
             return
@@ -242,49 +256,93 @@ def main() -> None:
         )
         _, encoded = cv.imencode(".png", small)
         photo = tk.PhotoImage(master=root, data=encoded.tobytes(), format="PNG")
-        x = (canvas.winfo_width() - display_width) // 2
-        y = (canvas.winfo_height() - display_height) // 2
-        display_bounds = (x, y, x + display_width, y + display_height)
-        canvas.create_image(x, y, image=photo, anchor="nw")
+        display_left = (canvas.winfo_width() - display_width) // 2
+        display_top = (canvas.winfo_height() - display_height) // 2
+        display_bounds = (
+            display_left,
+            display_top,
+            display_left + display_width,
+            display_top + display_height,
+        )
+        canvas.create_image(display_left, display_top, image=photo, anchor="nw")
         selection = region_list.curselection()
         if view.get() == "initial" and selection:
             label, index = region_rows[selection[0]]
-            left, top, right, bottom = regions[label][index]
+            left_ratio, top_ratio, right_ratio, bottom_ratio = regions[label][index]
             canvas.create_rectangle(
-                x + left * display_width,
-                y + top * display_height,
-                x + right * display_width,
-                y + bottom * display_height,
+                display_left + left_ratio * display_width,
+                display_top + top_ratio * display_height,
+                display_left + right_ratio * display_width,
+                display_top + bottom_ratio * display_height,
                 outline="yellow",
                 width=2,
             )
+        for name, value in (("開始", start_text), ("終了", end_text)):
+            try:
+                row_y = int(value.get())
+            except ValueError:
+                continue
+            if not 0 <= row_y < height:
+                continue
+            # 行番号を画像上の画素中心へ合わせる。
+            line_y = display_top + (row_y + 0.5) * display_height / height
+            canvas.create_line(
+                display_left,
+                line_y,
+                display_left + display_width,
+                line_y,
+                fill="yellow",
+                width=2,
+                tags="interval",
+            )
+            canvas.create_text(
+                display_left + 8,
+                max(display_top + 18, line_y - 3),
+                text=f"{name} y={row_y}",
+                fill="yellow",
+                anchor="sw",
+                tags="interval",
+            )
 
-    def image_point(event: tk.Event) -> tuple[float, float]:
-        x0, y0, x1, y1 = display_bounds
-        return (
-            min(1.0, max(0.0, (event.x - x0) / (x1 - x0))),
-            min(1.0, max(0.0, (event.y - y0) / (y1 - y0))),
-        )
+    def image_ratios(event: tk.Event) -> tuple[float, float]:
+        display_left, display_top, display_right, display_bottom = display_bounds
+        display_width = display_right - display_left
+        display_height = display_bottom - display_top
+        x_ratio = (event.x - display_left) / display_width
+        y_ratio = (event.y - display_top) / display_height
+        x_ratio = min(1.0, max(0.0, x_ratio))
+        y_ratio = min(1.0, max(0.0, y_ratio))
+        return x_ratio, y_ratio
 
     def start_draw(event: tk.Event) -> None:
-        nonlocal drag_start
+        nonlocal drag_start_ratios
         if image is None or view.get() != "initial":
             return
-        x0, y0, x1, y1 = display_bounds
-        if x0 <= event.x <= x1 and y0 <= event.y <= y1:
-            drag_start = image_point(event)
+        display_left, display_top, display_right, display_bottom = display_bounds
+        if (
+            display_left <= event.x <= display_right
+            and display_top <= event.y <= display_bottom
+        ):
+            drag_start_ratios = image_ratios(event)
 
     def drag_draw(event: tk.Event) -> None:
-        if drag_start is None:
+        if drag_start_ratios is None:
             return
-        x0, y0, x1, y1 = display_bounds
-        x, y = image_point(event)
+        display_left, display_top, display_right, display_bottom = display_bounds
+        display_width = display_right - display_left
+        display_height = display_bottom - display_top
+        start_x_ratio, start_y_ratio = drag_start_ratios
+        end_x_ratio, end_y_ratio = image_ratios(event)
+        start_canvas_x = display_left + start_x_ratio * display_width
+        start_canvas_y = display_top + start_y_ratio * display_height
+        end_canvas_x = display_left + end_x_ratio * display_width
+        end_canvas_y = display_top + end_y_ratio * display_height
         canvas.delete("drag")
         canvas.create_rectangle(
-            x0 + drag_start[0] * (x1 - x0),
-            y0 + drag_start[1] * (y1 - y0),
-            x0 + x * (x1 - x0),
-            y0 + y * (y1 - y0),
+            start_canvas_x,
+            start_canvas_y,
+            end_canvas_x,
+            end_canvas_y,
             outline="white",
             width=2,
             dash=(5, 3),
@@ -292,33 +350,36 @@ def main() -> None:
         )
 
     def end_draw(event: tk.Event) -> None:
-        nonlocal drag_start
-        if drag_start is None:
+        nonlocal drag_start_ratios
+        if drag_start_ratios is None:
             return
-        x, y = image_point(event)
-        left, right = sorted((drag_start[0], x))
-        top, bottom = sorted((drag_start[1], y))
-        drag_start = None
+        start_x_ratio, start_y_ratio = drag_start_ratios
+        end_x_ratio, end_y_ratio = image_ratios(event)
+        left_ratio, right_ratio = sorted((start_x_ratio, end_x_ratio))
+        top_ratio, bottom_ratio = sorted((start_y_ratio, end_y_ratio))
+        drag_start_ratios = None
         canvas.delete("drag")
-        if int(width * left) >= int(width * right) or int(height * top) >= int(
-            height * bottom
-        ):
+        left_px = int(width * left_ratio)
+        right_px = int(width * right_ratio)
+        top_px = int(height * top_ratio)
+        bottom_px = int(height * bottom_ratio)
+        if left_px >= right_px or top_px >= bottom_px:
             status.set("矩形が1画素未満です。指定範囲を広げてください。")
             return
-        rect = (left, top, right, bottom)
+        rect = (left_ratio, top_ratio, right_ratio, bottom_ratio)
         label = mode.get()
         if label == cv.GC_PR_FGD:
             regions[label] = [rect]
         else:
             regions[label].append(rect)
-        refresh_regions()
+        on_regions_changed()
 
     def delete_region() -> None:
         selection = region_list.curselection()
         if selection:
             label, index = region_rows[selection[0]]
             del regions[label][index]
-            refresh_regions()
+            on_regions_changed()
 
     def save_image() -> None:
         if image is None or input_path is None:
@@ -355,13 +416,16 @@ def main() -> None:
             return
         status.set(f"保存しました: {output_path.name}")
 
-    def invalidate(*_args) -> None:
+    def clear_measurement() -> None:
         nonlocal measurement, result_image
         measurement = None
         result_image = None
         for item in result_table.get_children():
             result_table.set(item, "length", "—")
         save_csv_button.state(["disabled"])
+
+    def on_interval_changed(*_args) -> None:
+        clear_measurement()
         if view.get() == "result":
             view.set("initial")
         status.set("")
@@ -369,7 +433,10 @@ def main() -> None:
 
     def calculate() -> None:
         nonlocal measurement, result_image
-        invalidate()
+        clear_measurement()
+        if view.get() == "result":
+            view.set("initial")
+        render()
         if image is None:
             status.set("補正画像を読み込んでください")
             return
@@ -500,15 +567,15 @@ def main() -> None:
             sidebar, text=name, variable=view, value=value, command=render
         ).pack(anchor="w")
 
-    start_text.trace_add("write", invalidate)
-    end_text.trace_add("write", invalidate)
+    start_text.trace_add("write", on_interval_changed)
+    end_text.trace_add("write", on_interval_changed)
     canvas.bind("<Configure>", render)
     canvas.bind("<ButtonPress-1>", start_draw)
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
     region_list.bind("<<ListboxSelect>>", show_initial)
     output_directory.mkdir(parents=True, exist_ok=True)
-    refresh_regions()
+    on_regions_changed()
     root.mainloop()
 
 

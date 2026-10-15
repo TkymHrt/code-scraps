@@ -143,6 +143,47 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
             1000,
         )
         draw("確実な前景（緑）", *foreground)
+
+        interval_start = int(root.getvar(str(start.cget("textvariable"))))
+        interval_end = int(root.getvar(str(end.cget("textvariable"))))
+
+        def preview_lines():
+            return [
+                canvas.coords(item)
+                for item in canvas.find_withtag("interval")
+                if canvas.type(item) == "line"
+            ]
+
+        # 縮小表示と余白があっても、入力した画像内の位置へ横線が移動する。
+        set_field(root, start, height // 4)
+        set_field(root, end, height * 3 // 4)
+        image_item = canvas.find_all()[0]
+        x0, y0, x1, y1 = canvas.bbox(image_item)
+        lines = preview_lines()
+        assert len(lines) == 2
+        for line, fraction in zip(lines, (0.25, 0.75)):
+            assert line[0] == x0 and line[2] == x1
+            assert abs(line[1] - (y0 + (y1 - y0) * fraction)) <= 1
+        set_field(root, start, height // 2)
+        moved_lines = preview_lines()
+        assert moved_lines[0][1] > lines[0][1]
+        assert moved_lines[1] == lines[1]
+        assert any(
+            canvas.itemcget(item, "text") == f"開始 y={height // 2}"
+            for item in canvas.find_withtag("interval")
+            if canvas.type(item) == "text"
+        )
+        for invalid in ("", "整数ではない値", -1, height):
+            set_field(root, start, invalid)
+            assert len(preview_lines()) == 1
+            assert preview_lines()[0] == lines[1]
+        set_field(root, start, interval_start)
+        set_field(root, end, interval_end)
+        radios["元画像"].invoke()
+        root.update()
+        assert len(preview_lines()) == 2
+        if screenshots:
+            capture(root, directory / "interval_preview_gui.png")
         invoke("長さを計測")
         assert "計測しました" in status(), status()
         assert buttons["長さCSVを保存"].instate(["!disabled"])
@@ -159,6 +200,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
             )
         assert not any(isinstance(w, tk.Toplevel) for w in widgets)
         result_table = next(w for w in widgets if isinstance(w, ttk.Treeview))
+        assert len(preview_lines()) == 2
         assert result_table.set("left", "length") != "—"
         assert not any(
             isinstance(w, ttk.Label) and "固定倍率" in str(w.cget("text"))
@@ -189,6 +231,25 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert "計測区間" in status()
         assert csv_path.read_bytes() == before
         assert image_path.read_bytes() == image_bytes
+
+        set_field(root, start, interval_start)
+        invoke("長さを計測")
+        assert buttons["長さCSVを保存"].instate(["!disabled"])
+        region_list = next(w for w in widgets if isinstance(w, tk.Listbox))
+        region_count = region_list.size()
+        region_list.selection_set(0)
+        invoke("選択した矩形を削除")
+        assert region_list.size() == region_count - 1
+        assert buttons["長さCSVを保存"].instate(["disabled"])
+        assert result_table.set("left", "length") == "—"
+        invoke("矩形をすべて削除")
+        assert region_list.size() == 0
+        with patch.object(filedialog, "askopenfilename", return_value=str(image_path)):
+            invoke("補正画像を読み込む")
+        assert root.getvar(str(start.cget("textvariable"))) == "0"
+        assert root.getvar(str(end.cget("textvariable"))) == str(height - 1)
+        assert len(preview_lines()) == 2
+        assert buttons["長さCSVを保存"].instate(["disabled"])
         assert not errors, errors
 
     try:
