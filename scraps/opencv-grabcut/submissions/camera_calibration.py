@@ -7,6 +7,7 @@ import numpy as np
 
 # この撮影モード・解像度で撮った校正板の写真だけを入れる。
 INPUT_DIRECTORY = "input/camera_calibration"
+OUTPUT_DIRECTORY = "output/camera_detection"
 
 # generate_charuco_board.pyとrectify_image.pyと同じ板。
 BOARD_SQUARES = (7, 5)
@@ -14,14 +15,11 @@ SQUARE_MM = 30.0
 MARKER_MM = 18.0
 
 
-def calibrate(paths: list[Path]) -> tuple:
-    if len(paths) < 10:
-        raise ValueError(
-            "位置・傾き・距離を変えた校正板の写真を10枚以上用意してください"
-        )
+def calibrate(paths: list[Path], output_directory: Path) -> tuple:
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
     detector = cv.aruco.CharucoDetector(board)
+    all_board_points = np.array(board.getChessboardCorners(), dtype=np.float64)
     object_points = []
     image_points = []
     image_size = None
@@ -33,34 +31,60 @@ def calibrate(paths: list[Path]) -> tuple:
         if image_size is not None and image_size != (width, height):
             raise ValueError(f"校正写真の解像度を揃えてください: {path.name}")
         image_size = (width, height)
-        corners, ids, _, _ = detector.detectBoard(image)
-        if ids is None or len(ids) < 6 or board.checkCharucoCornersCollinear(ids):
+        corners, ids, markers, marker_ids = detector.detectBoard(image)
+        corner_count = 0
+        if ids is not None:
+            corner_count = len(ids)
+        usable = corner_count >= 6 and not board.checkCharucoCornersCollinear(ids)
+        check_image = image.copy()
+        if marker_ids is not None:
+            cv.aruco.drawDetectedMarkers(check_image, markers, marker_ids)
+        if corner_count > 0:
+            cv.aruco.drawDetectedCornersCharuco(
+                check_image, corners.reshape(-1, 1, 2), ids, (0, 0, 255)
+            )
+        status = "OK" if usable else "NG"
+        cv.putText(
+            check_image,
+            f"{status}: {corner_count} corners",
+            (20, 40),
+            cv.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 255),
+            2,
+        )
+        check_path = output_directory / f"{path.name}_detected.png"
+        success, encoded = cv.imencode(".png", check_image)
+        if not success:
+            raise OSError(f"PNGにできません: {check_path.name}")
+        check_path.parent.mkdir(parents=True, exist_ok=True)
+        check_path.write_bytes(encoded.tobytes())
+        print(f"読取確認: {check_path.name} / {status} / 角{corner_count}点")
+        if not usable:
             raise ValueError(f"板の角を縦横に6点以上読める写真が必要です: {path.name}")
-        all_board_points = np.array(board.getChessboardCorners(), dtype=np.float64)
         board_points = all_board_points[ids.astype(np.int32).ravel()]
         # OpenCV 5の魚眼校正へ、1行に全点を並べた形で渡す。
         detected_points = np.array(corners, dtype=np.float64).reshape(1, -1, 2)
         object_points.append(board_points.reshape(1, -1, 3))
         image_points.append(detected_points)
 
+    if len(paths) < 10:
+        raise ValueError(
+            "位置・傾き・距離を変えた校正板の写真を10枚以上用意してください"
+        )
     assert image_size is not None
     matrix = np.zeros((3, 3), dtype=np.float64)
     distortion = np.zeros((4, 1), dtype=np.float64)
     flags = cv.CALIB_RECOMPUTE_EXTRINSIC | cv.CALIB_CHECK_COND | cv.CALIB_FIX_SKEW
-    try:
-        rms, matrix, distortion, rotations, translations = cv.fisheye.calibrate(
-            object_points,
-            image_points,
-            image_size,
-            matrix,
-            distortion,
-            flags=flags,
-            criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-8),
-        )
-    except cv.error as error:
-        raise ValueError(
-            "魚眼校正できません。板の位置・傾き・距離を変えて撮り直してください"
-        ) from error
+    rms, matrix, distortion, rotations, translations = cv.fisheye.calibrate(
+        object_points,
+        image_points,
+        image_size,
+        matrix,
+        distortion,
+        flags=flags,
+        criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-8),
+    )
     if (
         not np.isfinite(rms)
         or not np.isfinite(matrix).all()
@@ -86,20 +110,19 @@ def calibrate(paths: list[Path]) -> tuple:
 def parameter_text(
     image_size: tuple, matrix: np.ndarray, distortion: np.ndarray
 ) -> str:
-    lines = [f"CALIBRATION_SIZE = {image_size!r}", "CAMERA_MATRIX = ["]
-    for row in matrix:
-        lines.append(f"    [{row[0]:.12g}, {row[1]:.12g}, {row[2]:.12g}],")
-    lines.append("]")
-    values = []
-    for value in distortion.ravel():
-        values.append(f"{value:.12g}")
-    lines.append("DIST_COEFFS = [" + ", ".join(values) + "]")
-    return "\n".join(lines)
+    return (
+        f"CALIBRATION_SIZE = {image_size!r}\n"
+        f"CAMERA_MATRIX = {matrix.tolist()!r}\n"
+        f"DIST_COEFFS = {distortion.ravel().tolist()!r}"
+    )
 
 
 def main() -> None:
     directory = Path(__file__).resolve().parent
-    input_directory = directory / INPUT_DIRECTORY
+    input_directory = (directory / INPUT_DIRECTORY).resolve()
+    output_directory = (directory / OUTPUT_DIRECTORY).resolve()
+    if input_directory == output_directory:
+        raise ValueError("入力と出力は別のフォルダにしてください")
     paths = []
     if input_directory.is_dir():
         for path in sorted(input_directory.iterdir()):
@@ -112,12 +135,7 @@ def main() -> None:
                 ".tiff",
             ):
                 paths.append(path)
-    if len(paths) < 10:
-        print(
-            f"次に{input_directory}へ、校正板の写真を10枚以上入れて再実行してください。"
-        )
-        return
-    image_size, matrix, distortion, rms, errors = calibrate(paths)
+    image_size, matrix, distortion, rms, errors = calibrate(paths, output_directory)
     print(f"魚眼モデル / 再投影誤差 RMS: {rms:.4f}px（実寸精度の保証値ではありません）")
     for path, error in zip(paths, errors):
         print(f"  {path.name}: {error:.4f}px")

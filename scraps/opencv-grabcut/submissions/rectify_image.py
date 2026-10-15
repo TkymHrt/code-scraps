@@ -23,7 +23,15 @@ MARKER_MM = 18.0
 MM_PER_PX = 0.25
 
 
-def rectify_image(image: np.ndarray) -> dict:
+def save_png(path: Path, image: np.ndarray) -> None:
+    success, encoded = cv.imencode(".png", image)
+    if not success:
+        raise OSError(f"PNGにできません: {path.name}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encoded.tobytes())
+
+
+def rectify_image(image: np.ndarray, check_path: Path) -> dict:
     if CALIBRATION_SIZE is None or CAMERA_MATRIX is None or DIST_COEFFS is None:
         raise ValueError("コード冒頭へcamera_calibration.pyの3設定を貼り付けてください")
     height, width = image.shape[:2]
@@ -54,12 +62,34 @@ def rectify_image(image: np.ndarray) -> dict:
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
     detector = cv.aruco.CharucoDetector(board)
-    corners, ids, _, _ = detector.detectBoard(undistorted)
-    if ids is None or len(ids) < 6 or board.checkCharucoCornersCollinear(ids):
+    corners, ids, markers, marker_ids = detector.detectBoard(undistorted)
+    corner_count = 0
+    if ids is not None:
+        corner_count = len(ids)
+    usable = corner_count >= 6 and not board.checkCharucoCornersCollinear(ids)
+    check_image = undistorted.copy()
+    if marker_ids is not None:
+        cv.aruco.drawDetectedMarkers(check_image, markers, marker_ids)
+    if corner_count > 0:
+        cv.aruco.drawDetectedCornersCharuco(
+            check_image, corners.reshape(-1, 1, 2), ids, (0, 0, 255)
+        )
+    status = "OK" if usable else "NG"
+    cv.putText(
+        check_image,
+        f"{status}: {corner_count} corners",
+        (20, 40),
+        cv.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 255),
+        2,
+    )
+    save_png(check_path, check_image)
+    print(f"読取確認: {check_path.name} / {status} / 角{corner_count}点")
+    if not usable:
         raise ValueError("ChArUco板の角を縦横に6点以上読める画像を指定してください")
     all_board_points = np.array(board.getChessboardCorners(), dtype=np.float32)
-    object_points = all_board_points[ids.astype(np.int32).ravel()]
-    board_xy = object_points.reshape(-1, 3)[:, :2]
+    board_xy = all_board_points[ids.astype(np.int32).ravel(), :2]
     detected_xy = corners.reshape(-1, 2)
     # 板のmm座標へ写す。試料の形を基準に変形すると伸びを消すため、使わない。
     homography, _ = cv.findHomography(detected_xy, board_xy)
@@ -107,7 +137,7 @@ def rectify_image(image: np.ndarray) -> dict:
     return {
         "image": corrected,
         "mm_per_px": MM_PER_PX,
-        "corner_count": len(ids),
+        "corner_count": corner_count,
         "error_px": error_px,
     }
 
@@ -142,34 +172,21 @@ def main() -> None:
     if not input_paths:
         raise ValueError("入力フォルダに画像がありません")
 
-    failed = 0
     for input_path in input_paths:
         output_path = output_directory / f"{input_path.stem}.png"
-        try:
-            image = cv.imdecode(
-                np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
-            )
-            if image is None:
-                raise ValueError("画像を読み込めません")
-            correction = rectify_image(image)
-            success, encoded = cv.imencode(".png", correction["image"])
-            if not success:
-                raise OSError("補正画像をPNGにできません")
-            output_directory.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(encoded.tobytes())
-        except (OSError, ValueError, cv.error) as error:
-            failed += 1
-            print(f"失敗: {input_path.name}: {error}")
-            continue
+        check_path = output_directory / "detected" / f"{input_path.name}_detected.png"
+        image = cv.imdecode(
+            np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+        )
+        if image is None:
+            raise ValueError(f"画像を読み込めません: {input_path.name}")
+        correction = rectify_image(image, check_path)
+        save_png(output_path, correction["image"])
         print(
             f"保存: {output_path.name} / 角{correction['corner_count']}点 / "
             f"再投影誤差{correction['error_px']:.3f}px"
         )
-    print(
-        f"完了: 成功{len(input_paths) - failed}枚、失敗{failed}枚 → {output_directory}"
-    )
-    if failed:
-        raise SystemExit("補正できなかった画像を確認して、再実行してください")
+    print(f"完了: {len(input_paths)}枚 → {output_directory}")
 
 
 if __name__ == "__main__":

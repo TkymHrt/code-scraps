@@ -356,6 +356,7 @@ def main():
     photos.mkdir()
     calibration_photos(photos)
     log = execute("camera_calibration.py", camera_folder, INPUT_DIRECTORY=str(photos))
+    assert len(list((camera_folder / "output/camera_detection").glob("*.png"))) == 12
     block = log[log.index("CALIBRATION_SIZE =") :]
     settings = {}
     for node in ast.parse(block).body:
@@ -380,6 +381,9 @@ def main():
     )
     known_dimensions = []
     for name in ("shot1", "shot2"):
+        assert (
+            camera_folder / f"output/rectified/detected/{name}.png_detected.png"
+        ).is_file()
         image_path = camera_folder / f"output/rectified/{name}.png"
         corrected = cv.imdecode(
             np.frombuffer(image_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
@@ -468,6 +472,7 @@ def main():
             CAMERA_MATRIX=matrix.tolist(),
             DIST_COEFFS=distortion.tolist(),
         )
+        assert (folder / f"output/rectified/detected/{name}.png_detected.png").is_file()
         assert not list(folder.glob("*.csv"))
         corrected = cv.imdecode(
             np.frombuffer(corrected_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
@@ -497,6 +502,7 @@ def main():
         "camera_model": "opencv_fisheye",
         "camera_calibration": "12 synthetic fisheye photos, parameters copied to standalone rectifier",
         "known_dimensions": known_dimensions,
+        "detection_checks": "12 calibration photos and 5 rectification photos with markers, corner IDs and OK/NG labels",
         "adjacent_board_assumptions": "4px/mm, same plane, hypothetical camera coefficients",
         "analysis_assumptions": "same unrolled sample, initial interval 230mm, all thicknesses 10mm",
         "measurements": rows,

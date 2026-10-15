@@ -218,7 +218,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             ((-0.05, 0.10, -0.02), (-350, -200, 450)),
         ]:
             corrected = rectifier["rectify_image"](
-                rendered_scene(rotation, translation)
+                rendered_scene(rotation, translation), self.directory / "確認.png"
             )["image"]
             length_mm, width_mm = specimen_size(corrected)
             self.assertAlmostEqual(length_mm, 150, delta=1)
@@ -234,10 +234,19 @@ class CurrentWorkflowTests(unittest.TestCase):
             str(copy_current("camera_calibration.py", self.directory))
         )
         size, matrix, distortion, rms, _ = camera["calibrate"](
-            calibration_photos(self.directory)
+            calibration_photos(self.directory), self.directory / "camera_detection"
         )
         self.assertLess(rms, 0.5)
         self.assertEqual(distortion.size, 4)
+        checks = sorted((self.directory / "camera_detection").glob("*.png"))
+        self.assertEqual(len(checks), 12)
+        check_image = cv.imdecode(
+            np.frombuffer(checks[0].read_bytes(), np.uint8), cv.IMREAD_COLOR
+        )
+        assert check_image is not None
+        self.assertEqual(check_image.shape[:2], IMAGE_SIZE[::-1])
+        red_points = cv.inRange(check_image, (0, 0, 250), (5, 5, 255))
+        self.assertGreater(cv.countNonZero(red_points), 100)
         rectifier = runpy.run_path(
             str(copy_current("rectify_image.py", self.directory))
         )
@@ -249,7 +258,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             ((-0.05, 0.10, -0.02), (-350, -200, 450)),
         ]:
             corrected = rectifier["rectify_image"](
-                rendered_scene(rotation, translation)
+                rendered_scene(rotation, translation), self.directory / "確認.png"
             )
             self.assertLess(corrected["error_px"], 1)
             length_mm, width_mm = specimen_size(corrected["image"])
@@ -264,9 +273,9 @@ class CurrentWorkflowTests(unittest.TestCase):
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400), partial=True)
         configure(rectifier, distortion=np.zeros(5))
         with self.assertRaisesRegex(ValueError, "歪み係数4個"):
-            rectifier["rectify_image"](image)
+            rectifier["rectify_image"](image, self.directory / "確認.png")
         configure(rectifier)
-        correction = rectifier["rectify_image"](image)
+        correction = rectifier["rectify_image"](image, self.directory / "確認.png")
         self.assertGreaterEqual(correction["corner_count"], 6)
         self.assertLess(correction["corner_count"], 24)
         ys, _ = np.nonzero(
@@ -302,11 +311,15 @@ class CurrentWorkflowTests(unittest.TestCase):
         )
         with contextlib.redirect_stdout(io.StringIO()) as log:
             runpy.run_path(str(script), run_name="__main__")
-        self.assertIn("成功2枚、失敗0枚", log.getvalue())
+        self.assertIn("完了: 2枚", log.getvalue())
         output_directory = self.directory / "output/rectified"
         self.assertEqual(
             sorted(path.name for path in output_directory.iterdir()),
-            ["撮影1.png", "撮影2.png"],
+            ["detected", "撮影1.png", "撮影2.png"],
+        )
+        self.assertEqual(
+            sorted(path.name for path in (output_directory / "detected").iterdir()),
+            ["撮影1.png_detected.png", "撮影2.bmp_detected.png"],
         )
         for name, contents in original.items():
             self.assertEqual((input_directory / name).read_bytes(), contents)
@@ -320,7 +333,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             ys, _ = np.nonzero(cv.inRange(corrected, (20, 75, 145), (90, 145, 220)))
             self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
 
-    def test_batch_reports_bad_images_and_keeps_their_previous_outputs(self):
+    def test_batch_stops_on_bad_image_and_reruns_after_input_is_fixed(self):
         input_directory = self.directory / "input"
         input_directory.mkdir()
         _, encoded = cv.imencode(
@@ -345,15 +358,60 @@ class CurrentWorkflowTests(unittest.TestCase):
         )
         with (
             contextlib.redirect_stdout(io.StringIO()) as log,
-            self.assertRaises(SystemExit),
+            self.assertRaisesRegex(ValueError, "ChArUco"),
         ):
             runpy.run_path(str(script), run_name="__main__")
-        self.assertIn("成功1枚、失敗2枚", log.getvalue())
+        self.assertIn("NG / 角0点", log.getvalue())
+        self.assertTrue(
+            (output_directory / "detected/00_板なし.png_detected.png").is_file()
+        )
         self.assertEqual(
             (output_directory / "00_板なし.png").read_bytes(), b"keep previous output"
         )
-        self.assertTrue((output_directory / "01_正常.png").is_file())
+        self.assertFalse((output_directory / "01_正常.png").exists())
         self.assertFalse((output_directory / "02_破損.png").exists())
+        (input_directory / "00_板なし.png").unlink()
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(ValueError, "02_破損.png"),
+        ):
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertTrue((output_directory / "01_正常.png").is_file())
+        self.assertFalse(
+            (output_directory / "detected/02_破損.png_detected.png").exists()
+        )
+        (input_directory / "02_破損.png").unlink()
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertIn("完了: 1枚", log.getvalue())
+
+    def test_calibration_saves_checks_before_rejecting_bad_or_insufficient_photos(self):
+        camera = runpy.run_path(
+            str(copy_current("camera_calibration.py", self.directory))
+        )
+        image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
+        good = self.directory / "校正.png"
+        _, encoded = cv.imencode(".png", image)
+        good.write_bytes(encoded.tobytes())
+        original = good.read_bytes()
+        output = self.directory / "確認"
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(ValueError, "10枚以上"),
+        ):
+            camera["calibrate"]([good], output)
+        self.assertTrue((output / "校正.png_detected.png").is_file())
+        bad = self.directory / "板なし.png"
+        _, encoded = cv.imencode(".png", np.zeros_like(image))
+        bad.write_bytes(encoded.tobytes())
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as log,
+            self.assertRaisesRegex(ValueError, "板なし.png"),
+        ):
+            camera["calibrate"]([good, bad], output)
+        self.assertIn("NG / 角0点", log.getvalue())
+        self.assertTrue((output / "板なし.png_detected.png").is_file())
+        self.assertEqual(good.read_bytes(), original)
 
     def test_batch_rejects_missing_empty_same_directory_and_name_collisions(self):
         rectifier = runpy.run_path(
