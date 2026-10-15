@@ -23,15 +23,7 @@ MARKER_MM = 18.0
 MM_PER_PX = 0.25
 
 
-def save_png(path: Path, image: np.ndarray) -> None:
-    success, encoded = cv.imencode(".png", image)
-    if not success:
-        raise OSError(f"PNGにできません: {path.name}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(encoded.tobytes())
-
-
-def rectify_image(image: np.ndarray, check_path: Path) -> dict:
+def rectify_image(image: np.ndarray) -> dict:
     if CALIBRATION_SIZE is None or CAMERA_MATRIX is None or DIST_COEFFS is None:
         raise ValueError("コード冒頭へcamera_calibration.pyの3設定を貼り付けてください")
     height, width = image.shape[:2]
@@ -62,31 +54,8 @@ def rectify_image(image: np.ndarray, check_path: Path) -> dict:
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
     detector = cv.aruco.CharucoDetector(board)
-    corners, ids, markers, marker_ids = detector.detectBoard(undistorted)
-    corner_count = 0
-    if ids is not None:
-        corner_count = len(ids)
-    usable = corner_count >= 6 and not board.checkCharucoCornersCollinear(ids)
-    check_image = undistorted.copy()
-    if marker_ids is not None:
-        cv.aruco.drawDetectedMarkers(check_image, markers, marker_ids)
-    if corner_count > 0:
-        cv.aruco.drawDetectedCornersCharuco(
-            check_image, corners.reshape(-1, 1, 2), ids, (0, 0, 255)
-        )
-    status = "OK" if usable else "NG"
-    cv.putText(
-        check_image,
-        f"{status}: {corner_count} corners",
-        (20, 40),
-        cv.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 255),
-        2,
-    )
-    save_png(check_path, check_image)
-    print(f"読取確認: {check_path.name} / {status} / 角{corner_count}点")
-    if not usable:
+    corners, ids, _, _ = detector.detectBoard(undistorted)
+    if ids is None or len(ids) < 6 or board.checkCharucoCornersCollinear(ids):
         raise ValueError("ChArUco板の角を縦横に6点以上読める画像を指定してください")
     all_board_points = np.array(board.getChessboardCorners(), dtype=np.float32)
     board_xy = all_board_points[ids.astype(np.int32).ravel(), :2]
@@ -95,12 +64,25 @@ def rectify_image(image: np.ndarray, check_path: Path) -> dict:
     homography, _ = cv.findHomography(detected_xy, board_xy)
     if homography is None or not np.isfinite(homography).all():
         raise ValueError("板から遠近補正を求められません")
+    board_to_image = np.linalg.inv(homography)
     predicted = cv.perspectiveTransform(
-        board_xy.reshape(-1, 1, 2), np.linalg.inv(homography)
+        board_xy.reshape(-1, 1, 2), board_to_image
     ).reshape(-1, 2)
     error_px = float(np.sqrt(np.mean(np.sum((predicted - detected_xy) ** 2, axis=1))))
     if error_px > 2.0:
         raise ValueError(f"板の再投影誤差が大きいため保存しません: {error_px:.3f}px")
+
+    # 板の横軸が写真に写る向きを残し、板の配置に合わせた回転を防ぐ。
+    center = board_xy.mean(axis=0)
+    board_axis = np.array([center, center + [SQUARE_MM, 0]], dtype=np.float64)
+    image_axis = cv.perspectiveTransform(
+        board_axis.reshape(-1, 1, 2), board_to_image
+    ).reshape(-1, 2)
+    direction = image_axis[1] - image_axis[0]
+    direction = direction / np.linalg.norm(direction)
+    dx, dy = direction
+    rotation = np.array([[dx, -dy, 0], [dy, dx, 0], [0, 0, 1]])
+    homography = rotation @ homography
 
     frame_corners = np.array(
         [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
@@ -137,7 +119,7 @@ def rectify_image(image: np.ndarray, check_path: Path) -> dict:
     return {
         "image": corrected,
         "mm_per_px": MM_PER_PX,
-        "corner_count": corner_count,
+        "corner_count": len(ids),
         "error_px": error_px,
     }
 
@@ -174,14 +156,17 @@ def main() -> None:
 
     for input_path in input_paths:
         output_path = output_directory / f"{input_path.stem}.png"
-        check_path = output_directory / "detected" / f"{input_path.name}_detected.png"
         image = cv.imdecode(
             np.frombuffer(input_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
         )
         if image is None:
             raise ValueError(f"画像を読み込めません: {input_path.name}")
-        correction = rectify_image(image, check_path)
-        save_png(output_path, correction["image"])
+        correction = rectify_image(image)
+        success, encoded = cv.imencode(".png", correction["image"])
+        if not success:
+            raise OSError(f"PNGにできません: {output_path.name}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(encoded.tobytes())
         print(
             f"保存: {output_path.name} / 角{correction['corner_count']}点 / "
             f"再投影誤差{correction['error_px']:.3f}px"

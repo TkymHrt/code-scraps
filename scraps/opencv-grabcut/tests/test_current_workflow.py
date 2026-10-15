@@ -219,7 +219,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             ((-0.05, 0.10, -0.02), (-350, -200, 450)),
         ]:
             corrected = rectifier["rectify_image"](
-                rendered_scene(rotation, translation), self.directory / "確認.png"
+                rendered_scene(rotation, translation)
             )["image"]
             length_mm, width_mm = specimen_size(corrected)
             self.assertAlmostEqual(length_mm, 150, delta=1)
@@ -259,7 +259,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             ((-0.05, 0.10, -0.02), (-350, -200, 450)),
         ]:
             corrected = rectifier["rectify_image"](
-                rendered_scene(rotation, translation), self.directory / "確認.png"
+                rendered_scene(rotation, translation)
             )
             self.assertLess(corrected["error_px"], 1)
             length_mm, width_mm = specimen_size(corrected["image"])
@@ -274,15 +274,52 @@ class CurrentWorkflowTests(unittest.TestCase):
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400), partial=True)
         configure(rectifier, distortion=np.zeros(5))
         with self.assertRaisesRegex(ValueError, "歪み係数4個"):
-            rectifier["rectify_image"](image, self.directory / "確認.png")
+            rectifier["rectify_image"](image)
         configure(rectifier)
-        correction = rectifier["rectify_image"](image, self.directory / "確認.png")
+        correction = rectifier["rectify_image"](image)
         self.assertGreaterEqual(correction["corner_count"], 6)
         self.assertLess(correction["corner_count"], 24)
-        ys, _ = np.nonzero(
-            cv.inRange(correction["image"], (20, 75, 145), (90, 145, 220))
+        length_mm, width_mm = specimen_size(correction["image"])
+        self.assertAlmostEqual(length_mm, 150, delta=1)
+        self.assertAlmostEqual(width_mm, 40, delta=1)
+
+    def test_rectification_keeps_photo_orientation_for_rotated_boards(self):
+        rectifier = runpy.run_path(
+            str(copy_current("rectify_image.py", self.directory))
         )
-        self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
+        configure(rectifier)
+        dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
+        board = cv.aruco.CharucoBoard((7, 5), 30.0, 18.0, dictionary)
+        detector = cv.aruco.CharucoDetector(board)
+
+        def specimen_direction(image):
+            corners, ids, _, _ = detector.detectBoard(image)
+            self.assertIsNotNone(ids)
+            self.assertEqual(len(ids), 24)
+            ys, xs = np.nonzero(cv.inRange(image, (20, 75, 145), (90, 145, 220)))
+            specimen_center = np.array([xs.mean(), ys.mean()])
+            board_center = corners.reshape(-1, 2).mean(axis=0)
+            direction = specimen_center - board_center
+            return direction / np.linalg.norm(direction)
+
+        for angle in (0, np.pi / 2, np.pi, 3 * np.pi / 2, 0.4):
+            with self.subTest(angle=angle):
+                rotation = np.array([0.0, 0.0, angle])
+                rotation_matrix, _ = cv.Rodrigues(rotation)
+                translation = -rotation_matrix @ np.array([145.0, 85.0, 0.0])
+                translation[2] = 400
+                image = rendered_scene(rotation, translation)
+                before = image.copy()
+                corrected = rectifier["rectify_image"](image)["image"]
+                alignment = np.dot(
+                    specimen_direction(image), specimen_direction(corrected)
+                )
+                self.assertGreater(alignment, np.cos(np.deg2rad(3)))
+                self.assertGreater(corrected.shape[1], corrected.shape[0])
+                length_mm, width_mm = specimen_size(corrected)
+                self.assertAlmostEqual(length_mm, 150, delta=1)
+                self.assertAlmostEqual(width_mm, 40, delta=1)
+                np.testing.assert_array_equal(image, before)
 
     def test_batch_converts_multiple_formats_and_skips_nested_and_other_files(self):
         input_directory = self.directory / "input"
@@ -316,11 +353,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         output_directory = self.directory / "output/rectified"
         self.assertEqual(
             sorted(path.name for path in output_directory.iterdir()),
-            ["detected", "撮影1.png", "撮影2.png"],
-        )
-        self.assertEqual(
-            sorted(path.name for path in (output_directory / "detected").iterdir()),
-            ["撮影1.png_detected.png", "撮影2.bmp_detected.png"],
+            ["撮影1.png", "撮影2.png"],
         )
         for name, contents in original.items():
             self.assertEqual((input_directory / name).read_bytes(), contents)
@@ -331,8 +364,9 @@ class CurrentWorkflowTests(unittest.TestCase):
                 cv.IMREAD_COLOR,
             )
             assert corrected is not None
-            ys, _ = np.nonzero(cv.inRange(corrected, (20, 75, 145), (90, 145, 220)))
-            self.assertAlmostEqual((ys.max() - ys.min()) * 0.25, 150, delta=1)
+            length_mm, width_mm = specimen_size(corrected)
+            self.assertAlmostEqual(length_mm, 150, delta=1)
+            self.assertAlmostEqual(width_mm, 40, delta=1)
 
     def test_batch_stops_on_bad_image_and_reruns_after_input_is_fixed(self):
         input_directory = self.directory / "input"
@@ -362,10 +396,8 @@ class CurrentWorkflowTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "ChArUco"),
         ):
             runpy.run_path(str(script), run_name="__main__")
-        self.assertIn("NG / 角0点", log.getvalue())
-        self.assertTrue(
-            (output_directory / "detected/00_板なし.png_detected.png").is_file()
-        )
+        self.assertFalse(log.getvalue())
+        self.assertFalse((output_directory / "detected").exists())
         self.assertEqual(
             (output_directory / "00_板なし.png").read_bytes(), b"keep previous output"
         )

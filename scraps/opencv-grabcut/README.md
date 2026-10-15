@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 1 | `generate_charuco_board.py` | ChArUco板のPNGを生成 |
 | 2 | `camera_calibration.py` | 写真ごとの読取確認PNGを保存し、カメラ係数をコピペ用に表示 |
-| 3 | `rectify_image.py` | 指定フォルダを固定係数と板で一括補正し、読取確認PNGと補正PNGを出力 |
+| 3 | `rectify_image.py` | 指定フォルダを固定係数と板で一括補正し、写真内の向きを保った補正PNGを出力 |
 | 4 | `initial_regions_gui.py` | 初期指定・対応区間を操作し、長さCSVと確認画像を保存 |
 | 5 | `length_comparison_gui.py` | 複数CSVと理想値を比較し、表・グラフ・CSVで確認 |
 
@@ -54,8 +54,9 @@ uv run submissions/length_comparison_simple_gui.py
 [旧実践版](sandbox/previous_scripts/README.md)、
 [試作・前処理比較](sandbox/README.md) を参照してください。
 現行の標準出力先は `submissions/output/` です。補正画像は `output/rectified/`、計測CSV・比較結果・板のPNGは `output/` に保存します。過去の結果は従来の場所へ保管しています。
-読取確認画像は校正時に `output/camera_detection/`、補正時に `output/rectified/detected/` へ保存します。
-マーカー枠・角のID・読取点数を画像で確認します。エラーで止まったら入力を直して再実行し、前回の出力との対応は運用で確認します。
+読取確認画像はカメラ校正時に `output/camera_detection/` へ保存します。
+`rectify_image.py` は補正PNGだけを保存し、写真で見えていた板の横軸の向きを保ちます。
+計測する試料の長手方向は撮影時に縦へ揃えます。エラーで止まったら入力を直して再実行し、前回の出力との対応は運用で確認します。
 
 現在の実装範囲は [PLAN.md](PLAN.md)、作業履歴は [PROGRESS.md](PROGRESS.md)、
 撮影条件は [CAPTURE.md](CAPTURE.md) にあります。
@@ -72,6 +73,7 @@ uv run ty check .
 魚眼の合成写真12枚による校正・補正と、生成画像を使った実Tk操作・複数CSV比較も確認しています。
 読取確認PNGの描画、NG画像の保存、失敗時の停止と入力修正後の再実行も確認しています。
 その後の校正条件エラーへの対応では、停止した写真の名前・確認PNGの場所を出す処理を加え、関連13件とRuff・tyを確認しています。
+補正側の確認PNG削除と向き保持への変更では、回転した板の5条件を含む関連14件とRuff・format・ty、生成画像での実Tkの計測・保存・比較を確認しました。
 新規分析GUIは既知の数値CSVで、入力・再分析・保存と20パス表示も確認しています。
 最小比較GUIは、追加の4件の自動試験と実Tkでの厚さ入力・再比較・保存・削除・20撮影表示を確認しています。
 実カメラの歪み補正精度、本番画像での抽出精度は未確認です。

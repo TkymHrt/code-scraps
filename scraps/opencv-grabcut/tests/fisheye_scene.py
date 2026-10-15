@@ -77,11 +77,10 @@ def configure(rectification, matrix=MATRIX, distortion=DISTORTION):
 
 def specimen_size(image, mm_per_px=0.25):
     mask = cv.inRange(image, (20, 75, 145), (90, 145, 220))
-    ys, _ = np.nonzero(mask)
-    # 微小な傾きによる外接矩形の拡大を幅に含めず、各行の幅の中央値を使う。
-    row_widths = np.count_nonzero(mask, axis=1)
-    widths = row_widths[row_widths > 0] - 1
-    return (ys.max() - ys.min()) * mm_per_px, np.median(widths) * mm_per_px
+    points = cv.findNonZero(mask)
+    # 写真内の傾きを残すため、回転した外接矩形で既知の辺長を確かめる。
+    _, size, _ = cv.minAreaRect(points)
+    return max(size) * mm_per_px, min(size) * mm_per_px
 
 
 def distort(image, matrix, coefficients, background):

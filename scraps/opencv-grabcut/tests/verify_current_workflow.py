@@ -56,7 +56,7 @@ def set_field(root, widget, value):
     root.update()
 
 
-def measure_with_gui(directory, image_path, offset, original_size, screenshots):
+def measure_with_gui(directory, image_path, transform, original_size, screenshots):
     script = copy_current("initial_regions_gui.py", directory)
     gui = runpy.run_path(str(script))
     root = tk.Tk()
@@ -88,12 +88,16 @@ def measure_with_gui(directory, image_path, offset, original_size, screenshots):
             invoke("補正画像を読み込む")
         start = field(root, widgets, "開始y")
         end = field(root, widgets, "終了y")
-        set_field(root, start, round(80 + offset[1]))
-        set_field(root, end, round(1000 + offset[1]))
         image = cv.imdecode(np.frombuffer(image_bytes, np.uint8), cv.IMREAD_COLOR)
         assert image is not None
         height, width = image.shape[:2]
-        original_width, _ = original_size
+        original_width, original_height = original_size
+        interval = np.array(
+            [[original_width / 2, 80], [original_width / 2, 1000]], dtype=np.float32
+        )
+        interval = cv.perspectiveTransform(interval.reshape(-1, 1, 2), transform)
+        set_field(root, start, round(float(interval[0, 0, 1])))
+        set_field(root, end, round(float(interval[1, 0, 1])))
 
         def draw(kind, left, top, right, bottom):
             radios[kind].invoke()
@@ -112,30 +116,33 @@ def measure_with_gui(directory, image_path, offset, original_size, screenshots):
             canvas.event_generate("<ButtonRelease-1>", x=x_end, y=y_end)
             root.update()
 
-        left = (0.3052208835 * original_width + offset[0]) / width
-        right = (0.697456493 * original_width + offset[0]) / width
-        draw("前景候補（橙）", left, 0, right, 1)
-        draw(
-            "確実な背景（青）",
+        def bounds(left, top, right, bottom):
+            points = np.array(
+                [[left, top], [right, top], [right, bottom], [left, bottom]],
+                dtype=np.float32,
+            )
+            points = cv.perspectiveTransform(points.reshape(-1, 1, 2), transform)
+            normalized = points.reshape(-1, 2) / [width, height]
+            minimum = np.clip(normalized.min(axis=0), 0, 1)
+            maximum = np.clip(normalized.max(axis=0), 0, 1)
+            return minimum[0], minimum[1], maximum[0], maximum[1]
+
+        candidate = bounds(
+            0.3052208835 * original_width,
             0,
-            0,
-            (0.3012048193 * original_width + offset[0]) / width,
-            1,
+            0.697456493 * original_width,
+            original_height,
         )
-        draw(
-            "確実な背景（青）",
-            (0.702811245 * original_width + offset[0]) / width,
-            0,
-            1,
-            1,
+        draw("前景候補（橙）", *candidate)
+        draw("確実な背景（青）", 0, 0, max(0, candidate[0] - 0.005), 1)
+        draw("確実な背景（青）", min(1, candidate[2] + 0.005), 0, 1, 1)
+        foreground = bounds(
+            0.400267738 * original_width,
+            80,
+            0.60107095 * original_width,
+            1000,
         )
-        draw(
-            "確実な前景（緑）",
-            (0.400267738 * original_width + offset[0]) / width,
-            (80 + offset[1]) / height,
-            (0.60107095 * original_width + offset[0]) / width,
-            (1000 + offset[1]) / height,
-        )
+        draw("確実な前景（緑）", *foreground)
         invoke("長さを計測")
         assert "計測しました" in status(), status()
         assert buttons["長さCSVを保存"].instate(["!disabled"])
@@ -380,10 +387,8 @@ def main():
         **settings,
     )
     known_dimensions = []
+    assert not (camera_folder / "output/rectified/detected").exists()
     for name in ("shot1", "shot2"):
-        assert (
-            camera_folder / f"output/rectified/detected/{name}.png_detected.png"
-        ).is_file()
         image_path = camera_folder / f"output/rectified/{name}.png"
         corrected = cv.imdecode(
             np.frombuffer(image_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
@@ -472,7 +477,7 @@ def main():
             CAMERA_MATRIX=matrix.tolist(),
             DIST_COEFFS=distortion.tolist(),
         )
-        assert (folder / f"output/rectified/detected/{name}.png_detected.png").is_file()
+        assert not (folder / "output/rectified/detected").exists()
         assert not list(folder.glob("*.csv"))
         corrected = cv.imdecode(
             np.frombuffer(corrected_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
@@ -482,12 +487,16 @@ def main():
         assert ids is not None and corners is not None
         board_indices = ids.astype(np.int32).ravel()
         world_points = np.array(board.getChessboardCorners())[board_indices, :2]
-        origin = np.mean(corners.reshape(-1, 2) - world_points * 4, axis=0)
-        offset = origin - np.array([board_left + 40, board_top + 40])
+        board_to_output, _ = cv.findHomography(world_points * 4, corners.reshape(-1, 2))
+        source_to_board = np.array(
+            [[1, 0, -board_left - 40], [0, 1, -board_top - 40], [0, 0, 1]],
+            dtype=np.float64,
+        )
+        transform = board_to_output @ source_to_board
         row = measure_with_gui(
             folder,
             corrected_path,
-            offset,
+            transform,
             (width, height),
             not arguments.no_screenshots,
         )
@@ -502,7 +511,8 @@ def main():
         "camera_model": "opencv_fisheye",
         "camera_calibration": "12 synthetic fisheye photos, parameters copied to standalone rectifier",
         "known_dimensions": known_dimensions,
-        "detection_checks": "12 calibration photos and 5 rectification photos with markers, corner IDs and OK/NG labels",
+        "detection_checks": "12 calibration photos only; rectification saves corrected PNGs only",
+        "orientation": "preserves the board horizontal-axis direction in the undistorted photo",
         "adjacent_board_assumptions": "4px/mm, same plane, hypothetical camera coefficients",
         "analysis_assumptions": "same unrolled sample, initial interval 230mm, all thicknesses 10mm",
         "measurements": rows,
