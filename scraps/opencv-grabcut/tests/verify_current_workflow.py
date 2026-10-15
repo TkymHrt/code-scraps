@@ -195,7 +195,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         if screenshots:
             capture(root, directory / "interval_preview_gui.png")
         invoke("長さを計測")
-        assert "計測しました" in status(), status()
+        assert status() == "計測完了", status()
         assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
         root.geometry("1000x760")
         root.update()
@@ -243,12 +243,12 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
             patch.object(messagebox, "askyesno", return_value=True),
         ):
             invoke("CSV・確認PNGを保存")
-        assert "保存しました" in status()
+        assert status() == f"保存: {csv_path.name} / {paired_png.name}"
         with patch.object(
             filedialog, "asksaveasfilename", return_value=str(image_path)
         ):
             invoke("確認画像を保存")
-        assert "別のパス" in status()
+        assert "別の保存先" in status()
         before = csv_path.read_bytes()
         set_field(root, start, -1)
         assert root.getvar(interval_variable) == "区間長：—"
@@ -298,7 +298,8 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
 
 def compare_with_gui(directory, csv_paths, screenshots):
     gui = runpy.run_path(str(copy_current("03_compare_edge_lengths_gui.py", directory)))
-    expected_rows = gui["compare_lengths"](csv_paths)
+    read_measurements = gui.get("read_measurements", gui.get("compare_lengths"))
+    expected_rows = read_measurements(csv_paths)
     source_bytes = [path.read_bytes() for path in csv_paths]
     root = tk.Tk()
     root.attributes("-alpha", 0)

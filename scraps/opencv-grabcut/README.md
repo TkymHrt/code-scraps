@@ -23,6 +23,10 @@
 `00_*` は毎回の実行は不要ですが、板の仕様や撮影モード・画角・解像度を変えた場合は準備し直します。
 [設定・実行順・GUI操作](submissions/README.md) と [撮影手順](CAPTURE.md) を参照してください。
 
+共通設定・画像入出力・CSV受渡し・GUIの枠を整理した比較用の版は
+[sandbox/refactored](sandbox/refactored/README.md) にあります。
+6本の役割と機能を保ち、GUIを計測版の配置へ揃えています。提出版を変更せずに、読み方と共通化の効果を比較できます。
+
 ## 実行する
 
 Python 3.14以降、NumPy、OpenCV 5以降、Matplotlib、Tkinterを使います。

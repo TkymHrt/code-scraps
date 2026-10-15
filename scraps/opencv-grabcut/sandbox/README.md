@@ -3,6 +3,9 @@
 旧方式、AI生成画像の反射対策、前処理の比較を行う独立スクリプトをまとめています。
 実践用の6本（5工程、比較GUIは厚さの有無で選択）は [../submissions/README.md](../submissions/README.md) を使ってください。
 
+提出版の6本から共通処理を取り出した比較用の版は [refactored](refactored/README.md) にあります。
+役割と機能を保ち、共通設定・画像入出力・CSV受渡し・GUIの枠を整理しています。
+
 2026-10-14、現行の流れに含まれないコードを次へ退避しました。
 
 - [previous_submissions](previous_submissions/README.md)：旧01〜09、設定GUI、手動校正、CSV換算と変更前のスナップショット。

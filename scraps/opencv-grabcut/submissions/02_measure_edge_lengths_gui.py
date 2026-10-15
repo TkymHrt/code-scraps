@@ -45,7 +45,7 @@ def initial_mask(image: np.ndarray, regions: dict[int, list[RectRatios]]) -> np.
             right_px = int(width * right_ratio)
             bottom_px = int(height * bottom_ratio)
             if left_px == right_px or top_px == bottom_px:
-                raise ValueError("矩形が1画素未満です。指定範囲を広げてください")
+                raise ValueError("矩形を1画素以上に広げてください")
             labels[top_px:bottom_px, left_px:right_px] = label
     return labels
 
@@ -147,7 +147,7 @@ def measure_lengths(
 
 def write_csv(path: Path, image_path: Path, measurement: dict) -> None:
     if path.resolve() == image_path.resolve():
-        raise ValueError("入力画像とは別の保存先を選んでください")
+        raise ValueError("入力画像と別の保存先を選んでください")
     if path.suffix.lower() != ".csv":
         raise ValueError("保存先の拡張子は .csv にしてください")
     row = {"image_path": str(image_path.resolve())}
@@ -169,20 +169,20 @@ def write_measurement(
     if path.suffix.lower() != ".csv":
         raise ValueError("保存先の拡張子は .csv にしてください")
     if image_path.resolve() in (path, png_path):
-        raise ValueError("入力画像とは別の保存先を選んでください")
+        raise ValueError("入力画像と別の保存先を選んでください")
     # PNGを作れることを確認してから、CSVと画像を書き出す。
     success, encoded = cv.imencode(".png", overlay)
     if not success:
-        raise OSError("確認PNGを作成できません")
+        raise OSError("PNGを作成できません")
     path.parent.mkdir(parents=True, exist_ok=True)
     write_csv(path, image_path, measurement)
-    encoded.tofile(png_path)
+    png_path.write_bytes(encoded.tobytes())
     return png_path
 
 
 def main() -> None:
-    directory = Path(__file__).resolve().parent
-    output_directory = directory / OUTPUT_DIRECTORY
+    script_directory = Path(__file__).resolve().parent
+    output_directory = script_directory / OUTPUT_DIRECTORY
     root = tk.Tk()
     input_path: Path | None = None
     image: np.ndarray | None = None
@@ -212,7 +212,7 @@ def main() -> None:
         selected = filedialog.askopenfilename(
             parent=root,
             title="補正画像を選ぶ",
-            initialdir=directory / "output/rectified",
+            initialdir=script_directory / "output/rectified",
             filetypes=[
                 ("画像", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
                 ("すべて", "*.*"),
@@ -222,14 +222,17 @@ def main() -> None:
             return
         # 日本語のパスにも対応するため、画像のバイト列を読み込む。
         try:
-            loaded = cv.imdecode(np.fromfile(selected, np.uint8), cv.IMREAD_COLOR)
-            if loaded is None:
+            selected_path = Path(selected).resolve()
+            loaded_image = cv.imdecode(
+                np.frombuffer(selected_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+            )
+            if loaded_image is None:
                 raise ValueError("画像を読み込めません")
         except (OSError, ValueError, cv.error) as error:
             status.set(str(error))
             return
-        image = loaded
-        input_path = Path(selected).resolve()
+        image = loaded_image
+        input_path = selected_path
         height, width = image.shape[:2]
         file_text.set(f"{input_path.name}  ({width} × {height} px)")
         start_text.set("0")
@@ -263,18 +266,22 @@ def main() -> None:
         canvas.delete("all")
         if image is None:
             return
-        shown = image
+        preview_image = image
         if view.get() == "initial":
-            shown = initial_overlay(image, regions)
+            preview_image = initial_overlay(image, regions)
         elif view.get() == "result" and result_image is not None:
-            shown = result_image
-        scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
-        display_width = max(1, int(width * scale))
-        display_height = max(1, int(height * scale))
-        small = cv.resize(
-            shown, (display_width, display_height), interpolation=cv.INTER_NEAREST
+            preview_image = result_image
+        display_scale = min(
+            canvas.winfo_width() / width, canvas.winfo_height() / height, 1
         )
-        _, encoded = cv.imencode(".png", small)
+        display_width = max(1, int(width * display_scale))
+        display_height = max(1, int(height * display_scale))
+        display_image = cv.resize(
+            preview_image,
+            (display_width, display_height),
+            interpolation=cv.INTER_NEAREST,
+        )
+        _, encoded = cv.imencode(".png", display_image)
         photo = tk.PhotoImage(master=root, data=encoded.tobytes(), format="PNG")
         display_left = (canvas.winfo_width() - display_width) // 2
         display_top = (canvas.winfo_height() - display_height) // 2
@@ -384,14 +391,14 @@ def main() -> None:
         top_px = int(height * top_ratio)
         bottom_px = int(height * bottom_ratio)
         if left_px >= right_px or top_px >= bottom_px:
-            status.set("矩形が1画素未満です。指定範囲を広げてください。")
+            status.set("矩形を1画素以上に広げてください")
             return
-        rect = (left_ratio, top_ratio, right_ratio, bottom_ratio)
+        rectangle = (left_ratio, top_ratio, right_ratio, bottom_ratio)
         label = mode.get()
         if label == cv.GC_PR_FGD:
-            regions[label] = [rect]
+            regions[label] = [rectangle]
         else:
-            regions[label].append(rect)
+            regions[label].append(rectangle)
         on_regions_changed()
 
     def delete_region() -> None:
@@ -403,7 +410,7 @@ def main() -> None:
 
     def save_image() -> None:
         if image is None or input_path is None:
-            status.set("画像を読み込んでください")
+            status.set("補正画像を読み込んでください")
             return
         selected = filedialog.asksaveasfilename(
             parent=root,
@@ -418,23 +425,24 @@ def main() -> None:
             return
         output_path = Path(selected).resolve()
         if output_path == input_path:
-            status.set("保存先を入力画像とは別のパスにしてください")
+            status.set("入力画像と別の保存先を選んでください")
             return
         if output_path.suffix.lower() != ".png":
             status.set("保存先の拡張子は .png にしてください")
             return
         try:
-            shown = result_image
-            if shown is None:
-                shown = initial_overlay(image, regions)
-            success, encoded = cv.imencode(".png", shown)
+            preview_image = result_image
+            if preview_image is None:
+                preview_image = initial_overlay(image, regions)
+            success, encoded = cv.imencode(".png", preview_image)
             if not success:
-                raise OSError("PNG画像を作成できません")
-            encoded.tofile(output_path)
+                raise OSError("PNGを作成できません")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(encoded.tobytes())
         except (OSError, ValueError, cv.error) as error:
             status.set(str(error))
             return
-        status.set(f"保存しました: {output_path.name}")
+        status.set(f"保存: {output_path.name}")
 
     def clear_measurement() -> None:
         nonlocal measurement, result_image
@@ -478,24 +486,22 @@ def main() -> None:
             start_y = int(start_text.get())
             end_y = int(end_text.get())
         except ValueError:
-            status.set("開始yと終了yは整数で入力してください")
+            status.set("開始y・終了yは整数にしてください")
             return
         status.set("計測中…")
         root.update_idletasks()
         try:
-            measured, overlay = measure_lengths(image, regions, start_y, end_y)
+            measurement, result_image = measure_lengths(image, regions, start_y, end_y)
         except (ValueError, cv.error) as error:
             status.set(str(error))
             return
-        measurement = measured
-        result_image = overlay
         for edge in ("left", "right", "total"):
-            length_mm = measured[f"{edge}_mm"]
+            length_mm = measurement[f"{edge}_mm"]
             result_table.set(edge, "length", f"{length_mm:.3f}")
         view.set("result")
         save_csv_button.state(["!disabled"])
         render()
-        status.set("計測しました。赤い側辺と黄色の区間を確認してください")
+        status.set("計測完了")
 
     def save_csv() -> None:
         if measurement is None or input_path is None or result_image is None:
@@ -529,9 +535,9 @@ def main() -> None:
         try:
             write_measurement(csv_path, input_path, measurement, result_image)
         except (OSError, ValueError, cv.error) as error:
-            status.set(f"保存できません: {error}。CSV・PNGの保存状態を確認してください")
+            status.set(f"保存失敗: {error}")
             return
-        status.set(f"保存しました: {csv_path.name} / {png_path.name}")
+        status.set(f"保存: {csv_path.name} / {png_path.name}")
 
     file_toolbar = ttk.Frame(root, padding=12)
     file_toolbar.pack(fill="x")
@@ -621,7 +627,6 @@ def main() -> None:
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
     region_list.bind("<<ListboxSelect>>", show_initial)
-    output_directory.mkdir(parents=True, exist_ok=True)
     on_regions_changed()
     root.mainloop()
 

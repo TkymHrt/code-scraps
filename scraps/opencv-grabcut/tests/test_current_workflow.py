@@ -416,7 +416,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         )
         with (
             contextlib.redirect_stdout(io.StringIO()) as log,
-            self.assertRaisesRegex(ValueError, "ChArUco"),
+            self.assertRaisesRegex(ValueError, "00_板なし.png: .*ChArUco"),
         ):
             runpy.run_path(str(script), run_name="__main__")
         self.assertFalse(log.getvalue())
@@ -546,6 +546,26 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.assertEqual(
             (input_directory / "同じ名前.jpg").read_bytes(), b"unchanged input"
         )
+
+    def test_calibration_rejects_missing_empty_and_same_directory(self):
+        camera = runpy.run_path(
+            str(copy_current("00_2_calibrate_camera.py", self.directory))
+        )
+        main = camera["main"]
+        settings = main.__globals__
+        settings["INPUT_DIRECTORY"] = "missing"
+        with self.assertRaisesRegex(ValueError, "入力フォルダがありません"):
+            main()
+        input_directory = self.directory / "input"
+        input_directory.mkdir()
+        (input_directory / "memo.txt").write_text("not a photo", encoding="utf-8")
+        settings["INPUT_DIRECTORY"] = "input"
+        with self.assertRaisesRegex(ValueError, "画像がありません"):
+            main()
+        settings["OUTPUT_DIRECTORY"] = "input"
+        with self.assertRaisesRegex(ValueError, "別のフォルダ"):
+            main()
+        self.assertFalse((self.directory / "output").exists())
 
 
 if __name__ == "__main__":

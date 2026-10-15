@@ -31,15 +31,15 @@ def rectify_image(image: np.ndarray) -> dict:
     height, width = image.shape[:2]
     if (width, height) != tuple(CALIBRATION_SIZE):
         raise ValueError("カメラ校正と同じ解像度・撮影モードの画像を指定してください")
-    matrix = np.array(CAMERA_MATRIX, dtype=np.float64)
-    distortion = np.array(DIST_COEFFS, dtype=np.float64)
+    camera_matrix = np.array(CAMERA_MATRIX, dtype=np.float64)
+    dist_coeffs = np.array(DIST_COEFFS, dtype=np.float64)
     if (
-        matrix.shape != (3, 3)
-        or distortion.shape != (4,)
-        or not np.isfinite(matrix).all()
-        or not np.isfinite(distortion).all()
-        or matrix[0, 0] <= 0
-        or matrix[1, 1] <= 0
+        camera_matrix.shape != (3, 3)
+        or dist_coeffs.shape != (4,)
+        or not np.isfinite(camera_matrix).all()
+        or not np.isfinite(dist_coeffs).all()
+        or camera_matrix[0, 0] <= 0
+        or camera_matrix[1, 1] <= 0
         or not math.isfinite(MM_PER_PX)
         or MM_PER_PX <= 0
     ):
@@ -47,16 +47,20 @@ def rectify_image(image: np.ndarray) -> dict:
             "魚眼モデルのカメラ係数（歪み係数4個）とMM_PER_PXを確認してください"
         )
     # 周辺をなるべく残す画角で、魚眼画像を平面の画像へ直す。
-    new_matrix = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
-        matrix, distortion, (width, height), np.eye(3), balance=1.0
+    new_camera_matrix = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
+        camera_matrix, dist_coeffs, (width, height), np.eye(3), balance=1.0
     )
-    undistorted = cv.fisheye.undistortImage(
-        image, matrix, distortion, Knew=new_matrix, new_size=(width, height)
+    undistorted_image = cv.fisheye.undistortImage(
+        image,
+        camera_matrix,
+        dist_coeffs,
+        Knew=new_camera_matrix,
+        new_size=(width, height),
     )
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
     board = cv.aruco.CharucoBoard(BOARD_SQUARES, SQUARE_MM, MARKER_MM, dictionary)
     detector = cv.aruco.CharucoDetector(board)
-    corners, ids, _, _ = detector.detectBoard(undistorted)
+    corners, ids, _, _ = detector.detectBoard(undistorted_image)
     if ids is None or len(ids) < 6 or board.checkCharucoCornersCollinear(ids):
         raise ValueError("ChArUco板の角を縦横に6点以上読める画像を指定してください")
     all_board_points = np.array(board.getChessboardCorners(), dtype=np.float32)
@@ -115,11 +119,14 @@ def rectify_image(image: np.ndarray) -> dict:
         dtype=np.float64,
     )
     transform = world_to_pixels @ homography
-    corrected = cv.warpPerspective(
-        undistorted, transform, (output_width, output_height), flags=cv.INTER_LINEAR
+    rectified_image = cv.warpPerspective(
+        undistorted_image,
+        transform,
+        (output_width, output_height),
+        flags=cv.INTER_LINEAR,
     )
     return {
-        "image": corrected,
+        "image": rectified_image,
         "mm_per_px": MM_PER_PX,
         "corner_count": len(ids),
         "error_px": error_px,
@@ -127,17 +134,17 @@ def rectify_image(image: np.ndarray) -> dict:
 
 
 def main() -> None:
-    directory = Path(__file__).resolve().parent
-    input_directory = (directory / INPUT_DIRECTORY).resolve()
-    output_directory = (directory / OUTPUT_DIRECTORY).resolve()
+    script_directory = Path(__file__).resolve().parent
+    input_directory = (script_directory / INPUT_DIRECTORY).resolve()
+    output_directory = (script_directory / OUTPUT_DIRECTORY).resolve()
     if input_directory == output_directory:
         raise ValueError("入力と出力は別のフォルダにしてください")
     if not input_directory.is_dir():
         raise ValueError(f"入力フォルダがありません: {input_directory}")
     input_paths = []
     output_names = []
-    for path in sorted(input_directory.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in (
+    for input_path in sorted(input_directory.iterdir()):
+        if not input_path.is_file() or input_path.suffix.lower() not in (
             ".png",
             ".jpg",
             ".jpeg",
@@ -146,12 +153,12 @@ def main() -> None:
             ".tiff",
         ):
             continue
-        output_name = f"{path.stem}.png"
+        output_name = f"{input_path.stem}.png"
         if output_name.casefold() in output_names:
             raise ValueError(
                 f"出力名が重複します。入力名を変えてください: {output_name}"
             )
-        input_paths.append(path)
+        input_paths.append(input_path)
         output_names.append(output_name.casefold())
     if not input_paths:
         raise ValueError("入力フォルダに画像がありません")
@@ -163,15 +170,18 @@ def main() -> None:
         )
         if image is None:
             raise ValueError(f"画像を読み込めません: {input_path.name}")
-        correction = rectify_image(image)
-        success, encoded = cv.imencode(".png", correction["image"])
+        try:
+            rectification = rectify_image(image)
+        except (ValueError, cv.error) as error:
+            raise ValueError(f"{input_path.name}: {error}") from error
+        success, encoded = cv.imencode(".png", rectification["image"])
         if not success:
-            raise OSError(f"PNGにできません: {output_path.name}")
+            raise OSError(f"PNGを作成できません: {output_path.name}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(encoded.tobytes())
         print(
-            f"保存: {output_path.name} / 角{correction['corner_count']}点 / "
-            f"再投影誤差{correction['error_px']:.3f}px"
+            f"保存: {output_path.name} / 角{rectification['corner_count']}点 / "
+            f"再投影誤差{rectification['error_px']:.3f}px"
         )
     print(f"完了: {len(input_paths)}枚 → {output_directory}")
 

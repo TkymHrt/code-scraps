@@ -10,19 +10,21 @@ from matplotlib import rcParams
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+OUTPUT_DIRECTORY = "output"
 
-def positive_value(value: str | None, name: str) -> float:
+
+def positive_value(value: float | str | None, name: str) -> float:
     try:
         number = float(value) if value is not None else math.nan
     except ValueError as error:
         raise ValueError(f"{name}は正の数値にしてください") from error
     if not math.isfinite(number) or number <= 0:
-        raise ValueError(f"{name}は正の有限値にしてください")
+        raise ValueError(f"{name}は正の数値にしてください")
     return number
 
 
 def read_lengths(path: Path) -> dict:
-    required = (
+    required_columns = (
         "image_path",
         "mm_per_px",
         "start_y",
@@ -32,17 +34,17 @@ def read_lengths(path: Path) -> dict:
     )
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.DictReader(source)
-        if not set(required).issubset(reader.fieldnames or []):
+        if not set(required_columns).issubset(reader.fieldnames or []):
             raise ValueError(f"計測GUIの長さCSVを選んでください: {path.name}")
         saved_rows = list(reader)
     if len(saved_rows) != 1:
         raise ValueError(f"1回の計測を1行に保存したCSVが必要です: {path.name}")
     saved = saved_rows[0]
-    for column in required:
+    for column in required_columns:
         value = saved[column]
         if value is None or not value.strip():
             raise ValueError(f"空欄を確認してください: {column}: {path.name}")
-    scale = positive_value(saved["mm_per_px"], f"mm_per_px: {path.name}")
+    mm_per_px = positive_value(saved["mm_per_px"], f"mm_per_px: {path.name}")
     try:
         start_y = int(saved["start_y"])
         end_y = int(saved["end_y"])
@@ -51,13 +53,13 @@ def read_lengths(path: Path) -> dict:
     if not 0 <= start_y < end_y:
         raise ValueError(f"0 ≤ 開始y < 終了yにしてください: {path.name}")
     # 両端の画素中心の間隔なので、行数の「+1」は加えない。
-    interval_mm = (end_y - start_y) * scale
+    interval_mm = (end_y - start_y) * mm_per_px
     if not math.isfinite(interval_mm):
         raise ValueError(f"区間長を計算できません: {path.name}")
     image_path = (path.parent / saved["image_path"]).resolve()
     row = {
         "image_path": str(image_path),
-        "mm_per_px": scale,
+        "mm_per_px": mm_per_px,
         "start_y": start_y,
         "end_y": end_y,
         "interval_length_mm": interval_mm,
@@ -76,16 +78,16 @@ def read_lengths(path: Path) -> dict:
     return row
 
 
-def compare_lengths(paths: list[Path]) -> list[dict]:
-    if not paths:
+def compare_lengths(csv_paths: list[Path]) -> list[dict]:
+    if not csv_paths:
         raise ValueError("長さCSVを1つ以上追加してください")
-    used_paths = []
+    used_csv_paths = []
     rows = []
-    for index, path in enumerate(paths):
+    for index, path in enumerate(csv_paths):
         path = path.resolve()
-        if path in used_paths:
+        if path in used_csv_paths:
             raise ValueError(f"同じCSVを重複して指定しないでください: {path.name}")
-        used_paths.append(path)
+        used_csv_paths.append(path)
         row = {
             "order": index + 1,
             "csv_name": path.name,
@@ -94,18 +96,6 @@ def compare_lengths(paths: list[Path]) -> list[dict]:
         row.update(read_lengths(path))
         rows.append(row)
     return rows
-
-
-def check_output(path: Path, rows: list[dict], suffix: str) -> Path:
-    if not rows:
-        raise ValueError("比較してから保存してください")
-    path = path.resolve()
-    if path.suffix.lower() != suffix:
-        raise ValueError(f"保存先の拡張子は {suffix} にしてください")
-    for row in rows:
-        if path in (Path(row["measurement_csv"]), Path(row["image_path"])):
-            raise ValueError("入力CSV・補正画像と別の保存先を選んでください")
-    return path
 
 
 def create_graph(rows: list[dict], normalized: bool = False) -> Figure:
@@ -155,23 +145,31 @@ def create_graph(rows: list[dict], normalized: bool = False) -> Figure:
 
 
 def write_graph(path: Path, rows: list[dict], normalized: bool = False) -> None:
-    path = check_output(path, rows, ".png")
+    if not rows:
+        raise ValueError("比較してから保存してください")
+    path = path.resolve()
+    if path.suffix.lower() != ".png":
+        raise ValueError("保存先の拡張子は .png にしてください")
+    for row in rows:
+        if path in (Path(row["measurement_csv"]), Path(row["image_path"])):
+            raise ValueError("入力CSV・補正画像と別の保存先を選んでください")
     figure = create_graph(rows, normalized)
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, dpi=160)
 
 
 def main() -> None:
-    output_directory = Path(__file__).resolve().parent / "output"
+    script_directory = Path(__file__).resolve().parent
+    output_directory = script_directory / OUTPUT_DIRECTORY
     root = tk.Tk()
     root.title("局所区間の左右長さ比較")
     root.geometry("1100x760")
     root.minsize(960, 640)
-    paths: list[Path] = []
+    csv_paths: list[Path] = []
     rows: list[dict] = []
     graph_canvas: FigureCanvasTkAgg | None = None
-    mode = tk.StringVar(master=root, value="実測長")
-    status = tk.StringVar(master=root, value="長さCSVを比較したい順に追加してください")
+    length_mode = tk.StringVar(master=root, value="実測長")
+    status = tk.StringVar(master=root, value="CSVを追加してください")
 
     def draw_graph() -> None:
         nonlocal graph_canvas
@@ -180,23 +178,23 @@ def main() -> None:
             graph_canvas.figure.clear()
             graph_canvas = None
         if rows:
-            figure = create_graph(rows, mode.get() == "100mm換算")
+            figure = create_graph(rows, length_mode.get() == "100mm換算")
             graph_canvas = FigureCanvasTkAgg(figure, master=graph_frame)
             graph_canvas.get_tk_widget().pack(fill="both", expand=True)
             graph_canvas.draw()
 
-    def compare() -> None:
+    def update_comparison() -> None:
         rows.clear()
         table.delete(*table.get_children())
         graph_button.state(["disabled"])
         draw_graph()
-        for index, path in enumerate(paths):
+        for index, path in enumerate(csv_paths):
             table.insert("", "end", iid=str(index), values=(path.name, "—", "—", "—"))
-        if not paths:
-            status.set("長さCSVを比較したい順に追加してください")
+        if not csv_paths:
+            status.set("CSVを追加してください")
             return
         try:
-            compared = compare_lengths(paths)
+            compared = compare_lengths(csv_paths)
         except (OSError, ValueError, csv.Error) as error:
             status.set(str(error))
             return
@@ -208,7 +206,7 @@ def main() -> None:
             table.item(str(index), values=values)
         draw_graph()
         graph_button.state(["!disabled"])
-        status.set(f"{len(rows)}件を比較しました。区間長は開始・終了yの間隔です")
+        status.set(f"比較: {len(rows)}件")
 
     def add_csvs() -> None:
         selected = filedialog.askopenfilenames(
@@ -221,7 +219,7 @@ def main() -> None:
         try:
             for filename in selected:
                 path = Path(filename).resolve()
-                if path in paths or path in new_paths:
+                if path in csv_paths or path in new_paths:
                     continue
                 read_lengths(path)
                 new_paths.append(path)
@@ -229,8 +227,8 @@ def main() -> None:
             status.set(str(error))
             return
         if new_paths:
-            paths.extend(new_paths)
-            compare()
+            csv_paths.extend(new_paths)
+            update_comparison()
 
     def remove_csvs() -> None:
         selected = table.selection()
@@ -238,15 +236,15 @@ def main() -> None:
             status.set("表で削除するCSVを選んでください")
             return
         remaining = []
-        for index, path in enumerate(paths):
+        for index, path in enumerate(csv_paths):
             if str(index) not in selected:
                 remaining.append(path)
-        paths[:] = remaining
-        compare()
+        csv_paths[:] = remaining
+        update_comparison()
 
     def save_graph() -> None:
         stem = "length_comparison_local"
-        if mode.get() == "100mm換算":
+        if length_mode.get() == "100mm換算":
             stem += "_100mm"
         selected = filedialog.asksaveasfilename(
             parent=root,
@@ -260,11 +258,11 @@ def main() -> None:
         if not selected:
             return
         try:
-            write_graph(Path(selected), rows, mode.get() == "100mm換算")
+            write_graph(Path(selected), rows, length_mode.get() == "100mm換算")
         except (OSError, ValueError) as error:
             status.set(str(error))
             return
-        status.set(f"保存しました: {Path(selected).name}")
+        status.set(f"保存: {Path(selected).name}")
 
     toolbar = ttk.Frame(root, padding=12)
     toolbar.pack(fill="x")
@@ -282,7 +280,7 @@ def main() -> None:
     ttk.Label(options, text="グラフ：").pack(side="left")
     for label in ("実測長", "100mm換算"):
         ttk.Radiobutton(
-            options, text=label, value=label, variable=mode, command=draw_graph
+            options, text=label, value=label, variable=length_mode, command=draw_graph
         ).pack(side="left", padx=(0, 12))
     table_frame = ttk.Frame(root, padding=(12, 0, 12, 8))
     table_frame.pack(fill="x")
@@ -309,7 +307,6 @@ def main() -> None:
     graph_frame = ttk.Frame(root, padding=(12, 0, 12, 12))
     graph_frame.pack(fill="both", expand=True)
     graph_button.state(["disabled"])
-    output_directory.mkdir(parents=True, exist_ok=True)
     root.mainloop()
 
 

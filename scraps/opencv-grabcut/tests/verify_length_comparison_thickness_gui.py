@@ -41,8 +41,8 @@ def main():
     figures = []
     create_graph = gui["create_graph"]
 
-    def record_graph(rows, normalized=False, reduction_axis=False):
-        figure = create_graph(rows, normalized, reduction_axis)
+    def record_graph(rows, normalized=False, reduction_axis=False, **graph_options):
+        figure = create_graph(rows, normalized, reduction_axis, **graph_options)
         figures.append(figure)
         return figure
 
@@ -157,6 +157,8 @@ def main():
             )
         input_canvas = next(w for w in descendants(root) if isinstance(w, tk.Canvas))
         input_canvas.yview_moveto(1)
+        if input_canvas.cget("xscrollcommand"):
+            input_canvas.xview_moveto(1)
         root.update()
         assert input_canvas.yview()[1] == 1
         for widget in descendants(root):
