@@ -22,6 +22,10 @@
 初期区間長・初期厚さと各撮影の厚さから求めた理想片側長を、CSVの左右側辺長と数値表・1枚の推移グラフで比較します。
 [最小比較GUIの操作](submissions/README.md#最小比較gui厚さから理想長を計算) を参照してください。
 
+GUIなしで同じ3本線のグラフを保存する場合は `submissions/length_comparison_simple.py` を使います。
+初期区間長・初期厚さ・CSVと各撮影の厚さをコード冒頭へ指定し、PNGを保存します。
+[GUIなしの実行手順](submissions/README.md#guiなしでシンプルグラフを保存) を参照してください。
+
 [実行順・設定・GUI操作・検証記録](submissions/README.md) に手順をまとめています。
 板生成とカメラ校正は初回、画像補正と計測GUIは撮影ごと、比較は複数撮影のCSVを使います。
 補正画像は固定のmm/pxへ揃え、同じ値を計測GUIのコード冒頭にも設定します。
@@ -44,6 +48,8 @@ uv run submissions/length_comparison_gui.py
 uv run submissions/length_analysis_gui.py
 # 厚さから理想長を求める最小比較
 uv run submissions/length_comparison_simple_gui.py
+# GUIなしでPNG保存（冒頭の設定を編集してから実行）
+uv run submissions/length_comparison_simple.py
 ```
 
 カメラ係数は現在未設定です。本番カメラで校正してから補正コードへ貼り付けます。

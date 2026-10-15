@@ -175,6 +175,41 @@ GUIで未補正画像や違う倍率の画像を判定する仕組みはあり�
 各画像のy座標を揃える必要はありませんが、**対応する同じ材料区間**を計測してください。
 左右側辺の凹凸を含む長さを、滑らかな理想区間長と比較する値です。
 
+## GUIなしでシンプルグラフを保存
+
+`length_comparison_simple.py` は、現行の長さCSVから左側辺・右側辺・理想片側長の3本線を描き、1枚のPNGに保存する単独スクリプトです。
+ファイル選択ダイアログやグラフのウィンドウは開きません。既存のMatplotlibだけで描画し、自作モジュールへ依存しません。
+
+コード冒頭の初期区間長・初期厚さ・入力CSVと各撮影の厚さを、実際の値へ置き換えます。初期値とファイル名は記入例です。
+
+```python
+INITIAL_LENGTH_MM = 100.0
+INITIAL_THICKNESS_MM = 10.0
+INPUT_CSVS = [
+    ("output/shot1_lengths.csv", 10.0),
+    ("output/shot2_lengths.csv", 5.0),
+]
+OUTPUT_PATH = "output/length_comparison_simple.png"
+```
+
+```powershell
+# opencv-grabcutフォルダから実行
+uv run submissions/length_comparison_simple.py
+```
+
+`INPUT_CSVS` に書いた順が撮影順です。相対パスはスクリプトのある `submissions/` を基準にします。
+計測GUIの1画像1行のCSVから `image_path`・`left_mm`・`right_mm` を読み、画像自体は読み直しません。
+理想片側長は幅一定・体積一定として、`初期区間長 × 初期厚さ ÷ 撮影時の厚さ` で求めます。
+横軸は撮影順、縦軸は長さ(mm)です。CSVと厚さ・左右・理想の対応はターミナルにも表示します。
+保存するのはPNGだけです。同じ保存先は再実行時に上書きし、入力CSV・元画像への上書きは止めます。
+入力・値に問題があればエラーで止まるので、コードの設定またはCSVを直して再実行します。
+
+旧版のGUIなし棒グラフは `sandbox/previous_submissions/04_compare_lengths.py` にあります。こちらは旧3行形式のpx CSVと基準との差分を扱います。
+
+2026-10-15、既知の3撮影で左・右・理想の値、1撮影と20撮影の順序、不正値・入力保護を含む3件の自動試験を確認しました。
+Tkinterを使えない状態で単独コピーを別プロセスから実行し、PNG保存を確認しています。Ruff・format・tyも通過しました。
+生成した確認用グラフは `tests/results/headless_graph_20261015/output/length_comparison_simple.png` です。実測データの比較は未確認です。
+
 ## 最小比較GUI：厚さから理想長を計算
 
 `length_comparison_simple_gui.py` は、初期区間長・初期厚さと各撮影の厚さから理想片側長を求め、
