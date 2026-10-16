@@ -50,7 +50,7 @@ uv run submissions/03_compare_edge_lengths_with_thickness_gui.py
 補正と計測GUIの `MM_PER_PX` は同じ値にします。現在は `0.25` です。
 
 標準出力先は `submissions/output/`、補正画像はその中の `rectified/` です。
-計測CSVは1回につき1行で、確認PNGと同じ名前で保存します。
+計測CSVは1回につき1行です。CSV保存時に、同じ名前の計測結果PNGと、名前に `_initial` を付けた初期指定PNGも保存します。
 区間長は比較側で `(end_y − start_y) × mm_per_px` として求めます。
 比較GUIはCSVの追加・削除に合わせて自動更新し、厚さ版では厚さの入力も即時反映します。
 点はCSV追加順に線で結び、表示中のグラフをPNGで保存します。比較CSVは出力しません。

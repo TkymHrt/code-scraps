@@ -50,7 +50,7 @@ def verify_layout(output, screenshots):
             assert status() == ""
             if filename.startswith("02"):
                 assert buttons["補正画像を読み込む"].master == header
-                assert buttons["CSV・確認PNGを保存"].master == sidebar
+                assert buttons["CSV・画像2枚を保存"].master == sidebar
                 with patch.object(
                     filedialog, "askopenfilename", return_value=""
                 ) as dialog:
@@ -58,7 +58,7 @@ def verify_layout(output, screenshots):
                 assert (
                     dialog.call_args.kwargs["initialdir"] == output / "output/rectified"
                 )
-                assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
+                assert buttons["CSV・画像2枚を保存"].instate(["disabled"])
                 empty_image = output / "empty.png"
                 empty_image.write_bytes(b"")
                 with patch.object(
@@ -69,7 +69,7 @@ def verify_layout(output, screenshots):
                 image = np.full((160, 140, 3), 35, np.uint8)
                 image[20:141, 50:91] = 200
                 image_path = output / "measurement_input.png"
-                gui["write_png"](image_path, image)
+                image_path.write_bytes(gui["encode_png"](image))
                 with patch.object(
                     filedialog, "askopenfilename", return_value=str(image_path)
                 ):
@@ -107,9 +107,9 @@ def verify_layout(output, screenshots):
                         },
                     ),
                 ):
-                    buttons["CSV・確認PNGを保存"].invoke()
+                    buttons["CSV・画像2枚を保存"].invoke()
                 assert status() == "保存失敗: CSV・PNGを確認してください"
-                assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
+                assert buttons["CSV・画像2枚を保存"].instate(["!disabled"])
                 root.geometry("1000x760")
             else:
                 assert buttons["CSVを追加"].master == header

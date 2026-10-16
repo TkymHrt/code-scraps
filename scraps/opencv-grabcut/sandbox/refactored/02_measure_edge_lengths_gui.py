@@ -7,8 +7,8 @@ from tkinter import filedialog, ttk
 
 import cv2 as cv
 import numpy as np
-from file_io import check_output_path, encode_png, read_image, write_png
-from gui_parts import choose_png_path, create_layout
+from file_io import check_output_path, encode_png, read_image
+from gui_parts import create_layout
 from measurement_csv import write_csv
 from workflow_settings import MM_PER_PX, OUTPUT_DIRECTORY, RECTIFIED_DIRECTORY
 
@@ -146,17 +146,24 @@ def measure_lengths(
 
 
 def write_measurement(
-    path: Path, image_path: Path, measurement: dict, overlay: np.ndarray
-) -> Path:
+    path: Path,
+    image_path: Path,
+    measurement: dict,
+    initial_image: np.ndarray,
+    result_image: np.ndarray,
+) -> None:
     path = check_output_path(path, ".csv", [image_path])
-    png_path = path.with_suffix(".png")
-    check_output_path(png_path, ".png", [image_path])
-    # PNGを作れることを確認してから、CSVと画像を書き出す。
-    png_data = encode_png(overlay)
+    initial_path = path.with_name(f"{path.stem}_initial.png")
+    result_path = path.with_suffix(".png")
+    check_output_path(initial_path, ".png", [image_path])
+    check_output_path(result_path, ".png", [image_path])
+    # 2枚のPNGを作れることを確認してから、CSVと画像を書き出す。
+    initial_data = encode_png(initial_image)
+    result_data = encode_png(result_image)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_csv(path, image_path, measurement)
-    png_path.write_bytes(png_data)
-    return png_path
+    initial_path.write_bytes(initial_data)
+    result_path.write_bytes(result_data)
 
 
 def main() -> None:
@@ -232,20 +239,17 @@ def main() -> None:
         view.set("initial")
         render()
 
-    def get_preview_image(source_image: np.ndarray) -> np.ndarray:
-        if view.get() == "initial":
-            return initial_overlay(source_image, regions)
-        if view.get() == "result" and result_image is not None:
-            return result_image
-        return source_image
-
     def render(_event=None) -> None:
         nonlocal photo, display_bounds, drag_start_ratios
         drag_start_ratios = None
         canvas.delete("all")
         if image is None:
             return
-        preview_image = get_preview_image(image)
+        preview_image = image
+        if view.get() == "initial":
+            preview_image = initial_overlay(image, regions)
+        elif view.get() == "result" and result_image is not None:
+            preview_image = result_image
         scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
         display_width = max(1, int(width * scale))
         display_height = max(1, int(height * scale))
@@ -381,30 +385,6 @@ def main() -> None:
             del regions[label][index]
             on_regions_changed()
 
-    def save_image() -> None:
-        if image is None or input_path is None:
-            status.set("補正画像を読み込んでください")
-            return
-        output_path = choose_png_path(
-            root,
-            output_directory,
-            f"{input_path.stem}_measurement.png",
-            title="確認画像の保存先を選ぶ",
-        )
-        if output_path is None:
-            return
-        try:
-            output_path = check_output_path(output_path, ".png", [input_path])
-            preview_image = get_preview_image(image)
-            write_png(output_path, preview_image)
-        except ValueError as error:
-            status.set(str(error))
-            return
-        except OSError, cv.error:
-            status.set(f"保存できません: {output_path.name}")
-            return
-        status.set(f"保存: {output_path.name}")
-
     def clear_results() -> None:
         nonlocal measurement, result_image
         measurement = None
@@ -470,12 +450,17 @@ def main() -> None:
         status.set("計測完了")
 
     def save_measurement() -> None:
-        if measurement is None or input_path is None or result_image is None:
+        if (
+            measurement is None
+            or input_path is None
+            or image is None
+            or result_image is None
+        ):
             status.set("計測してから保存してください")
             return
         selected = filedialog.asksaveasfilename(
             parent=root,
-            title="CSV・確認PNGの保存先（同じ名前で保存）",
+            title="CSV・画像2枚の保存先",
             initialdir=output_directory,
             initialfile=f"{input_path.stem}_lengths.csv",
             defaultextension=".csv",
@@ -485,16 +470,18 @@ def main() -> None:
         if not selected:
             return
         csv_path = Path(selected).resolve()
-        png_path = csv_path.with_suffix(".png")
         try:
-            write_measurement(csv_path, input_path, measurement, result_image)
+            initial_image = initial_overlay(image, regions)
+            write_measurement(
+                csv_path, input_path, measurement, initial_image, result_image
+            )
         except ValueError as error:
             status.set(str(error))
             return
         except OSError, cv.error:
             status.set("保存失敗: CSV・PNGを確認してください")
             return
-        status.set(f"保存: {csv_path.name} / {png_path.name}")
+        status.set(f"保存: {csv_path.name} / PNG2枚")
 
     header, sidebar, content = create_layout(root)
     ttk.Button(
@@ -557,12 +544,9 @@ def main() -> None:
         result_table.insert("", "end", iid=edge, values=(label, "—"))
     result_table.pack(fill="x", pady=4)
     save_measurement_button = ttk.Button(
-        sidebar, text="CSV・確認PNGを保存", padding=(12, 8), command=save_measurement
+        sidebar, text="CSV・画像2枚を保存", padding=(12, 8), command=save_measurement
     )
     save_measurement_button.pack(fill="x", pady=4)
-    ttk.Button(
-        sidebar, text="確認画像を保存", padding=(12, 8), command=save_image
-    ).pack(fill="x", pady=4)
     for value, name in (
         ("initial", "初期指定"),
         ("original", "元画像"),

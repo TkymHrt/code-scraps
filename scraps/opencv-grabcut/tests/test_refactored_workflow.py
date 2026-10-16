@@ -351,27 +351,61 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
                 image[60:71, 50:61] = 35
             before, before_overlay = old["measure_lengths"](image, regions, 20, 140)
             after, after_overlay = new["measure_lengths"](image, regions, 20, 140)
+            before_initial = old["initial_overlay"](image, regions)
+            after_initial = new["initial_overlay"](image, regions)
             self.assertEqual(before, after)
             np.testing.assert_array_equal(before_overlay, after_overlay)
+            np.testing.assert_array_equal(before_initial, after_initial)
             old_path = self.directory / "old/lengths.csv"
             new_path = self.directory / "new/lengths.csv"
-            old["write_measurement"](old_path, source, before, before_overlay)
-            new["write_measurement"](new_path, source, after, after_overlay)
+            old["write_measurement"](
+                old_path, source, before, before_initial, before_overlay
+            )
+            new["write_measurement"](
+                new_path, source, after, after_initial, after_overlay
+            )
             self.assertEqual(old_path.read_bytes(), new_path.read_bytes())
             self.assertEqual(
                 old_path.with_suffix(".png").read_bytes(),
                 new_path.with_suffix(".png").read_bytes(),
             )
-        with self.assertRaises(ValueError):
-            new["write_measurement"](
-                source.with_suffix(".csv"), source, after, after_overlay
+            self.assertEqual(
+                (old_path.parent / "lengths_initial.png").read_bytes(),
+                (new_path.parent / "lengths_initial.png").read_bytes(),
             )
-        self.assertFalse(source.with_suffix(".csv").exists())
-        saved_csv = new_path.read_bytes()
-        with patch.object(cv, "imencode", return_value=(False, None)):
-            with self.assertRaises(OSError):
-                new["write_measurement"](new_path, source, after, after_overlay)
-        self.assertEqual(new_path.read_bytes(), saved_csv)
+        for gui, path in ((old, old_path), (new, new_path)):
+            for protected in (
+                source.with_suffix(".csv"),
+                source,
+                self.directory / "入力_initial.png",
+            ):
+                protected.write_bytes(b"protected image")
+                with self.assertRaises(ValueError):
+                    gui["write_measurement"](
+                        source.with_suffix(".csv"),
+                        protected,
+                        after,
+                        after_initial,
+                        after_overlay,
+                    )
+                self.assertEqual(protected.read_bytes(), b"protected image")
+            saved_paths = (
+                path,
+                path.with_suffix(".png"),
+                path.parent / "lengths_initial.png",
+            )
+            saved_bytes = [output.read_bytes() for output in saved_paths]
+            _, encoded = cv.imencode(".png", after_initial)
+            # 1枚目と2枚目の、どちらのPNG変換で失敗しても既存の3ファイルを保つ。
+            for results in ([(False, None)], [(True, encoded), (False, None)]):
+                with patch.object(cv, "imencode", side_effect=results):
+                    with self.assertRaises(OSError):
+                        gui["write_measurement"](
+                            path, source, after, after_initial, after_overlay
+                        )
+                self.assertEqual(
+                    [output.read_bytes() for output in saved_paths], saved_bytes
+                )
         self.assertEqual(source.read_bytes(), b"protected image")
 
     def test_both_comparisons_and_all_six_graph_modes_are_identical(self):

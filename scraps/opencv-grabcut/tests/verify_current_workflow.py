@@ -69,6 +69,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         root.update()
         widgets = descendants(root)
         buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
+        assert "確認画像を保存" not in buttons
         canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
         radios = {
             str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Radiobutton)
@@ -195,27 +196,14 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         if screenshots:
             capture(root, directory / "interval_preview_gui.png")
         radios["初期指定"].invoke()
-        initial_path = directory / "output/initial.png"
-        with patch.object(
-            filedialog, "asksaveasfilename", return_value=str(initial_path)
-        ):
-            invoke("確認画像を保存")
-        initial_image = cv.imdecode(
-            np.frombuffer(initial_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
-        )
-        assert initial_image is not None
         center_x = int(width * (foreground[0] + foreground[2]) / 2)
         center_y = int(height * (foreground[1] + foreground[3]) / 2)
         source_pixel = image[center_y : center_y + 1, center_x : center_x + 1]
         green = np.full_like(source_pixel, (0, 255, 0))
         expected_pixel = cv.addWeighted(source_pixel, 0.65, green, 0.35, 0)
-        np.testing.assert_array_equal(
-            initial_image[center_y : center_y + 1, center_x : center_x + 1],
-            expected_pixel,
-        )
         invoke("長さを計測")
         assert status() == "計測完了", status()
-        assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
+        assert buttons["CSV・画像2枚を保存"].instate(["!disabled"])
         root.geometry("1000x760")
         root.update()
         for button in list(buttons.values()) + list(radios.values()):
@@ -237,66 +225,66 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         )
         if screenshots:
             capture(root, directory / "initial_regions_gui.png")
-        for name, path in (
-            ("CSV・確認PNGを保存", csv_path),
-            ("確認画像を保存", directory / "output/measurement.png"),
-        ):
-            with patch.object(
-                filedialog, "asksaveasfilename", return_value=str(path)
-            ) as dialog:
-                invoke(name)
-            assert dialog.call_args.kwargs["initialdir"] == directory / "output"
-            assert path.exists(), status()
-        paired_png = csv_path.with_suffix(".png")
-        assert paired_png.exists()
-        paired_before = (csv_path.read_bytes(), paired_png.read_bytes())
-        result_image = cv.imdecode(
-            np.frombuffer(paired_before[1], np.uint8), cv.IMREAD_COLOR
-        )
-        for view_name, expected_image in (
-            ("初期指定", initial_image),
-            ("元画像", image),
-            ("計測結果", result_image),
-        ):
-            radios[view_name].invoke()
-            saved_path = directory / f"output/{view_name}.png"
-            with patch.object(
-                filedialog, "asksaveasfilename", return_value=str(saved_path)
-            ):
-                invoke("確認画像を保存")
-            saved_image = cv.imdecode(
-                np.frombuffer(saved_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
-            )
-            np.testing.assert_array_equal(saved_image, expected_image)
-
-        # 表示を初期指定へ戻しても、一括保存するPNGは計測結果にする。
-        radios["初期指定"].invoke()
-        csv_path.write_bytes(b"old CSV")
-        paired_png.write_bytes(b"old PNG")
-        with (
-            patch.object(
-                filedialog, "asksaveasfilename", return_value=str(csv_path)
-            ) as dialog,
-            patch.object(
-                messagebox,
-                "askyesno",
-                side_effect=AssertionError("上書き確認は不要です"),
-            ) as confirm,
-        ):
-            invoke("CSV・確認PNGを保存")
-        assert dialog.call_args.kwargs["confirmoverwrite"] is False
-        confirm.assert_not_called()
-        assert (csv_path.read_bytes(), paired_png.read_bytes()) == paired_before
-        assert status() == f"保存: {csv_path.name} / {paired_png.name}"
         with patch.object(
-            filedialog, "asksaveasfilename", return_value=str(image_path)
+            filedialog, "asksaveasfilename", return_value=str(csv_path)
+        ) as dialog:
+            invoke("CSV・画像2枚を保存")
+        assert dialog.call_count == 1
+        assert dialog.call_args.kwargs["initialdir"] == directory / "output"
+        initial_path = csv_path.with_name(f"{csv_path.stem}_initial.png")
+        result_path = csv_path.with_suffix(".png")
+        saved_paths = (csv_path, initial_path, result_path)
+        assert all(path.exists() for path in saved_paths), status()
+        saved_bytes = [path.read_bytes() for path in saved_paths]
+        initial_image = cv.imdecode(
+            np.frombuffer(saved_bytes[1], np.uint8), cv.IMREAD_COLOR
+        )
+        assert initial_image is not None
+        assert initial_image.shape == image.shape
+        np.testing.assert_array_equal(
+            initial_image[center_y : center_y + 1, center_x : center_x + 1],
+            expected_pixel,
+        )
+        result_image = cv.imdecode(
+            np.frombuffer(saved_bytes[2], np.uint8), cv.IMREAD_COLOR
+        )
+        assert result_image is not None
+        assert result_image.shape == image.shape
+        np.testing.assert_array_equal(result_image[interval_start, 0], (0, 255, 255))
+        assert np.any(np.all(result_image == (0, 0, 255), axis=2))
+        for view_name in ("初期指定", "元画像", "計測結果"):
+            radios[view_name].invoke()
+            for path in saved_paths:
+                path.write_bytes(b"old output")
+            with (
+                patch.object(
+                    filedialog, "asksaveasfilename", return_value=str(csv_path)
+                ) as dialog,
+                patch.object(
+                    messagebox,
+                    "askyesno",
+                    side_effect=AssertionError("上書き確認は不要です"),
+                ) as confirm,
+            ):
+                invoke("CSV・画像2枚を保存")
+            assert dialog.call_args.kwargs["confirmoverwrite"] is False
+            confirm.assert_not_called()
+            assert [path.read_bytes() for path in saved_paths] == saved_bytes
+            assert status() == f"保存: {csv_path.name} / PNG2枚"
+        with patch.object(filedialog, "asksaveasfilename", return_value=""):
+            invoke("CSV・画像2枚を保存")
+        assert [path.read_bytes() for path in saved_paths] == saved_bytes
+        with patch.object(
+            filedialog,
+            "asksaveasfilename",
+            return_value=str(image_path.with_suffix(".csv")),
         ):
-            invoke("確認画像を保存")
+            invoke("CSV・画像2枚を保存")
         assert "別の保存先" in status()
         before = csv_path.read_bytes()
         set_field(root, start, -1)
         assert root.getvar(interval_variable) == "区間長：—"
-        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
+        assert buttons["CSV・画像2枚を保存"].instate(["disabled"])
         assert result_table.set("left", "length") == "—"
         invoke("長さを計測")
         assert "計測区間" in status()
@@ -305,13 +293,13 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
 
         set_field(root, start, interval_start)
         invoke("長さを計測")
-        assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
+        assert buttons["CSV・画像2枚を保存"].instate(["!disabled"])
         region_list = next(w for w in widgets if isinstance(w, tk.Listbox))
         region_count = region_list.size()
         region_list.selection_set(0)
         invoke("選択した矩形を削除")
         assert region_list.size() == region_count - 1
-        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
+        assert buttons["CSV・画像2枚を保存"].instate(["disabled"])
         assert result_table.set("left", "length") == "—"
         invoke("矩形をすべて削除")
         assert region_list.size() == 0
@@ -320,7 +308,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert root.getvar(str(start.cget("textvariable"))) == "0"
         assert root.getvar(str(end.cget("textvariable"))) == str(height - 1)
         assert len(preview_lines()) == 2
-        assert buttons["CSV・確認PNGを保存"].instate(["disabled"])
+        assert buttons["CSV・画像2枚を保存"].instate(["disabled"])
         assert not errors, errors
 
     try:
