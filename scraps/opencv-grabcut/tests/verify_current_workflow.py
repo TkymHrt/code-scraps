@@ -194,6 +194,25 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert len(preview_lines()) == 2
         if screenshots:
             capture(root, directory / "interval_preview_gui.png")
+        radios["初期指定"].invoke()
+        initial_path = directory / "output/initial.png"
+        with patch.object(
+            filedialog, "asksaveasfilename", return_value=str(initial_path)
+        ):
+            invoke("確認画像を保存")
+        initial_image = cv.imdecode(
+            np.frombuffer(initial_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+        )
+        assert initial_image is not None
+        center_x = int(width * (foreground[0] + foreground[2]) / 2)
+        center_y = int(height * (foreground[1] + foreground[3]) / 2)
+        source_pixel = image[center_y : center_y + 1, center_x : center_x + 1]
+        green = np.full_like(source_pixel, (0, 255, 0))
+        expected_pixel = cv.addWeighted(source_pixel, 0.65, green, 0.35, 0)
+        np.testing.assert_array_equal(
+            initial_image[center_y : center_y + 1, center_x : center_x + 1],
+            expected_pixel,
+        )
         invoke("長さを計測")
         assert status() == "計測完了", status()
         assert buttons["CSV・確認PNGを保存"].instate(["!disabled"])
@@ -231,18 +250,43 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         paired_png = csv_path.with_suffix(".png")
         assert paired_png.exists()
         paired_before = (csv_path.read_bytes(), paired_png.read_bytes())
+        result_image = cv.imdecode(
+            np.frombuffer(paired_before[1], np.uint8), cv.IMREAD_COLOR
+        )
+        for view_name, expected_image in (
+            ("初期指定", initial_image),
+            ("元画像", image),
+            ("計測結果", result_image),
+        ):
+            radios[view_name].invoke()
+            saved_path = directory / f"output/{view_name}.png"
+            with patch.object(
+                filedialog, "asksaveasfilename", return_value=str(saved_path)
+            ):
+                invoke("確認画像を保存")
+            saved_image = cv.imdecode(
+                np.frombuffer(saved_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
+            )
+            np.testing.assert_array_equal(saved_image, expected_image)
+
+        # 表示を初期指定へ戻しても、一括保存するPNGは計測結果にする。
+        radios["初期指定"].invoke()
+        csv_path.write_bytes(b"old CSV")
+        paired_png.write_bytes(b"old PNG")
         with (
-            patch.object(filedialog, "asksaveasfilename", return_value=str(csv_path)),
-            patch.object(messagebox, "askyesno", return_value=False) as confirm,
+            patch.object(
+                filedialog, "asksaveasfilename", return_value=str(csv_path)
+            ) as dialog,
+            patch.object(
+                messagebox,
+                "askyesno",
+                side_effect=AssertionError("上書き確認は不要です"),
+            ) as confirm,
         ):
             invoke("CSV・確認PNGを保存")
-        assert confirm.call_count == 1
+        assert dialog.call_args.kwargs["confirmoverwrite"] is False
+        confirm.assert_not_called()
         assert (csv_path.read_bytes(), paired_png.read_bytes()) == paired_before
-        with (
-            patch.object(filedialog, "asksaveasfilename", return_value=str(csv_path)),
-            patch.object(messagebox, "askyesno", return_value=True),
-        ):
-            invoke("CSV・確認PNGを保存")
         assert status() == f"保存: {csv_path.name} / {paired_png.name}"
         with patch.object(
             filedialog, "asksaveasfilename", return_value=str(image_path)

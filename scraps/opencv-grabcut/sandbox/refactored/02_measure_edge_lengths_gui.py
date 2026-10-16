@@ -3,7 +3,7 @@
 import math
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 import cv2 as cv
 import numpy as np
@@ -232,22 +232,27 @@ def main() -> None:
         view.set("initial")
         render()
 
+    def get_preview_image(source_image: np.ndarray) -> np.ndarray:
+        if view.get() == "initial":
+            return initial_overlay(source_image, regions)
+        if view.get() == "result" and result_image is not None:
+            return result_image
+        return source_image
+
     def render(_event=None) -> None:
         nonlocal photo, display_bounds, drag_start_ratios
         drag_start_ratios = None
         canvas.delete("all")
         if image is None:
             return
-        shown = image
-        if view.get() == "initial":
-            shown = initial_overlay(image, regions)
-        elif view.get() == "result" and result_image is not None:
-            shown = result_image
+        preview_image = get_preview_image(image)
         scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
         display_width = max(1, int(width * scale))
         display_height = max(1, int(height * scale))
         small = cv.resize(
-            shown, (display_width, display_height), interpolation=cv.INTER_NEAREST
+            preview_image,
+            (display_width, display_height),
+            interpolation=cv.INTER_NEAREST,
         )
         png_data = encode_png(small)
         photo = tk.PhotoImage(master=root, data=png_data, format="PNG")
@@ -390,10 +395,8 @@ def main() -> None:
             return
         try:
             output_path = check_output_path(output_path, ".png", [input_path])
-            shown = result_image
-            if shown is None:
-                shown = initial_overlay(image, regions)
-            write_png(output_path, shown)
+            preview_image = get_preview_image(image)
+            write_png(output_path, preview_image)
         except ValueError as error:
             status.set(str(error))
             return
@@ -483,18 +486,6 @@ def main() -> None:
             return
         csv_path = Path(selected).resolve()
         png_path = csv_path.with_suffix(".png")
-        existing_names = []
-        for path in (csv_path, png_path):
-            if path.exists():
-                existing_names.append(path.name)
-        if existing_names:
-            overwrite = messagebox.askyesno(
-                "保存先の確認",
-                "次のファイルを上書きしますか？\n" + "\n".join(existing_names),
-                parent=root,
-            )
-            if not overwrite:
-                return
         try:
             write_measurement(csv_path, input_path, measurement, result_image)
         except ValueError as error:
