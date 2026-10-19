@@ -12,6 +12,7 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 | `00_1_generate_charuco_board.py` | 印刷用の解像度・余白、板画像の作成と保存 |
 | `00_2_calibrate_camera.py` | 角の検出、魚眼校正、係数の表示 |
 | `01_rectify_images.py` | カメラ係数、魚眼・遠近補正 |
+| `01_rectify_frames_from_reference.py` | 固定カメラの基準画像から求めた補正を、ボードなしフレームへ一括適用する別案 |
 | `02_measure_edge_lengths_gui.py` | 矩形の指定、GrabCut、側辺長の計算、CSV・確認PNGの保存、計測GUI |
 | `03_compare_edge_lengths_gui.py` | CSVの追加・削除、表とグラフを更新する局所比較GUI |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 厚さからの累積圧下率の計算、厚さ入力付きの比較GUI |
@@ -135,6 +136,67 @@ CSVの列、数値の丸め方、UTF-8 BOM、確認PNG、比較PNGの仕様は�
 撮影条件・板と試料の高さ・GUI操作・エラー時の扱いは [提出版の手順](../../submissions/README.md) と [撮影手順](../../CAPTURE.md) を参照してください。
 提出版の手順にある入出力先・板・倍率の設定先は、この版では `workflow_settings.py` に読み替えます。
 
+## 固定カメラの動画フレームを補正する
+
+`01_rectify_frames_from_reference.py` は、動作前のボード付き基準画像から補正を1回求め、
+動作中の全フレームへ同じ歪み補正・遠近変換・出力範囲を適用します。
+各フレームにはボードが不要です。毎画像のボードを使う従来の `01_rectify_images.py` と使い分けます。
+FFmpegでの画像切り出しは別途行い、このスクリプトにはPNG・JPEGなどの画像を渡します。
+
+### 設定と実行
+
+1. 基準画像と測定フレームを、同じ動画条件・元解像度で書き出す。リサイズ・切り抜き・回転は加えない。
+2. このスクリプトの冒頭へ、動画条件に適合する `CALIBRATION_SIZE`・`CAMERA_MATRIX`・`DIST_COEFFS` を貼る。
+   既存の `01_rectify_images.py` の係数は自動では読み込まない。魚眼モデルの歪み係数4個を使う。
+3. 同じ冒頭の `REFERENCE_IMAGE_PATH`・`FRAMES_DIRECTORY`・`RECTIFIED_FRAMES_DIRECTORY` を確認する。
+   既定値は次のとおり。板の仕様と `MM_PER_PX` は既存GUIと同じ `workflow_settings.py` を使う。
+
+| 用途 | `refactored/` を基準にした既定の場所 |
+| --- | --- |
+| ボード付き基準画像 | `input/video_reference/reference.png` |
+| 補正するフレーム | `input/video_frames/` 直下 |
+| 補正フレーム | `output/rectified_frames/` 直下 |
+| 基準画像の補正結果 | `output/rectified_frames/reference/reference.png` |
+
+入出力の既定値は共通の `INPUT_DIRECTORY`・`OUTPUT_DIRECTORY` から決まります。
+撮影ごとに保存先を変える場合は、このスクリプトの `RECTIFIED_FRAMES_DIRECTORY` を変更してください。
+基準画像の補正結果は `reference/` 内に基準画像の名前をPNGへ変えて保存します。
+入出力のフォルダは混ぜず、結果を再現するため基準画像・設定済みスクリプト・共通設定を保管します。
+
+`opencv-grabcut` フォルダから実行します。
+
+```powershell
+uv run sandbox/refactored/01_rectify_frames_from_reference.py
+uv run sandbox/refactored/measure_point_distance_gui.py
+uv run sandbox/refactored/02_measure_edge_lengths_gui.py
+uv run sandbox/refactored/03_compare_edge_lengths_gui.py
+```
+
+まず基準画像の補正結果で既知寸法を照合し、次に補正フレームで側辺を測ります。
+GUIの画像選択で `output/rectified_frames/` を開いてください。GUIの既定の読込開始先は従来のままです。
+同じ `MM_PER_PX` で作った補正PNGを使うので、計測CSV・確認PNG・比較の手順は既存のままです。
+測れるのは各フレームに見える指定区間の左右側辺長です。全長の復元や同じ材料区間の追跡は行いません。
+
+### 撮影条件と結果の扱い
+
+- 基準撮影から動作中までカメラの位置・高さ・向き・画角・ズームを固定する。
+  手ぶれ補正・水平維持・自動クロップなど、画像の対応関係を変える処理は使わない。
+  基準画像も同じ動画から切り出し、カメラ係数が動画の撮影モードに適合していることを確認する。
+- ボードを測定予定の試料面に近い高さ・傾きで平らに置く。
+  高さの差や反りによる誤差は補正しない。結果はボードの基準面に換算した長さとして扱う。
+- 写真内の向きを保つため、試料の長手は画像の縦方向へ揃え、区間内の左右両側辺を写す。
+  動体ブレ・反射・影で境界が読めないフレームは測定に使わない。
+- カメラを動かしたら、新しい基準画像と別の出力先を使う。
+  設備の動かない部分や終了後のボード画像で構図の変化を確認する。
+  同じ画像サイズでも画角・カメラ姿勢の変化はコードでは検出できない。
+
+基準画像で角を縦横に6点以上読めない、再投影誤差が2pxを超える、補正画像が大きすぎる場合は停止します。
+表示する角数・再投影誤差は基準画像の値であり、動作中のフレームの寸法精度を表す値ではありません。
+フレームは基準画像と同じ解像度であることを確認します。解像度不一致はファイル名を示して停止します。
+既存の出力PNGは同名で上書きしますが、基準画像・入力フレームへの上書きと出力名の重複は実行前に拒否します。
+途中で失敗した場合、基準画像の補正結果と処理済みフレームは残ります。
+入力を直し、結果を退避するか同じ条件で上書きして再実行してください。
+
 ## 2点間の距離を確認する
 
 補正後の寸法を定規や既知間隔の印と照合する場合は、補助GUIを使います。
@@ -159,7 +221,8 @@ uv run sandbox/refactored/measure_point_distance_gui.py
 
 ## コード量
 
-既存6本と共通ファイルの全行数を比較しています。空行・コメント・importも含み、補助GUI・README・検証コードは含めません。
+既存6本と共通ファイルの全行数を比較しています。空行・コメント・importも含み、
+後から追加した固定カメラ用補正・補助GUI・README・検証コードは含めません。
 
 | 対象 | 初回の提出版 | 初回の共通化 | 入出力・GUI整理後 | 命名・表示整理後 |
 | --- | ---: | ---: | ---: | ---: |
@@ -175,6 +238,8 @@ uv run sandbox/refactored/measure_point_distance_gui.py
 ```powershell
 # 旧版との出力一致・共通処理の安全性を確認
 uv run python -m unittest discover -s tests -p test_refactored_workflow.py -v
+# 基準画像からボードなしフレームを補正し、既知寸法・計測への受渡しを確認
+uv run python -m unittest discover -s tests -p test_reference_frame_rectification.py -v
 # 既存の検証も含めて実行
 uv run python -m unittest discover -s tests
 # 保存先には tests/results 内のまだ存在しないフォルダを指定
@@ -184,7 +249,7 @@ uv run ruff format --check .
 uv run ty check .
 ```
 
-この版の9件では次を確認します。
+既存版との比較を行う9件では次を確認します。
 
 - 板PNG、校正値と読取確認PNG、補正画像、計測CSV・確認PNG、比較グラフ6表示が提出版と一致する。
 - 日本語・空白を含む別フォルダへコピーし、異なる作業ディレクトリから実行できる。共通設定の変更が板生成と補正・計測へ反映される。
@@ -215,3 +280,10 @@ GUIの操作検証は、既存の工程・局所比較・厚さ比較の検証�
 画面サイズ変更と全体表示後の測定保持、拡大縮小の上限・下限、表示範囲だけの描画、読込取消・失敗・切替を確認しました。
 追加スクリプトのRuff・format・tyも通りました。確認用コード・生成画像・画面画像・結果は
 `tests/results/point_distance_zoom_20261019/` にあります。
+
+2026-10-20に固定カメラ用の `01_rectify_frames_from_reference.py` を追加しました。
+`tests/test_reference_frame_rectification.py` の12件と、既存版との比較9件の計21件が通りました。
+ボードなしの合成魚眼フレームで、平面内の3位置に置いた150×40mmの試料の寸法を各辺1mm以内で確認しました。
+基準画像は従来の `01` と画素単位で一致し、補正フレームから既存の計測CSV・確認PNGへ渡せました。
+入力保護・出力名の重複・解像度不一致・不正な基準画像と係数、日本語・空白を含む別フォルダでの実行も確認しました。
+Ruff・format・tyも通りました。今回の追加機能の実動画での寸法精度と、動作中の高さ・振動・ブレの影響は未確認です。
