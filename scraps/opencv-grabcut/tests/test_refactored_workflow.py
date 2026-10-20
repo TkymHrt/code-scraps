@@ -284,19 +284,20 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
         self.assertTrue(
             (self.directory / "single" / f"{paths[0].name}_detected.png").exists()
         )
+        output = io.StringIO()
         with (
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(output),
             patch.object(
                 cv.fisheye,
                 "calibrate",
                 side_effect=cv.error("Ill-conditioned matrix for input array 0"),
-            ),
-            self.assertRaises(ValueError) as failure,
+            ) as calibration,
+            self.assertRaisesRegex(ValueError, "校正に使える写真がありません"),
         ):
             new["calibrate"](paths[:1], self.directory / "condition")
-        self.assertIn(f"1枚目 / {paths[0].name}", str(failure.exception))
-        self.assertIn("確認画像:", str(failure.exception))
-        self.assertNotIn("10枚", str(failure.exception))
+        calibration.assert_called_once()
+        self.assertIn(f"スキップ 1: {paths[0].name}", output.getvalue())
+        self.assertIn("確認画像:", output.getvalue())
 
     def test_rectification_keeps_pixels_scale_orientation_and_batch_guards(self):
         old = runpy.run_path(str(PROJECT / "submissions/01_rectify_images.py"))
