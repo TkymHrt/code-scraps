@@ -21,7 +21,7 @@
 | `02_measure_edge_lengths_gui.py` | 多角形で試料を抽出し、長手軸に直角な固定長区間の側辺長・超過率をCSVと確認PNGへ保存する |
 | `03_compare_edge_lengths_gui.py` | 計測CSVからDR・OPの実測長・100mm換算を比較する |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 実測厚さを加え、撮影順／累積圧下率で側辺長を比較する |
-| `04_plot_pass_metrics.py` | 対応表から、パス別の超過率・初回差・DR−OP差の3図を一括保存する |
+| `04_plot_pass_metrics.py` | 冒頭に指定した計測CSVから、パス別の超過率・初回差・DR−OP差の3図を一括保存する |
 
 入出力先・倍率は `src/workflow_settings.py`、画像入出力・CSV・比較・GUIの共通処理は `src/utils/` にあります。
 別の場所へ持ち出す場合は、実行するスクリプトと共通設定、`utils/` を一緒にコピーします。
@@ -54,17 +54,15 @@ uv run src/03_compare_edge_lengths_with_thickness_gui.py
 1回の保存で1行のCSV、初期指定PNG、計測結果PNGを残します。
 超過率は `(側辺長 / 基準区間長 - 1) * 100` で求めます。
 
-比較GUIはCSV追加順の側辺長を表示します。パス0・2・4・…を横軸にした3図は、対応表と `04` で一括作成できます。
+比較GUIはCSV追加順の側辺長を表示します。パス0・2・4・…を横軸にした3図は、`04` の冒頭を編集して一括作成できます。
 
 ```powershell
-Copy-Item src/pass_measurements_template.csv src/pass_measurements.csv
-# コピーした表の実験回・パス・区間ID・計測CSVのパスを編集してから実行
-uv run src/04_plot_pass_metrics.py src/pass_measurements.csv --out src/output/pass_graphs
+# 04のMEASUREMENTS（実験回・パス・区間ID・計測CSV）とGRAPH_DIRECTORYを編集してから実行
+uv run src/04_plot_pass_metrics.py
 ```
 
-対応表へ測定値を転記する必要はありません。計測CSVの相対パスは、対応表のあるフォルダが基準です。
-コピー先の `src/pass_measurements.csv` と出力画像はGit管理から除外しています。
-[Pythonの詳しい使い方](src/README.md#対応表から3種類のグラフを一括作成する) と [Excelでの集計手順](PRESENTATION.md) を参照してください。
+測定値の転記や別の対応表CSVは不要です。計測CSVの相対パスは `src/` が基準です。
+[Pythonの詳しい使い方](src/README.md#スクリプト内の設定から3種類のグラフを一括作成する) と [Excelでの集計手順](PRESENTATION.md) を参照してください。
 
 ## 検証
 

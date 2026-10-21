@@ -1,4 +1,4 @@
-"""対応表の誤入力を止め、3図の数値と別フォルダからの実行を確認する。"""
+"""コード内の入力設定を確認し、3図の数値と別フォルダからの実行を検証する。"""
 
 import csv
 import subprocess
@@ -10,15 +10,10 @@ from unittest.mock import patch
 
 import cv2 as cv
 import numpy as np
-from test_refactored_workflow import load_refactored
-
-PROJECT = Path(__file__).resolve().parents[1]
-SCRIPT = PROJECT / "src" / "04_plot_pass_metrics.py"
-TABLE_COLUMNS = (
-    "experiment_id",
-    "pass_number",
-    "section_id",
-    "measurement_csv",
+from test_refactored_workflow import (
+    copy_refactored,
+    load_refactored,
+    run_refactored,
 )
 
 
@@ -28,7 +23,6 @@ class PassMetricsTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name) / "試験 データ"
         self.directory.mkdir()
-        self.table_path = self.directory / "対応表.csv"
         self.module = load_refactored("04_plot_pass_metrics.py")
 
     def measurement(self, name, dr=1.0, op=2.0, **changes):
@@ -55,16 +49,12 @@ class PassMetricsTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(row)
 
-    def write_table(self, rows, columns=TABLE_COLUMNS):
-        with self.table_path.open("w", encoding="utf-8-sig", newline="") as output:
-            writer = csv.writer(output)
-            writer.writerow(columns)
-            writer.writerows(rows)
+    def read_measurements(self, measurements):
+        reader = self.module["read_pass_measurements"]
+        with patch.dict(reader.__globals__, {"BASE_DIRECTORY": self.directory}):
+            return reader(measurements)
 
-    def read_table(self):
-        return self.module["read_pass_measurements"](self.table_path)
-
-    def example_table(self):
+    def example_measurements(self):
         # 入力順に依存せず、実験回と区間ごとに初回からの差を計算する。
         data = (
             ("runA", 6, "A", 5, 8),
@@ -75,15 +65,17 @@ class PassMetricsTests(unittest.TestCase):
             ("runA", 0, "B", 4, 9),
             ("runA", 2, "A", 3, 2),
         )
-        table = []
+        measurements = []
         for experiment, number, section, dr, op in data:
             name = f"{experiment}_{section}_{number}.csv"
             path = self.measurement(name, dr, op)
-            table.append((experiment, number, section, path.name))
+            measurements.append((experiment, number, section, path.name))
         # 絶対パスの入力も、相対パスと同じように扱う。
-        table[1] = (*table[1][:3], str(self.directory / table[1][3]))
-        self.write_table(table)
-        return self.read_table()
+        measurements[1] = (
+            *measurements[1][:3],
+            str(self.directory / measurements[1][3]),
+        )
+        return measurements
 
     def assert_graph_contains(self, figure, x_values, y_values):
         for line in figure.axes[0].lines:
@@ -96,7 +88,7 @@ class PassMetricsTests(unittest.TestCase):
         self.fail(f"グラフに期待する系列がありません: x={x_values}, y={y_values}")
 
     def test_three_graphs_keep_numeric_passes_and_separate_initial_values(self):
-        rows = self.example_table()
+        rows = self.read_measurements(self.example_measurements())
         self.assertEqual(len(rows), 7)
         for row in rows:
             self.assertIsInstance(row["pass_number"], int)
@@ -125,15 +117,17 @@ class PassMetricsTests(unittest.TestCase):
         first = self.measurement("first.csv")
         later = self.measurement("later.csv", 3, 4)
         for experiment, section in (("別の実験", "A"), ("runA", "別区間")):
-            self.write_table(
-                [("runA", 0, "A", first.name), (experiment, 2, section, later.name)]
-            )
             with self.subTest(experiment=experiment, section=section):
                 with self.assertRaises(ValueError):
-                    self.read_table()
+                    self.read_measurements(
+                        [
+                            ("runA", 0, "A", first.name),
+                            (experiment, 2, section, later.name),
+                        ]
+                    )
 
     def test_graph_settings_control_limits_size_and_side_colors(self):
-        rows = self.example_table()
+        rows = self.read_measurements(self.example_measurements())
         settings = {
             "PASS_X_LIMITS": (-1, 8),
             "EXCESS_Y_LIMITS": (0, 15),
@@ -163,18 +157,16 @@ class PassMetricsTests(unittest.TestCase):
     def test_invalid_passes_and_empty_identifiers_are_rejected(self):
         first = self.measurement("first.csv")
         later = self.measurement("later.csv", 3, 4)
-        for number in (-2, 1, "2.5", "nan", ""):
-            self.write_table(
-                [("runA", 0, "A", first.name), ("runA", number, "A", later.name)]
-            )
+        for number in (-2, 1, "2", "2.5", "nan", "", 2.0, True, False):
             with self.subTest(pass_number=number), self.assertRaises(ValueError):
-                self.read_table()
+                self.read_measurements(
+                    [("runA", 0, "A", first.name), ("runA", number, "A", later.name)]
+                )
         for column in (0, 2, 3):
             row = ["runA", 0, "A", first.name]
             row[column] = " "
-            self.write_table([row])
             with self.subTest(column=column), self.assertRaises(ValueError):
-                self.read_table()
+                self.read_measurements([tuple(row)])
 
     def test_duplicate_pass_or_same_csv_path_alias_is_rejected(self):
         first = self.measurement("first.csv")
@@ -183,18 +175,13 @@ class PassMetricsTests(unittest.TestCase):
             [("runA", 0, "A", first.name), ("runA", 0, "A", later.name)],
             [("runA", 0, "A", first.name), ("runB", 0, "B", str(first))],
         )
-        for table in cases:
-            self.write_table(table)
-            with self.subTest(table=table), self.assertRaises(ValueError):
-                self.read_table()
+        for measurements in cases:
+            with self.subTest(measurements=measurements), self.assertRaises(ValueError):
+                self.read_measurements(measurements)
 
-    def test_empty_table_and_missing_columns_are_rejected(self):
-        self.write_table([])
+    def test_empty_measurements_are_rejected(self):
         with self.assertRaises(ValueError):
-            self.read_table()
-        self.write_table([], columns=TABLE_COLUMNS[:-1])
-        with self.assertRaises(ValueError):
-            self.read_table()
+            self.read_measurements([])
 
     def test_mixed_measurement_conditions_are_rejected(self):
         first = self.measurement("first.csv")
@@ -209,17 +196,18 @@ class PassMetricsTests(unittest.TestCase):
                 changes["left_mm"] = value * 1.01
                 changes["right_mm"] = value * 1.02
             later = self.measurement("later.csv", **changes)
-            self.write_table(
-                [("runA", 0, "A", first.name), ("runA", 2, "A", later.name)]
-            )
             with self.subTest(column=column), self.assertRaises(ValueError):
-                self.read_table()
+                self.read_measurements(
+                    [("runA", 0, "A", first.name), ("runA", 2, "A", later.name)]
+                )
 
     def test_rounded_conditions_are_accepted_within_tolerance(self):
         first = self.measurement("first.csv")
         later = self.measurement("later.csv", evaluation_interval_mm=1.000000001)
-        self.write_table([("runA", 0, "A", first.name), ("runA", 2, "A", later.name)])
-        self.assertEqual(len(self.read_table()), 2)
+        rows = self.read_measurements(
+            [("runA", 0, "A", first.name), ("runA", 2, "A", later.name)]
+        )
+        self.assertEqual(len(rows), 2)
 
     def test_legacy_or_incomplete_csv_is_rejected(self):
         legacy = self.directory / "legacy.csv"
@@ -234,17 +222,15 @@ class PassMetricsTests(unittest.TestCase):
                 "right_mm": 102,
             },
         )
-        self.write_table([("runA", 0, "A", legacy.name)])
         with self.assertRaises(ValueError):
-            self.read_table()
+            self.read_measurements([("runA", 0, "A", legacy.name)])
         broken = self.measurement("broken.csv", evaluation_interval_mm="")
-        self.write_table([("runA", 0, "A", broken.name)])
         with self.assertRaises(ValueError):
-            self.read_table()
+            self.read_measurements([("runA", 0, "A", broken.name)])
 
-    def test_output_protects_table_measurement_and_source_image(self):
+    def test_output_protects_script_measurement_and_source_image(self):
         for protected_kind, output_name in (
-            ("table", "excess.png"),
+            ("script", "excess.png"),
             ("measurement", "change_from_initial.png"),
             ("image", "dr_op_difference.png"),
         ):
@@ -252,11 +238,13 @@ class PassMetricsTests(unittest.TestCase):
                 directory = self.directory / protected_kind
                 directory.mkdir()
                 protected_path = directory / output_name
-                self.table_path = directory / "対応表.csv"
                 measurement_name = "measurement.csv"
                 image_path = directory / "source.png"
-                if protected_kind == "table":
-                    self.table_path = protected_path
+                module = self.module
+                if protected_kind == "script":
+                    script = copy_refactored("04_plot_pass_metrics.py", directory)
+                    script.rename(protected_path)
+                    module = run_refactored(protected_path)
                 elif protected_kind == "measurement":
                     measurement_name = str(protected_path)
                 else:
@@ -265,11 +253,10 @@ class PassMetricsTests(unittest.TestCase):
                 measurement = self.measurement(
                     measurement_name, image_path=str(image_path)
                 )
-                self.write_table([("runA", 0, "A", str(measurement))])
-                rows = self.read_table()
+                rows = self.read_measurements([("runA", 0, "A", str(measurement))])
                 before = protected_path.read_bytes()
                 with self.assertRaises(ValueError):
-                    self.module["write_graphs"](directory, rows, self.table_path)
+                    module["write_graphs"](directory, rows)
                 self.assertEqual(protected_path.read_bytes(), before)
                 for name in (
                     "excess.png",
@@ -281,10 +268,20 @@ class PassMetricsTests(unittest.TestCase):
                         self.assertFalse(path.exists(), "入力衝突時は保存前に止める")
 
     def test_cli_runs_from_another_directory_and_writes_three_readable_pngs(self):
-        self.example_table()
+        measurements = self.example_measurements()
+        script = copy_refactored(
+            "04_plot_pass_metrics.py", self.directory, MEASUREMENTS=measurements
+        )
+        # 保存先もコピー内のコードで設定する。実行時引数は使わない。
+        source = script.read_text(encoding="utf-8")
+        source = source.replace(
+            'GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"',
+            'GRAPH_DIRECTORY = BASE_DIRECTORY / "保存 画像"',
+        )
+        script.write_text(source, encoding="utf-8")
         output = self.directory / "保存 画像"
         result = subprocess.run(
-            [sys.executable, str(SCRIPT), str(self.table_path), "--out", str(output)],
+            [sys.executable, str(script)],
             cwd=Path(self.temporary.name),
             capture_output=True,
             text=True,

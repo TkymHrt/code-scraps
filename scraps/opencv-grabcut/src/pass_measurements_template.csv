@@ -1,4 +1,0 @@
-experiment_id,pass_number,section_id,measurement_csv
-run01,0,a,output/run01_pass00_a.csv
-run01,2,a,output/run01_pass02_a.csv
-run01,4,a,output/run01_pass04_a.csv

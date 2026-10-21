@@ -4,7 +4,7 @@
 以下の数値は合成した既知形状での検証結果であり、実際の圧延実験の結果ではない。
 実測の実験回数・数値・傾向は未提示のため、発表前に `[ ]` を置き換える。
 
-発表用の3図は、[対応表とPythonスクリプトで一括作成](#pythonで3図を一括作成する)するか、下記のExcel手順で作成できる。
+発表用の3図は、[Pythonスクリプトに計測CSVの一覧を書いて一括作成](#pythonで3図を一括作成する)するか、下記のExcel手順で作成できる。
 繰り返し同じ体裁で作る場合はPython、表上での集計や細かい書式調整はExcelを使う。
 
 題目案：**圧延パスごとのエッジクラック評価に向けた画像計測手法の構築と基礎検証**
@@ -55,7 +55,7 @@
 | 側辺形状の計測 | `02_measure_edge_lengths_gui.py` | 試料抽出、長手軸推定、側辺長・超過率の計算、CSV・確認PNGの保存 |
 | 計測結果の比較 | `03_compare_edge_lengths_gui.py` | CSVの実測側辺長・100mm換算を表とグラフで比較 |
 | 厚さを用いた比較 | `03_compare_edge_lengths_with_thickness_gui.py` | 実測厚さから累積圧下率を求め、側辺長との関係を比較 |
-| パス数ごとの作図 | `04_plot_pass_metrics.py`、`pass_measurements_template.csv` | 実験回・パス・区間と計測CSVを対応付け、超過率・初回からの変化・DRとOPの差をPNGへ一括出力 |
+| パス数ごとの作図 | `04_plot_pass_metrics.py` | 冒頭に実験回・パス・区間と計測CSVを記入し、超過率・初回からの変化・DRとOPの差をPNGへ一括出力 |
 | 共通部分 | `workflow_settings.py`、`utils/` | 倍率・入出力先、画像とCSVの処理、比較処理、GUIの共通部分 |
 
 全工程を一括で自動処理する方式ではなく、人が画像と途中結果を確認しながら進める構成です。
@@ -153,30 +153,32 @@
 
 ### Pythonで3図を一括作成する
 
-測定値をExcelへ転記せず、各計測CSVと実験回・パス・区間の対応表からMatplotlibで作図する。
+測定値をExcelへ転記せず、スクリプト冒頭に指定した計測CSVからMatplotlibで作図する。別の対応表CSVは作らない。
 `opencv-grabcut` フォルダから、次の順に操作する。
 
-1. `Copy-Item src/pass_measurements_template.csv src/pass_measurements.csv` でひな形をコピーする。
-2. `src/pass_measurements.csv` の実験回・パス数・区間IDとファイルパスを実データに置き換える。
-3. 次のコマンドを実行する。
+1. `src/04_plot_pass_metrics.py` 冒頭の `MEASUREMENTS` と出力先 `GRAPH_DIRECTORY` を編集する。
+   `MEASUREMENTS` の各行は「実験回、パス数、区間ID、計測CSVのパス」の順にする。
 
-```powershell
-uv run src/04_plot_pass_metrics.py src/pass_measurements.csv --out src/output/pass_graphs
-```
+   ```python
+   MEASUREMENTS = [
+       ("run01", 0, "a", "output/run01_pass00_a.csv"),
+       ("run01", 2, "a", "output/run01_pass02_a.csv"),
+       ("run01", 4, "a", "output/run01_pass04_a.csv"),
+   ]
+   GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"
+   ```
 
-対応表は次の4列とする。例の計測CSVは、実際に計測・保存したファイルに置き換える。
+2. 次のコマンドを実行する。引数は不要。
 
-```csv
-experiment_id,pass_number,section_id,measurement_csv
-run01,0,a,output/run01_pass00_a.csv
-run01,2,a,output/run01_pass02_a.csv
-run01,4,a,output/run01_pass04_a.csv
-```
+   ```powershell
+   uv run src/04_plot_pass_metrics.py
+   ```
 
-`measurement_csv` の相対パスは対応表のあるフォルダが基準になる。
-例では `src/output/` のCSVを指す。絶対パスも使える。対応表を移す場合は相対パスも確認する。
+パス数は整数、それ以外は引用符で囲んだ文字列にする。例の計測CSVは、実際に計測・保存したファイルに置き換える。
+相対パスは実行したフォルダではなく、スクリプトのある `src/` が基準になる。例では `src/output/` のCSVを指す。絶対パスも使える。
 測定CSVは新方式の1計測1行を使い、基準区間長・倍率・評価間隔・平滑化幅を全件で揃える。
-条件が異なるCSVや旧方式のCSVは混ぜない。
+条件が異なるCSVや旧方式のCSVは混ぜない。条件を変えて作図する場合は、入力一覧と出力先を変えて別に実行する。
+実データのファイルや参照先を公開しないよう、スクリプトをcommitする前に `MEASUREMENTS` を公開用の例へ戻す。
 
 | 出力名 | 内容 | 単位 |
 | --- | --- | --- |
@@ -194,7 +196,7 @@ run01,4,a,output/run01_pass04_a.csv
 色・軸範囲・文字サイズ・図の大きさ・DPIはスクリプト冒頭の設定値で調整できる。
 例えば `EXCESS_Y_LIMITS = (0, 5)` で超過率図の縦軸を0～5%に固定する。自動設定は `None` とする。
 実験回別に図を作る場合は軸範囲を揃え、範囲外の測定点を見落とさないようにする。
-詳しい入力条件は [srcの使い方](src/README.md#対応表から3種類のグラフを一括作成する) を参照する。
+詳しい入力条件は [srcの使い方](src/README.md#スクリプト内の設定から3種類のグラフを一括作成する) を参照する。
 
 ### Excelに残す原票
 

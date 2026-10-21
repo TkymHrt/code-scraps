@@ -1,7 +1,5 @@
-"""対応表から計測CSVを読み、パス別の超過率・初回差・DR−OP差を保存する。"""
+"""冒頭に指定した計測CSVから、超過率・初回差・DR−OP差を保存する。"""
 
-import argparse
-import csv
 import math
 from pathlib import Path
 
@@ -10,6 +8,15 @@ from matplotlib.figure import Figure
 
 from utils.file_io import check_output_path
 from utils.measurement_csv import read_lengths
+from workflow_settings import BASE_DIRECTORY, OUTPUT_DIRECTORY
+
+# 実験回、パス番号、区間ID、計測CSV。相対パスはこのスクリプトのフォルダが基準。
+MEASUREMENTS = [
+    ("run01", 0, "a", "output/run01_pass00_a.csv"),
+    ("run01", 2, "a", "output/run01_pass02_a.csv"),
+    ("run01", 4, "a", "output/run01_pass04_a.csv"),
+]
+GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"
 
 # 比較する図で共通に使う見た目。Noneの軸範囲は自動で決まる。
 FIGURE_SIZE = (10, 6)
@@ -27,82 +34,55 @@ CHANGE_Y_LIMITS = None
 DIFFERENCE_Y_LIMITS = None
 
 
-def read_pass_measurements(path: Path) -> list[dict]:
-    path = path.resolve()
-    required = ("experiment_id", "pass_number", "section_id", "measurement_csv")
+def read_pass_measurements(measurements: list[tuple[str, int, str, str]]) -> list[dict]:
     records = {}
     used_paths = set()
     reference_measurement = None
-    try:
-        with path.open(encoding="utf-8-sig", newline="") as source:
-            reader = csv.DictReader(source)
-            if not set(required).issubset(reader.fieldnames or []):
+    for experiment_id, pass_number, section_id, csv_name in measurements:
+        experiment_id = experiment_id.strip()
+        section_id = section_id.strip()
+        if not experiment_id or not section_id or not csv_name.strip():
+            raise ValueError("実験回・区間ID・計測CSVを空欄にしないでください")
+        if type(pass_number) is not int or pass_number < 0 or pass_number % 2 != 0:
+            raise ValueError("パス番号は0以上の偶数整数にしてください")
+        key = (experiment_id, section_id, pass_number)
+        if key in records:
+            raise ValueError(f"同じ実験回・区間ID・パス番号が重複しています: {key}")
+        measurement_path = (BASE_DIRECTORY / csv_name.strip()).resolve()
+        if measurement_path in used_paths:
+            raise ValueError(
+                f"同じ計測CSVを重複して指定しないでください: {measurement_path.name}"
+            )
+        measurement = read_lengths(measurement_path)
+        if "left_excess_percent" not in measurement:
+            raise ValueError(
+                f"長手軸と平滑化を使った新形式の計測CSVを指定してください: {measurement_path.name}"
+            )
+        if reference_measurement is None:
+            reference_measurement = measurement
+        for column in (
+            "interval_length_mm",
+            "mm_per_px",
+            "evaluation_interval_mm",
+            "smoothing_width_mm",
+        ):
+            if not math.isclose(
+                measurement[column],
+                reference_measurement[column],
+                rel_tol=1e-8,
+                abs_tol=1e-8,
+            ):
                 raise ValueError(
-                    "対応表には experiment_id, pass_number, section_id, measurement_csv が必要です"
+                    f"計測条件が一致しません: {column}: {measurement_path.name}"
                 )
-            for line_number, saved in enumerate(reader, start=2):
-                for column in required:
-                    value = saved[column]
-                    if value is None or not value.strip():
-                        raise ValueError(
-                            f"対応表{line_number}行目の空欄を確認してください: {column}"
-                        )
-                experiment_id = saved["experiment_id"].strip()
-                section_id = saved["section_id"].strip()
-                try:
-                    pass_number = int(saved["pass_number"].strip())
-                except ValueError as error:
-                    raise ValueError(
-                        f"対応表{line_number}行目のパス番号は0以上の偶数整数にしてください"
-                    ) from error
-                if pass_number < 0 or pass_number % 2 != 0:
-                    raise ValueError(
-                        f"対応表{line_number}行目のパス番号は0以上の偶数整数にしてください"
-                    )
-                key = (experiment_id, section_id, pass_number)
-                if key in records:
-                    raise ValueError(
-                        f"同じ実験回・区間ID・パス番号が重複しています: {key}"
-                    )
-                measurement_path = (
-                    path.parent / saved["measurement_csv"].strip()
-                ).resolve()
-                if measurement_path in used_paths:
-                    raise ValueError(
-                        f"同じ計測CSVを重複して指定しないでください: {measurement_path.name}"
-                    )
-                measurement = read_lengths(measurement_path)
-                if "left_excess_percent" not in measurement:
-                    raise ValueError(
-                        f"長手軸と平滑化を使った新形式の計測CSVを指定してください: {measurement_path.name}"
-                    )
-                if reference_measurement is None:
-                    reference_measurement = measurement
-                for column in (
-                    "interval_length_mm",
-                    "mm_per_px",
-                    "evaluation_interval_mm",
-                    "smoothing_width_mm",
-                ):
-                    if not math.isclose(
-                        measurement[column],
-                        reference_measurement[column],
-                        rel_tol=1e-8,
-                        abs_tol=1e-8,
-                    ):
-                        raise ValueError(
-                            f"計測条件が一致しません: {column}: {measurement_path.name}"
-                        )
-                measurement["experiment_id"] = experiment_id
-                measurement["section_id"] = section_id
-                measurement["pass_number"] = pass_number
-                measurement["measurement_csv"] = str(measurement_path)
-                records[key] = measurement
-                used_paths.add(measurement_path)
-    except (OSError, UnicodeError, csv.Error) as error:
-        raise ValueError(f"対応表を読み込めません: {path}") from error
+        measurement["experiment_id"] = experiment_id
+        measurement["section_id"] = section_id
+        measurement["pass_number"] = pass_number
+        measurement["measurement_csv"] = str(measurement_path)
+        records[key] = measurement
+        used_paths.add(measurement_path)
     if not records:
-        raise ValueError("対応表へ計測CSVを1件以上指定してください")
+        raise ValueError("MEASUREMENTSへ計測CSVを1件以上指定してください")
     rows = []
     # 実験回・区間ID・パス番号の順に揃える。欠測の行は作らない。
     for key in sorted(records):
@@ -212,8 +192,8 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
     return figures
 
 
-def write_graphs(directory: Path, rows: list[dict], input_path: Path) -> list[Path]:
-    inputs = [input_path]
+def write_graphs(directory: Path, rows: list[dict]) -> list[Path]:
+    inputs = [Path(__file__)]
     for row in rows:
         inputs.append(Path(row["measurement_csv"]))
         inputs.append(Path(row["image_path"]))
@@ -228,17 +208,11 @@ def write_graphs(directory: Path, rows: list[dict], input_path: Path) -> list[Pa
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mapping", type=Path, help="実験回・パス番号・計測CSVの対応表")
-    parser.add_argument(
-        "--out", type=Path, required=True, help="3枚のPNGの保存先フォルダ"
-    )
-    arguments = parser.parse_args()
     try:
-        rows = read_pass_measurements(arguments.mapping)
-        paths = write_graphs(arguments.out, rows, arguments.mapping)
+        rows = read_pass_measurements(MEASUREMENTS)
+        paths = write_graphs(GRAPH_DIRECTORY, rows)
     except (ValueError, OSError) as error:
-        parser.exit(1, f"作図できません: {error}\n")
+        raise SystemExit(f"作図できません: {error}") from error
     for path in paths:
         print(f"保存: {path}")
 

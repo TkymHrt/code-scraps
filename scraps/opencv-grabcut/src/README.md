@@ -19,8 +19,7 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 | `02_measure_edge_lengths_gui.py` | 多角形の指定、GrabCut、長手軸の推定、側辺長・超過率の計算、CSV・確認PNGの保存 |
 | `03_compare_edge_lengths_gui.py` | CSVの追加・削除、表とグラフを更新する局所比較GUI |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 厚さからの累積圧下率の計算、厚さ入力付きの比較GUI |
-| `04_plot_pass_metrics.py` | 対応表から計測CSVを読み、パス数に対する超過率・初回からの変化・DRとOPの差を3枚のPNGへ保存 |
-| `pass_measurements_template.csv` | 実験回・パス数・区間IDと計測CSVを対応付ける表のひな形 |
+| `04_plot_pass_metrics.py` | 冒頭に指定した計測CSVを読み、パス数に対する超過率・初回からの変化・DRとOPの差を3枚のPNGへ保存 |
 | `video_frame_gui.py` | 動画を再生し、選んだ瞬間のフレームを元解像度のPNGで保存するGUI |
 | `measure_point_distance_gui.py` | 補正画像上の2点をクリックし、直線距離をmmで確認する補助GUI |
 | `workflow_settings.py` | 全工程の入出力先、板のマス数・寸法、`MM_PER_PX`、補正の出力範囲 `RECTIFY_ROI` |
@@ -188,40 +187,36 @@ CSVの列名は既存の `left_*`（DR）・`right_*`（OP）を使い、過去�
 旧方式の数値には斜め姿勢と画素の階段形状の影響が含まれるため、新方式と混ぜて比較しません。
 この改修では比較GUIに超過率グラフは追加していません。
 
-### 対応表から3種類のグラフを一括作成する
+### スクリプト内の設定から3種類のグラフを一括作成する
 
-`04_plot_pass_metrics.py` は、対応表に指定した計測CSVを直接読み、3種類のPNGを保存するCLIです。
-数値を転記する必要はありません。既存の比較GUIとは別に使い、追加の依存関係はありません。
+`04_plot_pass_metrics.py` は、冒頭の `MEASUREMENTS` に指定した計測CSVを直接読み、3種類のPNGを保存します。
+別の対応表CSVや測定値の転記は不要です。既存の比較GUIとは別に使い、追加の依存関係はありません。
 
-`opencv-grabcut` フォルダから、次の3段階で使います。
+`opencv-grabcut` フォルダから、次の2段階で使います。
 
-1. ひな形をコピーする。
-
-   ```powershell
-   Copy-Item src/pass_measurements_template.csv src/pass_measurements.csv
-   ```
-
-2. コピーした対応表を編集し、実際の実験回・パス数・区間ID・計測CSVのパスへ置き換える。
+1. `src/04_plot_pass_metrics.py` 冒頭の `MEASUREMENTS` と出力先 `GRAPH_DIRECTORY` を編集する。
+   1行を「実験回、パス数、区間ID、計測CSVのパス」の順に書く。パス数は整数、それ以外は引用符で囲んだ文字列にする。
    各CSVは `02` の「CSV・画像2枚を保存」で保存した新方式の計測CSVを使う。
 
-   ```csv
-   experiment_id,pass_number,section_id,measurement_csv
-   run01,0,a,output/run01_pass00_a.csv
-   run01,2,a,output/run01_pass02_a.csv
-   run01,4,a,output/run01_pass04_a.csv
+   ```python
+   MEASUREMENTS = [
+       ("run01", 0, "a", "output/run01_pass00_a.csv"),
+       ("run01", 2, "a", "output/run01_pass02_a.csv"),
+       ("run01", 4, "a", "output/run01_pass04_a.csv"),
+   ]
+   GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"
    ```
 
-3. 作図する。
+2. 作図する。コマンドの引数は不要。
 
    ```powershell
-   uv run src/04_plot_pass_metrics.py src/pass_measurements.csv --out src/output/pass_graphs
+   uv run src/04_plot_pass_metrics.py
    ```
 
-ひな形のパスは例です。対応する計測CSVを用意してから実行します。
-コピー先の `src/pass_measurements.csv` は実験記録として手元に保管し、Git管理から除外しています。
-`measurement_csv` は絶対パス、または**対応表があるフォルダを基準とする相対パス**です。
-上の例では対応表が `src/` にあるため、`output/run01_pass00_a.csv` は `src/output/run01_pass00_a.csv` を指します。
-対応表を別フォルダへ移した場合は、相対パスも変更してください。
+コード内のパスは例です。対応する計測CSVを用意してから実行します。
+計測CSVのパスは絶対パス、または**スクリプトがある `src/` を基準とする相対パス**です。
+上の例の `output/run01_pass00_a.csv` は `src/output/run01_pass00_a.csv` を指します。実行したフォルダには依存しません。
+実データのファイルや参照先を公開しないよう、スクリプトをcommitする前に `MEASUREMENTS` を公開用の例へ戻します。
 
 | 出力名 | 縦軸 | 系列 |
 | --- | --- | --- |
@@ -229,23 +224,25 @@ CSVの列名は既存の `left_*`（DR）・`right_*`（OP）を使い、過去�
 | `change_from_initial.png` | 同じ実験回・区間ID・側のパス0からの変化（パーセントポイント） | 実験回・区間ID・側ごと |
 | `dr_op_difference.png` | DR超過率 − OP超過率（パーセントポイント） | 実験回・区間IDごと |
 
-横軸には対応表の実際のパス数を使い、昇順に並べます。行の順序は問いません。
+横軸には `MEASUREMENTS` の実際のパス数を使い、昇順に並べます。行の順序は問いません。
 欠測を0で埋めず、線は観測した点を結ぶ補助として使います。未観測パスの値を推定する線ではありません。
 複数の区間IDはそれぞれ別系列になり、平均・SDは計算しません。
 同じ区間IDは比較用の識別子であり、圧延後も同じ材料部分を追跡できていることは保証しません。
 
 入力時に次を確認し、不一致・不正があれば保存前に停止します。
 
-- `experiment_id` と `section_id` は空欄にしない。`pass_number` は0以上の偶数にする。
+- 実験回と区間IDは空の文字列にしない。パス数は0以上の偶数の整数にする。
 - 各実験回・区間IDの組にパス0を含め、同じ組の同一パスを重複させない。
 - 同じ計測CSVを複数行で使い回さない。計測CSVは新方式の1計測1行を使い、旧方式のCSVを混ぜない。
-- 全計測の基準区間長・倍率・評価間隔・平滑化幅を揃える。条件を変えたデータは対応表を分ける。
+- 全計測の基準区間長・倍率・評価間隔・平滑化幅を揃える。条件を変えたデータは別の実行に分け、出力先も変える。
 
 出力フォルダは自動作成し、同名の3枚は確認なしで上書きします。入力ファイルへの上書きは拒否します。
 再測定後は同じコマンドで作り直せます。色・軸範囲・文字サイズ・図の大きさ・DPIは、スクリプト冒頭の設定値で調整します。
 
 | 設定変数 | 変更するもの |
 | --- | --- |
+| `MEASUREMENTS` | 実験回・パス数・区間IDと、読む計測CSVの組合せ |
+| `GRAPH_DIRECTORY` | 3枚のPNGの出力先。既定は `src/output/pass_graphs/` |
 | `FIGURE_SIZE`、`SAVE_DPI` | 図の横・縦の大きさ（インチ）と保存解像度 |
 | `FONT_FAMILY`、`FONT_SIZE` | フォント名と文字サイズ。既定はWindowsの `Meiryo` |
 | `DR_COLOR`、`OP_COLOR`、`DIFFERENCE_COLOR` | DR・OP・左右差の色 |
@@ -649,4 +646,9 @@ Ruff・format・tyも通りました。今回の追加機能の実動画での�
 合成した2実験回の対応表で3枚を保存し、日本語・軸・凡例・負の差分・欠測を含むグラフを目視確認しました。
 この確認用のCSV・対応表・PNGは `tests/results/pass_metrics_20261022/` にあります（Git管理対象外、数値は実験結果ではありません）。
 今回の2本のPythonのRuff・format・tyも通りました。実際の圧延記録を使った運用、区間間の平均・SDの集計は今回確認していません。
+
+同日、作図入力をスクリプト冒頭の `MEASUREMENTS`、保存先を `GRAPH_DIRECTORY` にまとめ、別の対応表CSV・ひな形・CLI引数を廃止しました。
+相対CSVパスは `src/` が基準です。上記16件を再実行し、直書き設定・厳密な整数パス・引数なし実行と従来の計算・入力保護を確認しました。
+変更した2本のPythonのRuff・format・tyも通りました。3図を作る関数は変更前後で構文木が一致し、同じ合成入力から保存した3枚のPNGも画素単位で一致しました。
+比較用PNGと結果は `tests/results/pass_metrics_inline_20261022/` にあります（Git管理対象外）。実圧延データの検証は今回追加していません。
 上記の数値検証は各改修時点の記録です。実際の圧延画像での精度と再現性は未検証です。
