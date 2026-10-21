@@ -6,7 +6,8 @@ from tkinter import filedialog, ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from measurement_csv import read_lengths
+
+from utils.measurement_csv import read_lengths
 
 
 def create_layout(root: tk.Tk) -> tuple[ttk.Frame, ttk.Frame, ttk.Frame]:

@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-from file_io import check_output_path
 from matplotlib import rcParams
 from matplotlib.figure import Figure
-from measurement_csv import read_lengths
+
+from utils.file_io import check_output_path
+from utils.measurement_csv import read_lengths
 
 
 def read_measurements(csv_paths: list[Path]) -> list[dict]:

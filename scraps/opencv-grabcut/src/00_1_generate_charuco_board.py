@@ -1,7 +1,8 @@
 """カメラ校正・画像換算に使うChArUco板だけをPNGに保存する."""
 
 import cv2 as cv
-from file_io import write_png
+
+from utils.file_io import write_png
 from workflow_settings import BOARD_SQUARES, MARKER_MM, OUTPUT_DIRECTORY, SQUARE_MM
 
 PIXELS_PER_MM = 10

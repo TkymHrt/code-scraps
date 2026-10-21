@@ -7,9 +7,10 @@ from tkinter import filedialog, ttk
 
 import cv2 as cv
 import numpy as np
-from file_io import check_output_path, encode_png, read_image
-from gui_parts import create_layout
-from measurement_csv import write_csv
+
+from utils.file_io import check_output_path, encode_png, read_image
+from utils.gui_parts import create_layout
+from utils.measurement_csv import write_csv
 from workflow_settings import MM_PER_PX, OUTPUT_DIRECTORY, RECTIFIED_DIRECTORY
 
 ITERATIONS = 5

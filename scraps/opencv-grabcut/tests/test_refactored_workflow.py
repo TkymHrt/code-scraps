@@ -21,20 +21,23 @@ from test_current_workflow import copy_current
 from test_length_comparison_local_gui import sample_csv
 
 PROJECT = Path(__file__).resolve().parents[1]
-REFACTORED = PROJECT / "sandbox/refactored"
+REFACTORED = PROJECT / "src"
 COMMON_MODULES = (
     "workflow_settings",
-    "file_io",
-    "measurement_csv",
-    "length_comparison",
-    "gui_parts",
+    "utils",
+    "utils.file_io",
+    "utils.measurement_csv",
+    "utils.length_comparison",
+    "utils.gui_parts",
 )
 ORIGINAL_RUN_PATH = runpy.run_path
 
 
 def copy_refactored(filename, directory, **settings):
-    for name in COMMON_MODULES:
-        shutil.copyfile(REFACTORED / f"{name}.py", directory / f"{name}.py")
+    shutil.copyfile(
+        REFACTORED / "workflow_settings.py", directory / "workflow_settings.py"
+    )
+    shutil.copytree(REFACTORED / "utils", directory / "utils", dirs_exist_ok=True)
     path_names = {
         "00_2_calibrate_camera.py": {
             "INPUT_DIRECTORY": "CALIBRATION_DIRECTORY",
@@ -56,9 +59,7 @@ def copy_refactored(filename, directory, **settings):
             overrides.append(f"RECTIFY_ROI = {value!r}\n")
         else:
             values[name] = value
-    script = copy_current(
-        filename, directory, source_directory="sandbox/refactored", **values
-    )
+    script = copy_current(filename, directory, source_directory="src", **values)
     if overrides:
         source = script.read_text(encoding="utf-8")
         marker = 'if __name__ == "__main__":'
@@ -74,7 +75,10 @@ def run_refactored(path, **options):
         if name in sys.modules:
             cached[name] = sys.modules.pop(name)
     try:
-        with patch.object(sys, "path", [str(Path(path).parent), *sys.path]):
+        folder = Path(path).parent
+        if folder.name == "utils":
+            folder = folder.parent
+        with patch.object(sys, "path", [str(folder), *sys.path]):
             return ORIGINAL_RUN_PATH(str(path), **options)
     finally:
         for name in COMMON_MODULES:
@@ -83,7 +87,10 @@ def run_refactored(path, **options):
 
 
 def load_refactored(filename):
-    return run_refactored(REFACTORED / filename)
+    path = REFACTORED / filename
+    if not path.is_file():
+        path = REFACTORED / "utils" / filename
+    return run_refactored(path)
 
 
 class RefactoredWorkflowTests(unittest.TestCase):
@@ -189,7 +196,7 @@ for name in ('03_compare_edge_lengths_gui.py', '03_compare_edge_lengths_with_thi
         copy_current(
             "workflow_settings.py",
             folder,
-            source_directory="sandbox/refactored",
+            source_directory="src",
             BOARD_SQUARES=(5, 4),
             MM_PER_PX=0.5,
         )

@@ -5,7 +5,8 @@ from pathlib import Path
 
 import cv2 as cv
 import numpy as np
-from file_io import check_output_path, find_images, read_image, write_png
+
+from utils.file_io import check_output_path, find_images, read_image, write_png
 from workflow_settings import (
     BOARD_SQUARES,
     INPUT_DIRECTORY,

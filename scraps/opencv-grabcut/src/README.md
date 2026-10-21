@@ -3,7 +3,7 @@
 `submissions/` の6本を元に、複数のスクリプトで使う処理と設定だけを共通化しました。
 1目的1スクリプトと実行順、入力・計算・保存の機能を維持しています。
 GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画像・表・グラフ」へ揃えました。
-提出版と独立して比較できるように、`sandbox/` に置いています。
+実行スクリプトと共通設定は `src/` 直下、補助モジュールは `src/utils/` に置いています。
 
 ## ファイルの役割
 
@@ -19,21 +19,21 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 | `video_frame_gui.py` | 動画を再生し、選んだ瞬間のフレームを元解像度のPNGで保存するGUI |
 | `measure_point_distance_gui.py` | 補正画像上の2点をクリックし、直線距離をmmで確認する補助GUI |
 | `workflow_settings.py` | 全工程の入出力先、板のマス数・寸法、`MM_PER_PX`、補正の出力範囲 `RECTIFY_ROI` |
-| `file_io.py` | 画像一覧、画像読込、PNGへの変換・保存、入力の上書き防止 |
-| `measurement_csv.py` | 計測CSVの書込・読込・検証、区間長と100mm換算 |
-| `length_comparison.py` | CSV追加順での比較、グラフの作成・保存 |
-| `gui_parts.py` | GUIの3領域、CSV・PNGのファイル選択、グラフの差し替え |
+| `utils/file_io.py` | 画像一覧、画像読込、PNGへの変換・保存、入力の上書き防止 |
+| `utils/measurement_csv.py` | 計測CSVの書込・読込・検証、区間長と100mm換算 |
+| `utils/length_comparison.py` | CSV追加順での比較、グラフの作成・保存 |
+| `utils/gui_parts.py` | GUIの3領域、CSV・PNGのファイル選択、グラフの差し替え |
 
-共通ファイルは上の5本です。追加のライブラリやインストール作業はありません。
-このフォルダを別の場所へ持ち出すときは、実行するスクリプトと共通ファイルを一緒にコピーします。
+共通設定は `workflow_settings.py`、補助モジュールは `utils/` 内の4本です。追加のライブラリやインストール作業はありません。
+このフォルダを別の場所へ持ち出すときは、実行するスクリプトと `workflow_settings.py`、`utils/` フォルダ全体を一緒にコピーします。
 単独ファイルで持ち出せる提出版との違いです。
 
 ## 共通化の判断
 
 - **入出力先**：`workflow_settings.py` を変更すると全工程が同じ基準に従います。`01` の補正画像の出力先と、`02` の読込開始先は同じ `RECTIFIED_DIRECTORY` です。
-- **画像の読込・保存**：日本語パスへの対応、PNG変換の成否確認、保存フォルダの作成を `file_io.py` にまとめました。画像・CSV・グラフの保存先の拡張子と入力保護にも、同じ確認処理を使います。
-- **CSVとグラフ**：CSVの書込と読込を `measurement_csv.py` へ集め、列名・文字コード・数値の扱いを同じ場所で読めるようにしました。比較順とグラフは `length_comparison.py` にあります。
-- **GUIの枠とファイル操作**：画面の3領域、CSV選択・重複除外・事前検証、PNG保存先の選択、グラフの破棄・再配置を `gui_parts.py` にまとめました。
+- **画像の読込・保存**：日本語パスへの対応、PNG変換の成否確認、保存フォルダの作成を `utils/file_io.py` にまとめました。画像・CSV・グラフの保存先の拡張子と入力保護にも、同じ確認処理を使います。
+- **CSVとグラフ**：CSVの書込と読込を `utils/measurement_csv.py` へ集め、列名・文字コード・数値の扱いを同じ場所で読めるようにしました。比較順とグラフは `utils/length_comparison.py` にあります。
+- **GUIの枠とファイル操作**：画面の3領域、CSV選択・重複除外・事前検証、PNG保存先の選択、グラフの破棄・再配置を `utils/gui_parts.py` にまとめました。
 - **個別の計算とGUI操作**：補正、GrabCut、側辺長、累積圧下率の計算は担当するスクリプトに残しました。ボタンと計算のつながりや、GUIごとの状態は同じファイルで追えます。
 
 共通化は現在の重複を減らせる箇所に限りました。
@@ -45,7 +45,7 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 
 1. 使う実行スクリプトの先頭で、入力・出力・importしている共通処理を確認する。
 2. CLIは `main()`、GUIは `main()` 内のボタンの処理から、入力→計算→保存を追う。板生成も `main()` に揃え、読込時にはファイルを保存しない。
-3. ファイル選択や画面構成は `gui_parts.py`、画像操作は `file_io.py`、CSVの受渡しは `measurement_csv.py`、グラフは `length_comparison.py` を読む。
+3. ファイル選択や画面構成は `utils/gui_parts.py`、画像操作は `utils/file_io.py`、CSVの受渡しは `utils/measurement_csv.py`、グラフは `utils/length_comparison.py` を読む。
 
 例えば局所比較GUIでは、「CSVを追加」→ `choose_csv_paths()` で選択・事前確認 → `read_measurements()` で読込・換算 → `create_graph()` と `replace_graph()` で描画、という流れです。
 厚さ版は `compare_lengths_with_thickness()` が同じ `read_measurements()` を使い、その結果へ厚さと累積圧下率を加えます。
@@ -124,23 +124,23 @@ CSVの列名は既存の `left_*`（DR）・`right_*`（OP）を使い、過去�
 
 ```powershell
 uv sync
-uv run sandbox/refactored/00_1_generate_charuco_board.py
-uv run sandbox/refactored/00_2_calibrate_camera.py
-uv run sandbox/refactored/01_rectify_images.py
-uv run sandbox/refactored/02_measure_edge_lengths_gui.py
-uv run sandbox/refactored/03_compare_edge_lengths_gui.py
+uv run src/00_1_generate_charuco_board.py
+uv run src/00_2_calibrate_camera.py
+uv run src/01_rectify_images.py
+uv run src/02_measure_edge_lengths_gui.py
+uv run src/03_compare_edge_lengths_gui.py
 # 厚さとの関係も見る場合はこちらを選ぶ
-uv run sandbox/refactored/03_compare_edge_lengths_with_thickness_gui.py
+uv run src/03_compare_edge_lengths_with_thickness_gui.py
 ```
 
 初期準備は次の順序です。
 
 1. `workflow_settings.py` の板の寸法を確認して印刷し、実寸を測る。
-2. 校正写真を `sandbox/refactored/input/camera_calibration/` に置く。
+2. 校正写真を `src/input/camera_calibration/` に置く。
 3. `00_2` を実行し、表示された `CALIBRATION_SIZE`・`CAMERA_MATRIX`・`DIST_COEFFS` を、この版の `01` の冒頭に貼る。現在は未設定なので、校正するまで補正は実行できない。
 4. `workflow_settings.py` の `MM_PER_PX` を確認し、写真を補正してから計測する。既定値は `0.25`。
 
-写真の枚数と撮り方は [撮影手順](../../CAPTURE.md) で管理し、この版では枚数の下限による停止や枚数不足の案内を行いません。
+写真の枚数と撮り方は [撮影手順](../CAPTURE.md) で管理し、この版では枚数の下限による停止や枚数不足の案内を行いません。
 校正・補正とも `find_images()` で入力フォルダ直下の画像を取得し、フォルダがない場合や画像がない場合は同じ処理で停止します。
 `00_2` は、次の写真を理由・ファイル名とともに表示してスキップし、残りで係数を求めます。
 
@@ -162,24 +162,24 @@ uv run sandbox/refactored/03_compare_edge_lengths_with_thickness_gui.py
 設定は起動時に読み込むため、変更後は実行中のスクリプト・GUIを起動し直してください。
 この設定は元の `submissions/` には反映されません。
 
-入出力先は `workflow_settings.py` の冒頭で変更します。既定では、この `refactored/` フォルダを基準にしています。
+入出力先は `workflow_settings.py` の冒頭で変更します。既定では、この `src/` フォルダを基準にしています。
 `OUTPUT_DIRECTORY` を変更すると、補正画像・校正の確認画像の保存先、計測・比較GUIの保存開始先も追従します。
 `RECTIFIED_DIRECTORY` を個別に変更した場合も、補正の出力先と計測の読込開始先は揃います。
 既定の場所は次のとおりです。元の提出版の入出力とは分かれています。
 
 | 用途 | 題材フォルダからのパス |
 | --- | --- |
-| 校正写真 | `sandbox/refactored/input/camera_calibration/` |
-| 補正する写真 | `sandbox/refactored/input/` 直下 |
-| 板・読取確認画像・計測・比較結果 | `sandbox/refactored/output/` |
-| 補正画像 | `sandbox/refactored/output/rectified/` |
+| 校正写真 | `src/input/camera_calibration/` |
+| 補正する写真 | `src/input/` 直下 |
+| 板・読取確認画像・計測・比較結果 | `src/output/` |
+| 補正画像 | `src/output/rectified/` |
 
 既存の写真を使う場合は、`workflow_settings.py` の `INPUT_DIRECTORY`・`CALIBRATION_DIRECTORY` を変更するか、写真をコピーします。
 既存の補正PNGや長さCSVは、各GUIのファイル選択から直接読み込めます。
 CSVの列、数値の丸め方、UTF-8 BOMは提出版と同じです。
 確認PNG・比較PNGの表示名はDR・OPで、補正PNGの出力範囲は上記の共通設定に従います。
 各GUIで任意の保存先を選ぶ場合は、元の出力を残せる名前を指定してください。
-撮影条件・板と試料の高さ・GUI操作・エラー時の扱いは [提出版の手順](../../submissions/README.md) と [撮影手順](../../CAPTURE.md) を参照してください。
+撮影条件・板と試料の高さ・GUI操作・エラー時の扱いは [提出版の手順](../submissions/README.md) と [撮影手順](../CAPTURE.md) を参照してください。
 提出版の手順にある入出力先・板・倍率の設定先は、この版では `workflow_settings.py` に読み替えます。
 
 ## 動画からフレームを保存する
@@ -187,7 +187,7 @@ CSVの列、数値の丸め方、UTF-8 BOMは提出版と同じです。
 `opencv-grabcut` フォルダから実行します。追加の依存関係はありません。
 
 ```powershell
-uv run sandbox/refactored/video_frame_gui.py
+uv run src/video_frame_gui.py
 ```
 
 1. 「動画を開く」で動画を選ぶ。先頭フレームを表示する。
@@ -221,7 +221,7 @@ uv run sandbox/refactored/video_frame_gui.py
 3. 同じ冒頭の `REFERENCE_IMAGE_PATH`・`FRAMES_DIRECTORY`・`RECTIFIED_FRAMES_DIRECTORY` を確認する。
    既定値は次のとおり。板の仕様と `MM_PER_PX` は既存GUIと同じ `workflow_settings.py` を使う。
 
-| 用途 | `refactored/` を基準にした既定の場所 |
+| 用途 | `src/` を基準にした既定の場所 |
 | --- | --- |
 | ボード付き基準画像 | `input/video_reference/reference.png` |
 | 補正するフレーム | `input/video_frames/` 直下 |
@@ -236,10 +236,10 @@ uv run sandbox/refactored/video_frame_gui.py
 `opencv-grabcut` フォルダから実行します。
 
 ```powershell
-uv run sandbox/refactored/01_rectify_frames_from_reference.py
-uv run sandbox/refactored/measure_point_distance_gui.py
-uv run sandbox/refactored/02_measure_edge_lengths_gui.py
-uv run sandbox/refactored/03_compare_edge_lengths_gui.py
+uv run src/01_rectify_frames_from_reference.py
+uv run src/measure_point_distance_gui.py
+uv run src/02_measure_edge_lengths_gui.py
+uv run src/03_compare_edge_lengths_gui.py
 ```
 
 まず基準画像の補正結果で既知寸法を照合し、次に補正フレームで側辺を測ります。
@@ -273,7 +273,7 @@ GUIの画像選択で `output/rectified_frames/` を開いてください。GUI�
 `opencv-grabcut` フォルダから実行します。
 
 ```powershell
-uv run sandbox/refactored/measure_point_distance_gui.py
+uv run src/measure_point_distance_gui.py
 ```
 
 1. 「補正画像を読み込む」で、`01` が保存した補正PNGを選ぶ。
@@ -390,3 +390,10 @@ Ruff・format・tyも通りました。今回の追加機能の実動画での�
 既存の操作検証は画像端の板を再検出するため全体出力で実行し、中央出力の寸法・画素数は自動試験で別に確認しています。
 画面画像・実行コードのコピー・全試験のログは `tests/results/refactored_roi_20261021_3/` にあります。
 実画像での抽出精度と処理時間は未確認です。
+
+2026-10-21に `sandbox/refactored/` から題材直下の `src/` へ移動し、補助モジュール4本を `src/utils/` にまとめました。
+共通設定は `src/workflow_settings.py` に残し、既定の入出力先は `src/input/`・`src/output/` です。
+全156件の自動試験、校正から計測・両比較GUIまでの実Tk操作検証、Ruff・format・tyが通りました。
+移動した14本はimport以外の処理が元のコードと一致し、READMEのローカルリンクも確認しました。
+操作検証の結果は `tests/results/src_layout_20261021/` に保存しています。今回は画面画像を保存していません。
+実カメラの入力による精度の確認は、この配置変更では行っていません。

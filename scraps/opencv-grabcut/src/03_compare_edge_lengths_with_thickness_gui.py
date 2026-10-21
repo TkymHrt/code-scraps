@@ -5,10 +5,16 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-from gui_parts import choose_csv_paths, choose_png_path, create_layout, replace_graph
-from length_comparison import create_graph, read_measurements, write_graph
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from measurement_csv import positive_value
+
+from utils.gui_parts import (
+    choose_csv_paths,
+    choose_png_path,
+    create_layout,
+    replace_graph,
+)
+from utils.length_comparison import create_graph, read_measurements, write_graph
+from utils.measurement_csv import positive_value
 from workflow_settings import OUTPUT_DIRECTORY
 
 

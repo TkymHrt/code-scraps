@@ -8,7 +8,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import cv2 as cv
 import numpy as np
-from file_io import check_output_path, write_png
+
+from utils.file_io import check_output_path, write_png
 from workflow_settings import INPUT_DIRECTORY
 
 FRAMES_DIRECTORY = INPUT_DIRECTORY / "video_frames"

@@ -7,7 +7,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import cv2 as cv
 import numpy as np
-from file_io import encode_png, read_image
+
+from utils.file_io import encode_png, read_image
 from workflow_settings import MM_PER_PX, RECTIFIED_DIRECTORY
 
 
