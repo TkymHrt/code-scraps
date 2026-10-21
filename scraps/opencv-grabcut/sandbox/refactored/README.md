@@ -16,6 +16,7 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 | `02_measure_edge_lengths_gui.py` | 矩形の指定、GrabCut、側辺長の計算、CSV・確認PNGの保存、計測GUI |
 | `03_compare_edge_lengths_gui.py` | CSVの追加・削除、表とグラフを更新する局所比較GUI |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 厚さからの累積圧下率の計算、厚さ入力付きの比較GUI |
+| `video_frame_gui.py` | 動画を再生し、選んだ瞬間のフレームを元解像度のPNGで保存するGUI |
 | `measure_point_distance_gui.py` | 補正画像上の2点をクリックし、直線距離をmmで確認する補助GUI |
 | `workflow_settings.py` | 全工程の入出力先、板のマス数・寸法、補正と計測で揃える `MM_PER_PX` |
 | `file_io.py` | 画像一覧、画像読込、PNGへの変換・保存、入力の上書き防止 |
@@ -148,12 +149,36 @@ CSVの列、数値の丸め方、UTF-8 BOM、確認PNG、比較PNGの仕様は�
 撮影条件・板と試料の高さ・GUI操作・エラー時の扱いは [提出版の手順](../../submissions/README.md) と [撮影手順](../../CAPTURE.md) を参照してください。
 提出版の手順にある入出力先・板・倍率の設定先は、この版では `workflow_settings.py` に読み替えます。
 
+## 動画からフレームを保存する
+
+`opencv-grabcut` フォルダから実行します。追加の依存関係はありません。
+
+```powershell
+uv run sandbox/refactored/video_frame_gui.py
+```
+
+1. 「動画を開く」で動画を選ぶ。先頭フレームを表示する。
+2. 「再生／一時停止」で再生を切り替える。スライダーで位置を移動すると一時停止する。
+   「1コマ戻る」「1コマ進む」で保存する瞬間を選ぶ。
+3. 「フレームを保存」で一時停止し、PNGの保存先を選ぶ。
+
+画面に合わせて縮小表示しますが、保存するPNGは元解像度・元の画素です。
+回転メタデータによる自動回転は無効にし、補正前の切り抜き・寸法変更も行いません。
+音声は再生せず、動画のFPSに合わせて順に表示します。処理が追い付かない場合は再生が遅くなります。
+フレーム番号は0から数え、時刻は `フレーム番号 / FPS` の目安です。
+末尾で自動停止し、もう一度「再生」を押すと先頭から再生します。
+
+保存開始先は `input/video_frames/`、ファイル名の初期値は `動画名_frame_000000.png` です。
+ボード付きの瞬間は `input/video_reference/reference.png` として保存すると、次の一括補正でそのまま使えます。
+保存ダイアログの取消後も一時停止を保ちます。同名PNGへの保存は上書きを確認します。
+読込の取消や失敗では現在の動画を保持します。OpenCVで開けて、フレーム数とFPSを取得できる動画を使ってください。
+
 ## 固定カメラの動画フレームを補正する
 
 `01_rectify_frames_from_reference.py` は、動作前のボード付き基準画像から補正を1回求め、
 動作中の全フレームへ同じ歪み補正・遠近変換・出力範囲を適用します。
 各フレームにはボードが不要です。毎画像のボードを使う従来の `01_rectify_images.py` と使い分けます。
-FFmpegでの画像切り出しは別途行い、このスクリプトにはPNG・JPEGなどの画像を渡します。
+上のGUIやFFmpegでフレームを切り出し、このスクリプトにはPNG・JPEGなどの画像を渡します。
 
 ### 設定と実行
 
@@ -254,6 +279,8 @@ uv run python -m unittest discover -s tests -p test_refactored_workflow.py -v
 uv run python -m unittest discover -s tests -p test_refactored_calibration.py -v
 # 基準画像からボードなしフレームを補正し、既知寸法・計測への受渡しを確認
 uv run python -m unittest discover -s tests -p test_reference_frame_rectification.py -v
+# 動画の再生・コマ移動・元解像度のPNG保存を実Tkで確認
+uv run python -m unittest discover -s tests -p test_video_frame_gui.py -v
 # 既存の検証も含めて実行
 uv run python -m unittest discover -s tests
 # 保存先には tests/results 内のまだ存在しないフォルダを指定
@@ -308,3 +335,11 @@ Ruff・format・tyも通りました。今回の追加機能の実動画での�
 校正の不安定エラーを模擬し、複数回の除外後も元の写真名と誤差が対応すること、再計算時に係数を初期化することを確認しました。
 全写真の除外、原因を特定できない計算エラー、不正な係数、保存失敗では停止することも確認しました。
 変更したPythonのRuff・format・tyが通りました。実カメラの写真でのスキップ結果と校正精度は未確認です。
+
+2026-10-21に `video_frame_gui.py` を追加しました。
+合成動画を実Tkで操作する4件で、再生・一時停止・末尾停止と再再生、スライダー・1コマ移動、
+1フレームだけの動画、縮小表示と画面サイズ変更、日本語パスへの保存を確認しました。
+保存PNGは選択した元解像度のフレームと全画素が一致しました。
+読込取消・失敗時の動画保持、保存取消後の一時停止、入力動画の保護、PNG変換失敗時の既存ファイル保持、
+動画切替・終了時のリソース解放も確認しました。追加したPythonのRuff・format・tyが通りました。
+実カメラの動画・可変フレームレートの時刻・動画形式ごとの読込可否は未確認です。
