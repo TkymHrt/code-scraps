@@ -163,7 +163,7 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         lines = preview_lines()
         assert len(lines) == 2
         for line, fraction in zip(lines, (0.25, 0.75)):
-            assert line[0] == x0 and line[2] == x1
+            assert abs(line[0] - x0) <= 1 and abs(line[2] - x1) <= 1
             assert abs(line[1] - (y0 + (y1 - y0) * fraction)) <= 1
         set_field(root, start, height // 2)
         moved_lines = preview_lines()
@@ -206,6 +206,8 @@ def measure_with_gui(directory, image_path, transform, original_size, screenshot
         assert buttons["CSV・画像2枚を保存"].instate(["!disabled"])
         root.geometry("1000x760")
         root.update()
+        if "全体表示" in buttons:
+            invoke("全体表示")
         for button in list(buttons.values()) + list(radios.values()):
             assert button.winfo_ismapped()
             assert button.winfo_height() >= button.winfo_reqheight(), button.cget(

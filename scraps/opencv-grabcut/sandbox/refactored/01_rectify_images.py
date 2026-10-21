@@ -12,6 +12,7 @@ from workflow_settings import (
     MARKER_MM,
     MM_PER_PX,
     RECTIFIED_DIRECTORY,
+    RECTIFY_ROI,
     SQUARE_MM,
 )
 
@@ -83,11 +84,23 @@ def rectify_image(image: np.ndarray) -> dict:
     rotation = np.array([[dx, -dy, 0], [dy, dx, 0], [0, 0, 1]])
     homography = rotation @ homography
 
+    left, top, right, bottom = RECTIFY_ROI
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+        raise ValueError("RECTIFY_ROIは0〜1の範囲で、左 < 右、上 < 下にしてください")
+    left_px = left * (width - 1)
+    right_px = right * (width - 1)
+    top_px = top * (height - 1)
+    bottom_px = bottom * (height - 1)
     frame_corners = np.array(
-        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        [
+            [left_px, top_px],
+            [right_px, top_px],
+            [right_px, bottom_px],
+            [left_px, bottom_px],
+        ],
         dtype=np.float64,
     )
-    # 画面内に消失線がある場合、全体を有限の平面画像にはできない。
+    # 出力する範囲内に消失線がある場合、有限の平面画像にはできない。
     denominators = frame_corners @ homography[2, :2] + homography[2, 2]
     if not (np.all(denominators > 0) or np.all(denominators < 0)):
         raise ValueError("撮影角度が浅すぎます。計測面へ向けて撮り直してください")
@@ -142,8 +155,10 @@ def main() -> None:
         image = read_image(input_path)
         correction = rectify_image(image)
         write_png(output_path, correction["image"])
+        output_height, output_width = correction["image"].shape[:2]
         print(
-            f"保存: {output_path.name} / 角{correction['corner_count']}点 / "
+            f"保存: {output_path.name} / {output_width}×{output_height}px / "
+            f"角{correction['corner_count']}点 / "
             f"再投影誤差{correction['error_px']:.3f}px"
         )
     print(f"完了: {len(input_paths)}枚 → {output_directory}")

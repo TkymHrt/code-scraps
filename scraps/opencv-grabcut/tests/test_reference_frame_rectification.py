@@ -101,6 +101,36 @@ class ReferenceFrameRectificationTests(unittest.TestCase):
             self.assertAlmostEqual(width_mm, 40.0, delta=1.0)
         self.assertEqual(sizes, [sizes[0]] * 3)
 
+    def test_central_output_reduces_pixels_without_resizing_the_specimen(self):
+        full_roi = (0, 0, 1, 1)
+        with patch.dict(self.settings, {"RECTIFY_ROI": full_roi}):
+            full = self.script["prepare_rectification"](self.reference)
+        central = self.script["prepare_rectification"](self.reference)
+        full_width, full_height = full["output_size"]
+        width, height = central["output_size"]
+        self.assertLess(width * height, full_width * full_height * 0.6)
+        self.assertEqual(central["mm_per_px"], full["mm_per_px"])
+        for correction in (full, central):
+            image = self.script["rectify_frame"](self.frame, correction)
+            length_mm, width_mm = specimen_size(image)
+            self.assertAlmostEqual(length_mm, 150, delta=1)
+            self.assertAlmostEqual(width_mm, 40, delta=1)
+
+    def test_both_rectifiers_reject_invalid_output_regions(self):
+        single = load_refactored("01_rectify_images.py")
+        configure(single)
+        for function in (single["rectify_image"], self.script["prepare_rectification"]):
+            for roi in (
+                (-0.1, 0, 1, 1),
+                (0.5, 0, 0.5, 1),
+                (0, 0, 1, 1.1),
+                (0, float("nan"), 1, 1),
+            ):
+                with self.subTest(function=function.__name__, roi=roi):
+                    with patch.dict(function.__globals__, {"RECTIFY_ROI": roi}):
+                        with self.assertRaisesRegex(ValueError, "RECTIFY_ROI"):
+                            function(self.reference)
+
     def test_corrected_frame_can_be_measured_and_saved_as_existing_csv(self):
         reference = rendered_scene((0, 0, 0), TRANSLATION)
         correction = self.script["prepare_rectification"](reference)
@@ -116,7 +146,7 @@ class ReferenceFrameRectificationTests(unittest.TestCase):
         x = y = 8
         image_height, image_width = corrected.shape[:2]
         regions = {
-            cv.GC_BGD: [],
+            cv.GC_BGD: [(0, 0, 4 / image_width, 1), (1 - 4 / image_width, 0, 1, 1)],
             cv.GC_FGD: [],
             cv.GC_PR_FGD: [
                 (

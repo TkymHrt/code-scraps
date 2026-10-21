@@ -56,8 +56,8 @@ def create_graph(
         else:
             left_values.append(row["left_mm"])
             right_values.append(row["right_mm"])
-    axis.plot(positions, left_values, marker="o", label="左側辺", color="#d96c17")
-    axis.plot(positions, right_values, marker="o", label="右側辺", color="#15927e")
+    axis.plot(positions, left_values, marker="o", label="DR側辺", color="#d96c17")
+    axis.plot(positions, right_values, marker="o", label="OP側辺", color="#15927e")
     if normalized:
         axis.axhline(100, linestyle="--", color="gray", label="基準（直線の目安）")
     else:
@@ -78,10 +78,10 @@ def create_graph(
         axis.set_xlabel("撮影 / CSV（追加順）")
     if normalized:
         axis.set_ylabel("100mmあたりの側辺長 (mm)")
-        axis.set_title("左右側辺長の比較（100mm換算）")
+        axis.set_title("DR・OP側辺長の比較（100mm換算）")
     else:
         axis.set_ylabel("側辺長 (mm)")
-        axis.set_title("左右側辺長の比較（実測長）")
+        axis.set_title("DR・OP側辺長の比較（実測長）")
     axis.grid(alpha=0.3)
     axis.legend()
     if initial_thickness_mm is not None:

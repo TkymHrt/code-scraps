@@ -1,4 +1,4 @@
-"""局所区間の左右側辺長を、実測厚さから求めた累積圧下率とともに比較する。"""
+"""局所区間のDR・OP側辺長を、実測厚さから求めた累積圧下率とともに比較する。"""
 
 import math
 import tkinter as tk
@@ -38,7 +38,7 @@ def compare_lengths_with_thickness(
 def main() -> None:
     output_directory = OUTPUT_DIRECTORY
     root = tk.Tk()
-    root.title("厚さ・累積圧下率と左右長さの比較")
+    root.title("厚さ・累積圧下率とDR・OP長さの比較")
     root.geometry("1100x760")
     root.minsize(960, 640)
     samples: list[dict] = []
@@ -111,8 +111,8 @@ def main() -> None:
             "撮影 / CSV",
             "厚さ (mm)",
             "区間長 (mm)",
-            "左側辺 (mm)",
-            "右側辺 (mm)",
+            "DR側辺 (mm)",
+            "OP側辺 (mm)",
             "累積圧下率 (%)",
             "",
         )

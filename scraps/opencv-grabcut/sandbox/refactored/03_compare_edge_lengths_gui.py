@@ -1,4 +1,4 @@
-"""局所区間の長さCSVを読み、左右側辺長と100mm換算を表・グラフで比較する。"""
+"""局所区間の長さCSVを読み、DR・OP側辺長と100mm換算を表・グラフで比較する。"""
 
 import tkinter as tk
 from pathlib import Path
@@ -13,7 +13,7 @@ from workflow_settings import OUTPUT_DIRECTORY
 def main() -> None:
     output_directory = OUTPUT_DIRECTORY
     root = tk.Tk()
-    root.title("局所区間の左右長さ比較")
+    root.title("局所区間のDR・OP長さ比較")
     root.geometry("1100x760")
     root.minsize(960, 640)
     paths: list[Path] = []
@@ -121,7 +121,7 @@ def main() -> None:
     )
     table_frame.pack(fill="x")
     columns = ("csv_name", "interval_length_mm", "left_mm", "right_mm")
-    headings = ("撮影 / CSV", "区間長 (mm)", "左側辺 (mm)", "右側辺 (mm)")
+    headings = ("撮影 / CSV", "区間長 (mm)", "DR側辺 (mm)", "OP側辺 (mm)")
     table = ttk.Treeview(table_frame, columns=columns, show="headings", height=6)
     for column, heading in zip(columns, headings):
         table.heading(column, text=heading)

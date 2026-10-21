@@ -150,11 +150,14 @@ class LocalComparisonTests(unittest.TestCase):
         measurement, overlay = measurement_gui["measure_lengths"](
             image, regions, 20, 140
         )
+        initial = measurement_gui["initial_overlay"](image, regions)
         source = self.directory / "入力.png"
         source.write_bytes(b"protected input")
         output = self.directory / "output/p01_a.csv"
-        png = measurement_gui["write_measurement"](output, source, measurement, overlay)
-        self.assertEqual(png, output.with_suffix(".png"))
+        measurement_gui["write_measurement"](
+            output, source, measurement, initial, overlay
+        )
+        png = output.with_suffix(".png")
         decoded = cv.imdecode(
             np.frombuffer(png.read_bytes(), np.uint8), cv.IMREAD_COLOR
         )
@@ -165,14 +168,14 @@ class LocalComparisonTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), old_csv.read_bytes())
         with self.assertRaises(ValueError):
             measurement_gui["write_measurement"](
-                source.with_suffix(".csv"), source, measurement, overlay
+                source.with_suffix(".csv"), source, measurement, initial, overlay
             )
         self.assertFalse(source.with_suffix(".csv").exists())
         before = output.read_bytes()
         with patch.object(cv, "imencode", return_value=(False, None)):
             with self.assertRaises(OSError):
                 measurement_gui["write_measurement"](
-                    output, source, measurement, overlay
+                    output, source, measurement, initial, overlay
                 )
         self.assertEqual(output.read_bytes(), before)
         self.assertEqual(source.read_bytes(), b"protected input")

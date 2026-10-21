@@ -1,4 +1,4 @@
-"""補正画像の初期指定・区間を選び、左右側辺長の画像とCSVを保存する."""
+"""補正画像の初期指定・区間を選び、DR・OP側辺長の画像とCSVを保存する."""
 
 import math
 import tkinter as tk
@@ -14,6 +14,8 @@ from workflow_settings import MM_PER_PX, OUTPUT_DIRECTORY, RECTIFIED_DIRECTORY
 
 ITERATIONS = 5
 RANDOM_SEED = 0
+# 前景指定の外側にも、背景の判定用に幅・高さの10%（最低10px）を残す。
+GRABCUT_MARGIN_RATIO = 0.1
 
 type RectRatios = tuple[float, float, float, float]
 
@@ -55,7 +57,25 @@ def initial_overlay(
 ) -> np.ndarray:
     labels = initial_mask(image, regions)
     color_mask = PALETTE[labels]
-    return cv.addWeighted(image, 0.65, color_mask, 0.35, 0)
+    overlay = cv.addWeighted(image, 0.65, color_mask, 0.35, 0)
+    draw_edge_names(overlay)
+    return overlay
+
+
+def draw_edge_names(image: np.ndarray) -> None:
+    height, width = image.shape[:2]
+    for name, x in (("DR", 8), ("OP", width - 42)):
+        cv.rectangle(image, (x - 4, 4), (x + 34, 31), (0, 0, 0), cv.FILLED)
+        cv.putText(
+            image,
+            name,
+            (x, min(25, height - 1)),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            1,
+            cv.LINE_AA,
+        )
 
 
 def measure_lengths(
@@ -70,11 +90,27 @@ def measure_lengths(
     initial_foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
     if not initial_foreground.any() or initial_foreground.all():
         raise ValueError("試料の前景候補と、その外の背景を指定してください")
+    foreground_y = np.flatnonzero(initial_foreground.any(axis=1))
+    foreground_x = np.flatnonzero(initial_foreground.any(axis=0))
+    left = int(foreground_x.min())
+    right = int(foreground_x.max()) + 1
+    top = int(foreground_y.min())
+    bottom = int(foreground_y.max()) + 1
+    margin_x = max(10, math.ceil((right - left) * GRABCUT_MARGIN_RATIO))
+    margin_y = max(10, math.ceil((bottom - top) * GRABCUT_MARGIN_RATIO))
+    left = max(0, left - margin_x)
+    right = min(width, right + margin_x)
+    top = max(0, top - margin_y)
+    bottom = min(height, bottom + margin_y)
+    if start_y < top or end_y >= bottom:
+        raise ValueError("計測区間全体が入るように前景候補を広げてください")
+    working_image = image[top:bottom, left:right].copy()
+    labels = labels[top:bottom, left:right].copy()
     background_model = np.zeros((1, 65), np.float64)
     foreground_model = np.zeros((1, 65), np.float64)
     cv.setRNGSeed(RANDOM_SEED)
     labels, _, _ = cv.grabCut(
-        image,
+        working_image,
         labels,
         (0, 0, 0, 0),
         background_model,
@@ -83,7 +119,7 @@ def measure_lengths(
         cv.GC_INIT_WITH_MASK,
     )
     extracted_foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
-    raw_mask = np.zeros((height, width), np.uint8)
+    raw_mask = np.zeros(labels.shape, np.uint8)
     raw_mask[extracted_foreground] = 255
     contours, _ = cv.findContours(raw_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
     if not contours:
@@ -95,19 +131,23 @@ def measure_lengths(
         if area > largest_area:
             contour = candidate
             largest_area = area
-    mask = np.zeros((height, width), np.uint8)
+    mask = np.zeros(labels.shape, np.uint8)
     cv.drawContours(mask, [contour], -1, 255, cv.FILLED)
 
     left_points = []
     right_points = []
     for y in range(start_y, end_y + 1):
-        xs = np.flatnonzero(mask[y])
+        xs = np.flatnonzero(mask[y - top])
         if len(xs) == 0:
             raise ValueError(
                 f"y={y}に試料がありません。区間か初期指定を調整してください"
             )
-        left_points.append((int(xs[0]), y))
-        right_points.append((int(xs[-1]), y))
+        if xs[0] == 0 or xs[-1] == mask.shape[1] - 1:
+            raise ValueError(
+                "試料が処理範囲の端に接しています。前景候補を広げてください"
+            )
+        left_points.append((int(xs[0]) + left, y))
+        right_points.append((int(xs[-1]) + left, y))
     left_px = 0.0
     right_px = 0.0
     for index in range(1, len(left_points)):
@@ -142,6 +182,7 @@ def measure_lengths(
         cv.line(overlay, (0, y), (width - 1, y), (0, 255, 255), 1)
     for points in (left_points, right_points):
         cv.polylines(overlay, [np.array(points, np.int32)], False, (0, 0, 255), 2)
+    draw_edge_names(overlay)
     return row, overlay
 
 
@@ -175,7 +216,9 @@ def main() -> None:
     regions: dict[int, list[RectRatios]] = {label: [] for label in REGION_NAMES}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
-    display_bounds = (0, 0, 1, 1)
+    scale = 1.0
+    offset_x = offset_y = 0.0
+    pan_start: tuple[int, int] | None = None
     drag_start_ratios: tuple[float, float] | None = None
 
     measurement: dict | None = None
@@ -184,6 +227,7 @@ def main() -> None:
     root.geometry("1120x800")
     root.minsize(1000, 760)
     mode = tk.IntVar(value=cv.GC_PR_FGD)
+    selection_target = tk.StringVar(value="region")
     view = tk.StringVar(value="initial")
     status = tk.StringVar()
     file_text = tk.StringVar(value="未読込")
@@ -217,6 +261,7 @@ def main() -> None:
         start_text.set("0")
         end_text.set(str(height - 1))
         clear_regions()
+        fit_image()
 
     def on_regions_changed() -> None:
         region_rows.clear()
@@ -237,47 +282,78 @@ def main() -> None:
 
     def show_initial(_event=None) -> None:
         view.set("initial")
+        selection_target.set("region")
         render()
 
     def render(_event=None) -> None:
-        nonlocal photo, display_bounds, drag_start_ratios
+        nonlocal photo, drag_start_ratios
         drag_start_ratios = None
         canvas.delete("all")
         if image is None:
             return
+        canvas_width = max(1, canvas.winfo_width())
+        canvas_height = max(1, canvas.winfo_height())
         preview_image = image
-        if view.get() == "initial":
-            preview_image = initial_overlay(image, regions)
-        elif view.get() == "result" and result_image is not None:
+        if view.get() == "result" and result_image is not None:
             preview_image = result_image
-        scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
-        display_width = max(1, int(width * scale))
-        display_height = max(1, int(height * scale))
-        small = cv.resize(
-            preview_image,
-            (display_width, display_height),
-            interpolation=cv.INTER_NEAREST,
-        )
-        png_data = encode_png(small)
-        photo = tk.PhotoImage(master=root, data=png_data, format="PNG")
-        display_left = (canvas.winfo_width() - display_width) // 2
-        display_top = (canvas.winfo_height() - display_height) // 2
-        display_bounds = (
-            display_left,
-            display_top,
-            display_left + display_width,
-            display_top + display_height,
-        )
-        canvas.create_image(display_left, display_top, image=photo, anchor="nw")
+        display_left = max(0, math.floor(offset_x))
+        display_top = max(0, math.floor(offset_y))
+        display_right = min(canvas_width, math.ceil(offset_x + width * scale))
+        display_bottom = min(canvas_height, math.ceil(offset_y + height * scale))
+        display_width = display_right - display_left
+        display_height = display_bottom - display_top
+        if display_width > 0 and display_height > 0:
+            transform = np.array(
+                [
+                    [scale, 0, offset_x - display_left],
+                    [0, scale, offset_y - display_top],
+                ],
+                dtype=np.float64,
+            )
+            # 表示する画素だけを作り、巨大な画像全体への色重ねを避ける。
+            small = cv.warpAffine(
+                preview_image,
+                transform,
+                (display_width, display_height),
+                flags=cv.INTER_NEAREST,
+                borderValue=(36, 36, 36),
+            )
+            if view.get() == "initial":
+                preview_labels = np.full(
+                    (display_height, display_width), cv.GC_PR_BGD, np.uint8
+                )
+                for label in (cv.GC_PR_FGD, cv.GC_BGD, cv.GC_FGD):
+                    for left, top, right, bottom in regions[label]:
+                        x0 = max(
+                            0,
+                            round(offset_x + int(left * width) * scale - display_left),
+                        )
+                        y0 = max(
+                            0, round(offset_y + int(top * height) * scale - display_top)
+                        )
+                        x1 = max(
+                            0,
+                            round(offset_x + int(right * width) * scale - display_left),
+                        )
+                        y1 = max(
+                            0,
+                            round(
+                                offset_y + int(bottom * height) * scale - display_top
+                            ),
+                        )
+                        preview_labels[y0:y1, x0:x1] = label
+                small = cv.addWeighted(small, 0.65, PALETTE[preview_labels], 0.35, 0)
+            photo = tk.PhotoImage(master=root, data=encode_png(small), format="PNG")
+            canvas.create_image(display_left, display_top, image=photo, anchor="nw")
         selection = region_list.curselection()
         if view.get() == "initial" and selection:
             label, index = region_rows[selection[0]]
             left_ratio, top_ratio, right_ratio, bottom_ratio = regions[label][index]
             canvas.create_rectangle(
-                display_left + left_ratio * display_width,
-                display_top + top_ratio * display_height,
-                display_left + right_ratio * display_width,
-                display_top + bottom_ratio * display_height,
+                offset_x + left_ratio * width * scale,
+                offset_y + top_ratio * height * scale,
+                offset_x + right_ratio * width * scale,
+                offset_y + bottom_ratio * height * scale,
                 outline="yellow",
                 width=2,
             )
@@ -289,11 +365,13 @@ def main() -> None:
             if not 0 <= row_y < height:
                 continue
             # 行番号を画像上の画素中心へ合わせる。
-            line_y = display_top + (row_y + 0.5) * display_height / height
+            line_y = offset_y + (row_y + 0.5) * scale
+            if not 0 <= line_y < canvas_height or display_width <= 0:
+                continue
             canvas.create_line(
                 display_left,
                 line_y,
-                display_left + display_width,
+                display_right,
                 line_y,
                 fill="yellow",
                 width=2,
@@ -301,46 +379,106 @@ def main() -> None:
             )
             canvas.create_text(
                 display_left + 8,
-                max(display_top + 18, line_y - 3),
+                max(38, line_y - 3),
                 text=f"{name} y={row_y}",
                 fill="yellow",
                 anchor="sw",
                 tags="interval",
             )
+        for name, x, anchor in (("DR", 8, "nw"), ("OP", canvas_width - 8, "ne")):
+            item = canvas.create_text(
+                x,
+                8,
+                text=name,
+                fill="white",
+                anchor=anchor,
+                font=("TkDefaultFont", 12, "bold"),
+                tags="edge_name",
+            )
+            box = canvas.bbox(item)
+            if box is not None:
+                background = canvas.create_rectangle(box, fill="#242424", outline="")
+                canvas.tag_lower(background, item)
+
+    def fit_image() -> None:
+        nonlocal scale, offset_x, offset_y, pan_start
+        if image is None:
+            return
+        scale = min(canvas.winfo_width() / width, canvas.winfo_height() / height, 1)
+        offset_x = math.floor((canvas.winfo_width() - width * scale) / 2)
+        offset_y = math.floor((canvas.winfo_height() - height * scale) / 2)
+        pan_start = None
+        render()
+
+    def zoom(event: tk.Event) -> str:
+        nonlocal scale, offset_x, offset_y
+        if image is None or event.delta == 0:
+            return "break"
+        image_x = (event.x - offset_x) / scale
+        image_y = (event.y - offset_y) / scale
+        factor = 1.2 ** (event.delta / 120)
+        scale = min(16.0, max(0.01, scale * factor))
+        offset_x = event.x - image_x * scale
+        offset_y = event.y - image_y * scale
+        render()
+        return "break"
+
+    def start_pan(event: tk.Event) -> None:
+        nonlocal pan_start
+        if image is not None:
+            pan_start = (event.x, event.y)
+            canvas.configure(cursor="fleur")
+
+    def pan(event: tk.Event) -> None:
+        nonlocal offset_x, offset_y, pan_start
+        if pan_start is None:
+            return
+        offset_x += event.x - pan_start[0]
+        offset_y += event.y - pan_start[1]
+        pan_start = (event.x, event.y)
+        render()
+
+    def end_pan(_event=None) -> None:
+        nonlocal pan_start
+        pan_start = None
+        canvas.configure(cursor="crosshair")
 
     def image_ratios(event: tk.Event) -> tuple[float, float]:
-        display_left, display_top, display_right, display_bottom = display_bounds
-        display_width = display_right - display_left
-        display_height = display_bottom - display_top
-        x_ratio = (event.x - display_left) / display_width
-        y_ratio = (event.y - display_top) / display_height
+        x_ratio = (event.x - offset_x) / (width * scale)
+        y_ratio = (event.y - offset_y) / (height * scale)
         x_ratio = min(1.0, max(0.0, x_ratio))
         y_ratio = min(1.0, max(0.0, y_ratio))
         return x_ratio, y_ratio
 
     def start_draw(event: tk.Event) -> None:
         nonlocal drag_start_ratios
-        if image is None or view.get() != "initial":
+        if image is None:
             return
-        display_left, display_top, display_right, display_bottom = display_bounds
         if (
-            display_left <= event.x <= display_right
-            and display_top <= event.y <= display_bottom
+            offset_x <= event.x < offset_x + width * scale
+            and offset_y <= event.y < offset_y + height * scale
         ):
+            target = selection_target.get()
+            if target in ("start", "end"):
+                row_y = min(height - 1, int((event.y - offset_y) / scale))
+                if target == "start":
+                    start_text.set(str(row_y))
+                else:
+                    end_text.set(str(row_y))
+                return
+            if view.get() != "initial":
+                return
             drag_start_ratios = image_ratios(event)
 
     def drag_draw(event: tk.Event) -> None:
         if drag_start_ratios is None:
             return
-        display_left, display_top, display_right, display_bottom = display_bounds
-        display_width = display_right - display_left
-        display_height = display_bottom - display_top
         start_x_ratio, start_y_ratio = drag_start_ratios
         end_x_ratio, end_y_ratio = image_ratios(event)
-        start_canvas_x = display_left + start_x_ratio * display_width
-        start_canvas_y = display_top + start_y_ratio * display_height
-        end_canvas_x = display_left + end_x_ratio * display_width
-        end_canvas_y = display_top + end_y_ratio * display_height
+        start_canvas_x = offset_x + start_x_ratio * width * scale
+        start_canvas_y = offset_y + start_y_ratio * height * scale
+        end_canvas_x = offset_x + end_x_ratio * width * scale
+        end_canvas_y = offset_y + end_y_ratio * height * scale
         canvas.delete("drag")
         canvas.create_rectangle(
             start_canvas_x,
@@ -372,10 +510,7 @@ def main() -> None:
             return
         rect = (left_ratio, top_ratio, right_ratio, bottom_ratio)
         label = mode.get()
-        if label == cv.GC_PR_FGD:
-            regions[label] = [rect]
-        else:
-            regions[label].append(rect)
+        regions[label].append(rect)
         on_regions_changed()
 
     def delete_region() -> None:
@@ -489,7 +624,20 @@ def main() -> None:
     ).pack(side="left")
     ttk.Label(header, textvariable=file_text).pack(side="left", padx=8)
     ttk.Label(header, textvariable=status, wraplength=320).pack(side="right")
-    canvas = tk.Canvas(content, background="#242424", highlightthickness=0)
+    preview_tools = ttk.Frame(content)
+    preview_tools.pack(fill="x", pady=(0, 4))
+    ttk.Button(preview_tools, text="全体表示", command=fit_image).pack(side="left")
+    for value, name in (("region", "矩形"), ("start", "開始y"), ("end", "終了y")):
+        ttk.Radiobutton(
+            preview_tools, text=name, variable=selection_target, value=value
+        ).pack(side="left", padx=4)
+    ttk.Label(
+        content,
+        text="ホイール：拡大縮小　右ドラッグ：移動　開始y・終了y：クリックで指定",
+    ).pack(anchor="w")
+    canvas = tk.Canvas(
+        content, background="#242424", highlightthickness=0, cursor="crosshair"
+    )
     canvas.pack(fill="both", expand=True)
 
     ttk.Label(sidebar, text="矩形の種類（画像を左ドラッグ）").pack(anchor="w")
@@ -540,7 +688,7 @@ def main() -> None:
     result_table.heading("length", text="長さ (mm)")
     result_table.column("edge", width=60, stretch=False)
     result_table.column("length", width=130, anchor="e")
-    for edge, label in (("left", "左"), ("right", "右"), ("total", "左右合計")):
+    for edge, label in (("left", "DR"), ("right", "OP"), ("total", "合計")):
         result_table.insert("", "end", iid=edge, values=(label, "—"))
     result_table.pack(fill="x", pady=4)
     save_measurement_button = ttk.Button(
@@ -562,6 +710,10 @@ def main() -> None:
     canvas.bind("<ButtonPress-1>", start_draw)
     canvas.bind("<B1-Motion>", drag_draw)
     canvas.bind("<ButtonRelease-1>", end_draw)
+    canvas.bind("<MouseWheel>", zoom)
+    canvas.bind("<ButtonPress-3>", start_pan)
+    canvas.bind("<B3-Motion>", pan)
+    canvas.bind("<ButtonRelease-3>", end_pan)
     region_list.bind("<<ListboxSelect>>", show_initial)
     output_directory.mkdir(parents=True, exist_ok=True)
     on_regions_changed()

@@ -52,6 +52,8 @@ def copy_refactored(filename, directory, **settings):
             target = path_names[filename][name]
             path = (directory / value).resolve()
             overrides.append(f"{target} = Path({str(path)!r})\n")
+        elif name == "RECTIFY_ROI":
+            overrides.append(f"RECTIFY_ROI = {value!r}\n")
         else:
             values[name] = value
     script = copy_current(
@@ -304,6 +306,8 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
         new = load_refactored("01_rectify_images.py")
         for rectifier in (old, new):
             configure(rectifier)
+        # 全体出力を指定した場合は、提出版と同じ座標・画素を保つ。
+        new["rectify_image"].__globals__["RECTIFY_ROI"] = (0, 0, 1, 1)
         image = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400))
         for partial in (False, True):
             photo = rendered_scene((0.12, -0.22, 0.03), (-170, -65, 400), partial)
@@ -355,6 +359,9 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
             before_initial = old["initial_overlay"](image, regions)
             after_initial = new["initial_overlay"](image, regions)
             self.assertEqual(before, after)
+            # 追加した隅のDR・OP表示以外は、側辺と初期指定の画素を保つ。
+            new["draw_edge_names"](before_overlay)
+            new["draw_edge_names"](before_initial)
             np.testing.assert_array_equal(before_overlay, after_overlay)
             np.testing.assert_array_equal(before_initial, after_initial)
             old_path = self.directory / "old/lengths.csv"
@@ -444,7 +451,24 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
                     old["write_graph"](old_path, before, *arguments)
                     new["write_graph"](new_path, after, *arguments, **options)
                     with self.subTest(filename=filename, modes=arguments):
-                        self.assertEqual(old_path.read_bytes(), new_path.read_bytes())
+                        expected = old["create_graph"](before, *arguments)
+                        actual = new["create_graph"](after, *arguments, **options)
+                        for previous_line, line in zip(
+                            expected.axes[0].lines, actual.axes[0].lines
+                        ):
+                            np.testing.assert_array_equal(
+                                previous_line.get_xydata(), line.get_xydata()
+                            )
+                        self.assertEqual(
+                            [line.get_label() for line in actual.axes[0].lines[:2]],
+                            ["DR側辺", "OP側辺"],
+                        )
+                        saved = cv.imdecode(
+                            np.frombuffer(new_path.read_bytes(), np.uint8),
+                            cv.IMREAD_COLOR,
+                        )
+                        assert saved is not None
+                        self.assertEqual(saved.shape, (800, 1440, 3))
 
     def test_invalid_csv_and_graph_destinations_are_rejected(self):
         common = load_refactored("length_comparison.py")

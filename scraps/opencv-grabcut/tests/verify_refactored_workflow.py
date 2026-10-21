@@ -17,6 +17,14 @@ from test_refactored_workflow import copy_refactored, run_refactored
 from verify_parameter_guis import capture, descendants
 
 
+def copy_verification_script(filename, directory, **settings):
+    # 既存の工程検証は画像端の板を再検出するので、全体出力で比較する。
+    # 中央出力の寸法と画素数削減はtest_reference_frame_rectificationで確認する。
+    if filename == "01_rectify_images.py":
+        settings["RECTIFY_ROI"] = (0, 0, 1, 1)
+    return copy_refactored(filename, directory, **settings)
+
+
 def verify_layout(output, screenshots):
     output.mkdir()
     paths = [sample_csv(output, f"sample{index}") for index in range(4)]
@@ -184,7 +192,7 @@ def main():
         with (
             patch.object(sys, "argv", arguments),
             patch.object(runpy, "run_path", run_refactored),
-            patch.object(verification, "copy_current", copy_refactored),
+            patch.object(verification, "copy_current", copy_verification_script),
         ):
             verification.main()
     print(f"共通化した6本の校正・補正・計測・比較GUIを確認: {output}")

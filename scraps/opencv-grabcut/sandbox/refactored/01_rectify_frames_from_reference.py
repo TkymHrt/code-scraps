@@ -12,6 +12,7 @@ from workflow_settings import (
     MARKER_MM,
     MM_PER_PX,
     OUTPUT_DIRECTORY,
+    RECTIFY_ROI,
     SQUARE_MM,
 )
 
@@ -95,8 +96,20 @@ def prepare_rectification(reference_image: np.ndarray) -> dict:
     rotation = np.array([[dx, -dy, 0], [dy, dx, 0], [0, 0, 1]])
     homography = rotation @ homography
 
+    left, top, right, bottom = RECTIFY_ROI
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+        raise ValueError("RECTIFY_ROIは0〜1の範囲で、左 < 右、上 < 下にしてください")
+    left_px = left * (width - 1)
+    right_px = right * (width - 1)
+    top_px = top * (height - 1)
+    bottom_px = bottom * (height - 1)
     frame_corners = np.array(
-        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        [
+            [left_px, top_px],
+            [right_px, top_px],
+            [right_px, bottom_px],
+            [left_px, bottom_px],
+        ],
         dtype=np.float64,
     )
     denominators = frame_corners @ homography[2, :2] + homography[2, 2]
@@ -195,6 +208,8 @@ def main() -> None:
     )
     print(f"基準の補正画像: {reference_output_path}")
     print(f"固定倍率: {correction['mm_per_px']}mm/px")
+    output_width, output_height = correction["output_size"]
+    print(f"出力サイズ: {output_width}×{output_height}px")
     for input_path in input_paths:
         image = read_image(input_path)
         try:
