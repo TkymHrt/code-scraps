@@ -131,7 +131,7 @@ class ReferenceFrameRectificationTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "RECTIFY_ROI"):
                             function(self.reference)
 
-    def test_corrected_frame_can_be_measured_and_saved_as_existing_csv(self):
+    def test_corrected_frame_can_be_measured_and_saved_as_axis_csv(self):
         reference = rendered_scene((0, 0, 0), TRANSLATION)
         correction = self.script["prepare_rectification"](reference)
         corrected = self.script["rectify_frame"](
@@ -145,36 +145,60 @@ class ReferenceFrameRectificationTests(unittest.TestCase):
         self.files["write_png"](image_path, corrected)
         x = y = 8
         image_height, image_width = corrected.shape[:2]
+        left = (x - 6) / (image_width - 1)
+        right = (x + width + 6) / (image_width - 1)
+        top = (y - 6) / (image_height - 1)
+        bottom = (y + height + 6) / (image_height - 1)
+        background_width = 4 / (image_width - 1)
         regions = {
-            cv.GC_BGD: [(0, 0, 4 / image_width, 1), (1 - 4 / image_width, 0, 1, 1)],
+            cv.GC_BGD: [
+                [(0, 0), (background_width, 0), (background_width, 1), (0, 1)],
+                [
+                    (1 - background_width, 0),
+                    (1, 0),
+                    (1, 1),
+                    (1 - background_width, 1),
+                ],
+            ],
             cv.GC_FGD: [],
             cv.GC_PR_FGD: [
-                (
-                    (x - 6) / image_width,
-                    (y - 6) / image_height,
-                    (x + width + 6) / image_width,
-                    (y + height + 6) / image_height,
-                )
+                [(left, top), (right, top), (right, bottom), (left, bottom)]
             ],
         }
         start_y = y + 10
         end_y = y + height - 11
+        center_x = x + (width - 1) / 2
+        interval_points = np.array([[center_x, start_y], [center_x, end_y]])
         measurement = load_refactored("02_measure_edge_lengths_gui.py")
-        row, overlay = measurement["measure_lengths"](
-            corrected, regions, start_y, end_y
+        contour, bounds = measurement["extract_specimen"](corrected, regions)
+        axis = measurement["estimate_axis"](contour, bounds, interval_points)
+        row = measurement["measure_contour"](contour, bounds, interval_points, axis)
+        overlay = measurement["measurement_overlay"](
+            corrected, contour, bounds, interval_points, axis
         )
         expected_mm = (end_y - start_y) * 0.25
-        # 側辺長には画素の段差も入る。実寸の精度は上の独立した外接矩形で確認する。
         self.assertEqual(row["mm_per_px"], correction["mm_per_px"])
-        self.assertGreaterEqual(row["left_mm"], expected_mm)
-        self.assertGreaterEqual(row["right_mm"], expected_mm)
+        self.assertAlmostEqual(row["interval_length_mm"], expected_mm, delta=0.01)
+        self.assertNotIn("start_y", row)
+        self.assertNotIn("end_y", row)
+        for edge in ("left", "right"):
+            self.assertGreaterEqual(row[f"{edge}_mm"], row["interval_length_mm"])
+            self.assertAlmostEqual(row[f"{edge}_mm"], expected_mm, delta=1.0)
+            expected_percent = (row[f"{edge}_mm"] / row["interval_length_mm"] - 1) * 100
+            self.assertAlmostEqual(row[f"{edge}_excess_percent"], expected_percent)
         csv_path = self.directory / "frame_lengths.csv"
         initial = measurement["initial_overlay"](corrected, regions)
+        measurement["draw_axis_and_sections"](initial, interval_points, axis)
         measurement["write_measurement"](csv_path, image_path, row, initial, overlay)
         csv_reader = load_refactored("measurement_csv.py")
         saved = csv_reader["read_lengths"](csv_path)
         self.assertEqual(saved["mm_per_px"], 0.25)
-        self.assertEqual(saved["interval_length_mm"], expected_mm)
+        self.assertAlmostEqual(
+            saved["interval_length_mm"], row["interval_length_mm"], places=8
+        )
+        self.assertEqual(saved["image_name"], image_path.name)
+        self.assertEqual(saved["evaluation_interval_mm"], 1)
+        self.assertEqual(saved["smoothing_width_mm"], 2)
         self.assertGreaterEqual(saved["left_per_100mm"], 100)
         self.assertTrue((self.directory / "frame_lengths.png").is_file())
         self.assertTrue((self.directory / "frame_lengths_initial.png").is_file())

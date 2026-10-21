@@ -344,83 +344,100 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
         with self.assertRaisesRegex(ValueError, "歪み係数4個"):
             new["rectify_image"](image)
 
-    def test_measurement_csv_and_overlay_are_identical_and_protect_input(self):
-        old = runpy.run_path(
-            str(PROJECT / "submissions/02_measure_edge_lengths_gui.py")
-        )
+    def test_polygon_measurement_csv_and_images_preserve_input_protection(self):
         new = load_refactored("02_measure_edge_lengths_gui.py")
         image = np.full((160, 140, 3), 35, np.uint8)
         image[20:141, 50:91] = 200
         regions = {
-            cv.GC_PR_FGD: [(0.3, 0, 0.7, 1)],
-            cv.GC_BGD: [(0, 0, 0.3, 1), (0.7, 0, 1, 1)],
-            cv.GC_FGD: [(0.48, 0.4, 0.56, 0.6)],
+            cv.GC_PR_FGD: [[(0.3, 0), (0.7, 0), (0.7, 1), (0.3, 1)]],
+            cv.GC_BGD: [
+                [(0, 0), (0.3, 0), (0.3, 1), (0, 1)],
+                [(0.7, 0), (1, 0), (1, 1), (0.7, 1)],
+            ],
+            cv.GC_FGD: [[(0.48, 0.4), (0.56, 0.4), (0.56, 0.6), (0.48, 0.6)]],
         }
+        interval_points = np.array([[70, 30], [70, 130]])
+        axis = new["manual_axis"](interval_points)
         source = self.directory / "入力.png"
         source.write_bytes(b"protected image")
         for notch in (False, True):
             if notch:
                 image[60:71, 50:61] = 35
-            before, before_overlay = old["measure_lengths"](image, regions, 20, 140)
-            after, after_overlay = new["measure_lengths"](image, regions, 20, 140)
-            before_initial = old["initial_overlay"](image, regions)
-            after_initial = new["initial_overlay"](image, regions)
-            self.assertEqual(before, after)
-            # 追加した隅のDR・OP表示以外は、側辺と初期指定の画素を保つ。
-            new["draw_edge_names"](before_overlay)
-            new["draw_edge_names"](before_initial)
-            np.testing.assert_array_equal(before_overlay, after_overlay)
-            np.testing.assert_array_equal(before_initial, after_initial)
-            old_path = self.directory / "old/lengths.csv"
-            new_path = self.directory / "new/lengths.csv"
-            old["write_measurement"](
-                old_path, source, before, before_initial, before_overlay
+            after, after_overlay = new["measure_lengths"](
+                image, regions, interval_points, axis
             )
+            after_initial = new["initial_overlay"](image, regions)
+            self.assertAlmostEqual(after["interval_length_mm"], 25)
+            self.assertAlmostEqual(after["right_mm"], 25)
+            self.assertAlmostEqual(after["right_excess_percent"], 0)
+            if notch:
+                self.assertGreater(after["left_mm"], 25)
+                self.assertGreater(after["left_excess_percent"], 0)
+            else:
+                self.assertAlmostEqual(after["left_mm"], 25)
+                self.assertAlmostEqual(after["left_excess_percent"], 0)
+            self.assertNotIn("start_y", after)
+            self.assertNotIn("end_y", after)
+            new_path = self.directory / "new/lengths.csv"
             new["write_measurement"](
                 new_path, source, after, after_initial, after_overlay
             )
-            self.assertEqual(old_path.read_bytes(), new_path.read_bytes())
-            self.assertEqual(
-                old_path.with_suffix(".png").read_bytes(),
-                new_path.with_suffix(".png").read_bytes(),
-            )
-            self.assertEqual(
-                (old_path.parent / "lengths_initial.png").read_bytes(),
-                (new_path.parent / "lengths_initial.png").read_bytes(),
-            )
-        for gui, path in ((old, old_path), (new, new_path)):
-            for protected in (
-                source.with_suffix(".csv"),
-                source,
-                self.directory / "入力_initial.png",
+            with new_path.open(encoding="utf-8-sig", newline="") as stream:
+                csv_row = next(csv.DictReader(stream))
+            self.assertEqual(csv_row["image_name"], source.name)
+            for name in (
+                "interval_length_mm",
+                "left_mm",
+                "right_mm",
+                "left_excess_percent",
+                "right_excess_percent",
+                "mm_per_px",
+                "evaluation_interval_mm",
+                "smoothing_width_mm",
             ):
-                protected.write_bytes(b"protected image")
-                with self.assertRaises(ValueError):
-                    gui["write_measurement"](
-                        source.with_suffix(".csv"),
-                        protected,
-                        after,
-                        after_initial,
-                        after_overlay,
-                    )
-                self.assertEqual(protected.read_bytes(), b"protected image")
-            saved_paths = (
-                path,
-                path.with_suffix(".png"),
-                path.parent / "lengths_initial.png",
-            )
-            saved_bytes = [output.read_bytes() for output in saved_paths]
-            _, encoded = cv.imencode(".png", after_initial)
-            # 1枚目と2枚目の、どちらのPNG変換で失敗しても既存の3ファイルを保つ。
-            for results in ([(False, None)], [(True, encoded), (False, None)]):
-                with patch.object(cv, "imencode", side_effect=results):
-                    with self.assertRaises(OSError):
-                        gui["write_measurement"](
-                            path, source, after, after_initial, after_overlay
-                        )
-                self.assertEqual(
-                    [output.read_bytes() for output in saved_paths], saved_bytes
+                self.assertAlmostEqual(float(csv_row[name]), after[name])
+            self.assertNotIn("axis_mode", csv_row)
+            for suffix, expected in (
+                (".png", after_overlay),
+                ("_initial.png", after_initial),
+            ):
+                saved_path = new_path.parent / f"lengths{suffix}"
+                decoded = cv.imdecode(
+                    np.frombuffer(saved_path.read_bytes(), np.uint8), cv.IMREAD_COLOR
                 )
+                np.testing.assert_array_equal(decoded, expected)
+        for protected in (
+            source.with_suffix(".csv"),
+            source,
+            self.directory / "入力_initial.png",
+        ):
+            protected.write_bytes(b"protected image")
+            with self.assertRaises(ValueError):
+                new["write_measurement"](
+                    source.with_suffix(".csv"),
+                    protected,
+                    after,
+                    after_initial,
+                    after_overlay,
+                )
+            self.assertEqual(protected.read_bytes(), b"protected image")
+        saved_paths = (
+            new_path,
+            new_path.with_suffix(".png"),
+            new_path.parent / "lengths_initial.png",
+        )
+        saved_bytes = [output.read_bytes() for output in saved_paths]
+        _, encoded = cv.imencode(".png", after_initial)
+        # 1枚目と2枚目の、どちらのPNG変換で失敗しても既存の3ファイルを保つ。
+        for results in ([(False, None)], [(True, encoded), (False, None)]):
+            with patch.object(cv, "imencode", side_effect=results):
+                with self.assertRaises(OSError):
+                    new["write_measurement"](
+                        new_path, source, after, after_initial, after_overlay
+                    )
+            self.assertEqual(
+                [output.read_bytes() for output in saved_paths], saved_bytes
+            )
         self.assertEqual(source.read_bytes(), b"protected image")
 
     def test_both_comparisons_and_all_six_graph_modes_are_identical(self):

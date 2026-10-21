@@ -10,15 +10,19 @@ import numpy as np
 
 from utils.file_io import check_output_path, encode_png, read_image
 from utils.gui_parts import create_layout
-from utils.measurement_csv import write_csv
+from utils.measurement_csv import positive_value, write_csv
 from workflow_settings import MM_PER_PX, OUTPUT_DIRECTORY, RECTIFIED_DIRECTORY
 
 ITERATIONS = 5
 RANDOM_SEED = 0
+EVALUATION_INTERVAL_MM = 1.0
+# 側辺に沿う窓の全幅。0なら平滑化しない。局所直線で画素の階段をならす。
+SMOOTHING_WIDTH_MM = 2.0
 # 前景指定の外側にも、背景の判定用に幅・高さの10%（最低10px）を残す。
 GRABCUT_MARGIN_RATIO = 0.1
 
-type RectRatios = tuple[float, float, float, float]
+type PolygonRatios = list[tuple[float, float]]
+type Axis = tuple[np.ndarray, np.ndarray]
 
 # OpenCVの色指定はBGR順。
 PALETTE = np.zeros((4, 3), dtype=np.uint8)
@@ -33,28 +37,37 @@ REGION_NAMES = {
 }
 
 
-def initial_mask(image: np.ndarray, regions: dict[int, list[RectRatios]]) -> np.ndarray:
+def polygon_pixels(polygon: PolygonRatios, width: int, height: int) -> np.ndarray:
+    points = np.asarray(polygon, dtype=np.float64)
+    if (
+        points.ndim != 2
+        or points.shape[1] != 2
+        or len(points) < 3
+        or not np.isfinite(points).all()
+        or np.any(points < 0)
+        or np.any(points > 1)
+    ):
+        raise ValueError("多角形は画像内の異なる3点以上で囲んでください")
+    pixels = np.rint(points * (width - 1, height - 1)).astype(np.int32)
+    if cv.contourArea(pixels) < 1:
+        raise ValueError("多角形の面積が不足しています。指定範囲を広げてください")
+    return pixels
+
+
+def initial_mask(
+    image: np.ndarray, regions: dict[int, list[PolygonRatios]]
+) -> np.ndarray:
     height, width = image.shape[:2]
     labels = np.full((height, width), cv.GC_PR_BGD, np.uint8)
     for label in (cv.GC_PR_FGD, cv.GC_BGD, cv.GC_FGD):
-        for left_ratio, top_ratio, right_ratio, bottom_ratio in regions[label]:
-            if not (
-                0 <= left_ratio < right_ratio <= 1
-                and 0 <= top_ratio < bottom_ratio <= 1
-            ):
-                raise ValueError("矩形は0〜1の範囲で、左 < 右、上 < 下にしてください")
-            left_px = int(width * left_ratio)
-            top_px = int(height * top_ratio)
-            right_px = int(width * right_ratio)
-            bottom_px = int(height * bottom_ratio)
-            if left_px == right_px or top_px == bottom_px:
-                raise ValueError("矩形が1画素未満です。指定範囲を広げてください")
-            labels[top_px:bottom_px, left_px:right_px] = label
+        for polygon in regions[label]:
+            pixels = polygon_pixels(polygon, width, height)
+            cv.fillPoly(labels, [pixels], label)
     return labels
 
 
 def initial_overlay(
-    image: np.ndarray, regions: dict[int, list[RectRatios]]
+    image: np.ndarray, regions: dict[int, list[PolygonRatios]]
 ) -> np.ndarray:
     labels = initial_mask(image, regions)
     color_mask = PALETTE[labels]
@@ -79,14 +92,10 @@ def draw_edge_names(image: np.ndarray) -> None:
         )
 
 
-def measure_lengths(
-    image: np.ndarray, regions: dict[int, list[RectRatios]], start_y: int, end_y: int
-) -> tuple[dict, np.ndarray]:
+def extract_specimen(
+    image: np.ndarray, regions: dict[int, list[PolygonRatios]]
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     height, width = image.shape[:2]
-    if not math.isfinite(MM_PER_PX) or MM_PER_PX <= 0:
-        raise ValueError("MM_PER_PXを正の数値にしてください")
-    if not 0 <= start_y < end_y < height:
-        raise ValueError(f"計測区間を0 ≤ 開始y < 終了y ≤ {height - 1}にしてください")
     labels = initial_mask(image, regions)
     initial_foreground = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
     if not initial_foreground.any() or initial_foreground.all():
@@ -103,8 +112,6 @@ def measure_lengths(
     right = min(width, right + margin_x)
     top = max(0, top - margin_y)
     bottom = min(height, bottom + margin_y)
-    if start_y < top or end_y >= bottom:
-        raise ValueError("計測区間全体が入るように前景候補を広げてください")
     working_image = image[top:bottom, left:right].copy()
     labels = labels[top:bottom, left:right].copy()
     background_model = np.zeros((1, 65), np.float64)
@@ -132,58 +139,315 @@ def measure_lengths(
         if area > largest_area:
             contour = candidate
             largest_area = area
-    mask = np.zeros(labels.shape, np.uint8)
-    cv.drawContours(mask, [contour], -1, 255, cv.FILLED)
+    points = contour.reshape(-1, 2).astype(np.float64)
+    points += (left, top)
+    return points, (left, top, right, bottom)
 
-    left_points = []
-    right_points = []
-    for y in range(start_y, end_y + 1):
-        xs = np.flatnonzero(mask[y - top])
-        if len(xs) == 0:
-            raise ValueError(
-                f"y={y}に試料がありません。区間か初期指定を調整してください"
-            )
-        if xs[0] == 0 or xs[-1] == mask.shape[1] - 1:
-            raise ValueError(
-                "試料が処理範囲の端に接しています。前景候補を広げてください"
-            )
-        left_points.append((int(xs[0]) + left, y))
-        right_points.append((int(xs[-1]) + left, y))
-    left_px = 0.0
-    right_px = 0.0
-    for index in range(1, len(left_points)):
-        previous_left = left_points[index - 1]
-        current_left = left_points[index]
-        previous_right = right_points[index - 1]
-        current_right = right_points[index]
-        left_px += math.hypot(
-            current_left[0] - previous_left[0], current_left[1] - previous_left[1]
+
+def manual_axis(points: np.ndarray) -> Axis:
+    points = np.asarray(points, dtype=np.float64)
+    if points.shape != (2, 2) or not np.isfinite(points).all():
+        raise ValueError("軸は画像上の2点で指定してください")
+    direction = points[1] - points[0]
+    length = float(np.linalg.norm(direction))
+    if length < 1:
+        raise ValueError("軸の2点を1px以上離してください")
+    direction /= length
+    # 上→下へ向きを固定し、クリック順によるDR/OPの逆転を防ぐ。
+    if direction[1] < 0 or (direction[1] == 0 and direction[0] < 0):
+        direction = -direction
+    return points.mean(axis=0), direction
+
+
+def interval_positions(interval_points: np.ndarray, axis: Axis) -> tuple[float, float]:
+    points = np.asarray(interval_points, dtype=np.float64)
+    if points.shape != (2, 2) or not np.isfinite(points).all():
+        raise ValueError("区間の上側・下側を画像上の2点で指定してください")
+    origin, direction = axis
+    positions = (points - origin) @ direction
+    start, end = sorted(positions)
+    if end - start < 1:
+        raise ValueError("上下断面を軸方向に1px以上離してください")
+    return float(start), float(end)
+
+
+def fixed_interval_points(
+    center: np.ndarray, length_mm: float, axis: Axis
+) -> np.ndarray:
+    center = np.asarray(center, dtype=np.float64)
+    if center.shape != (2,) or not np.isfinite(center).all():
+        raise ValueError("区間の中心を画像上で指定してください")
+    if not math.isfinite(MM_PER_PX) or MM_PER_PX <= 0:
+        raise ValueError("MM_PER_PXを正の数値にしてください")
+    length_mm = positive_value(length_mm, "基準区間長")
+    length_px = length_mm / MM_PER_PX
+    if not math.isfinite(length_px) or length_px < 1:
+        raise ValueError("基準区間長は画像上で1px以上の長さにしてください")
+    half_interval = axis[1] * length_px / 2
+    return np.array([center - half_interval, center + half_interval])
+
+
+def section_edges(
+    contour: np.ndarray,
+    bounds: tuple[int, int, int, int],
+    axis: Axis,
+    positions: np.ndarray,
+    outermost: bool = False,
+) -> np.ndarray:
+    origin, direction = axis
+    normal = np.array([direction[1], -direction[0]])
+    relative = contour - origin
+    along = relative @ direction
+    across = relative @ normal
+    next_along = np.roll(along, -1)
+    next_across = np.roll(across, -1)
+    edges = []
+    left, top, right, bottom = bounds
+    for position in positions:
+        # 半開区間で判定し、輪郭の頂点を二重に数えない。
+        crosses = ((along <= position) & (position < next_along)) | (
+            (next_along <= position) & (position < along)
         )
-        right_px += math.hypot(
-            current_right[0] - previous_right[0], current_right[1] - previous_right[1]
+        fraction = (position - along[crosses]) / (next_along[crosses] - along[crosses])
+        intersections = across[crosses] + fraction * (
+            next_across[crosses] - across[crosses]
         )
-    total_px = left_px + right_px
+        intersections.sort()
+        # 接するだけの頂点は同じ位置が2回現れる。長さ0の区間を除く。
+        spans = intersections.reshape(-1, 2)
+        spans = spans[spans[:, 1] - spans[:, 0] > 1e-7]
+        if len(spans) == 0 or (len(spans) != 1 and not outermost):
+            raise ValueError(
+                "断面で左右1本ずつの側辺を取れません。区間・軸・抽出を確認してください"
+            )
+        side_edges = np.array([spans[0, 0], spans[-1, 1]])
+        points = origin + position * direction + side_edges[:, None] * normal
+        if (
+            np.any(points[:, 0] <= left + 0.5)
+            or np.any(points[:, 0] >= right - 1.5)
+            or np.any(points[:, 1] <= top + 0.5)
+            or np.any(points[:, 1] >= bottom - 1.5)
+        ):
+            raise ValueError(
+                "試料が処理範囲の端に接しています。前景候補か画像範囲を広げてください"
+            )
+        edges.append(side_edges)
+    return np.asarray(edges)
+
+
+def estimate_axis(
+    contour: np.ndarray,
+    bounds: tuple[int, int, int, int],
+    interval_points: np.ndarray,
+    fixed_length_mm: float | None = None,
+) -> Axis:
+    # 区間の2点を仮の方向に使い、その区間内の断面中点で当てはめ直す。
+    axis = manual_axis(interval_points)
+    center = np.asarray(interval_points, dtype=np.float64).mean(axis=0)
+    for _ in range(3):
+        if fixed_length_mm is not None:
+            # 軸を傾けても区間が投影で短くならないよう、断面を置き直す。
+            interval_points = fixed_interval_points(center, fixed_length_mm, axis)
+        start, end = interval_positions(interval_points, axis)
+        count = min(101, max(3, math.ceil(end - start) + 1))
+        positions = np.linspace(start, end, count)
+        edges = section_edges(contour, bounds, axis, positions, outermost=True)
+        origin, direction = axis
+        normal = np.array([direction[1], -direction[0]])
+        midpoints = (
+            origin
+            + positions[:, None] * direction
+            + edges.mean(axis=1)[:, None] * normal
+        )
+        vx, vy, x, y = cv.fitLine(
+            midpoints.astype(np.float32), cv.DIST_L2, 0, 0.01, 0.01
+        ).ravel()
+        fitted_points = np.array([[x, y], [x + vx * 100, y + vy * 100]])
+        axis = manual_axis(fitted_points)
+    return axis
+
+
+def side_chains(
+    contour: np.ndarray,
+    bounds: tuple[int, int, int, int],
+    interval_points: np.ndarray,
+    axis: Axis,
+) -> list[np.ndarray]:
+    start, end = interval_positions(interval_points, axis)
+    # 区間の両端では側辺を一意に切れることを確認する。
+    section_edges(contour, bounds, axis, np.array([start, end]))
+    origin, direction = axis
+    along = (contour - origin) @ direction
+    chains = []
+    current_chain = []
+    for index in range(len(contour)):
+        next_index = (index + 1) % len(contour)
+        point = contour[index]
+        next_point = contour[next_index]
+        first = along[index]
+        last = along[next_index]
+        if abs(last - first) < 1e-12:
+            if not start <= first <= end:
+                continue
+            enter, leave = 0.0, 1.0
+        else:
+            first_cut = (start - first) / (last - first)
+            last_cut = (end - first) / (last - first)
+            enter = max(0.0, min(first_cut, last_cut))
+            leave = min(1.0, max(first_cut, last_cut))
+            if leave <= enter:
+                continue
+        clipped_start = point + enter * (next_point - point)
+        clipped_end = point + leave * (next_point - point)
+        if current_chain and not np.allclose(
+            current_chain[-1], clipped_start, atol=1e-7, rtol=0
+        ):
+            chains.append(np.asarray(current_chain))
+            current_chain = []
+        if not current_chain:
+            current_chain.append(clipped_start)
+        current_chain.append(clipped_end)
+    if current_chain:
+        chains.append(np.asarray(current_chain))
+    # findContoursの始点が計測区間内にある場合、末尾と先頭は同じ側辺。
+    if len(chains) > 1 and np.allclose(chains[-1][-1], chains[0][0], atol=1e-7, rtol=0):
+        chains[0] = np.concatenate((chains[-1], chains[0][1:]))
+        chains.pop()
+    if len(chains) != 2:
+        raise ValueError(
+            "上下断面を結ぶ側辺を2本取れません。区間・抽出を確認してください"
+        )
+    left, top, right, bottom = bounds
+    for index, chain in enumerate(chains):
+        if np.dot(chain[-1] - chain[0], direction) < 0:
+            chain = chain[::-1]
+        endpoints = (chain[[0, -1]] - origin) @ direction
+        if not np.allclose(endpoints, [start, end], atol=1e-6, rtol=0):
+            raise ValueError("上下断面の両方を通る区間を指定してください")
+        if (
+            np.any(chain[:, 0] <= left + 0.5)
+            or np.any(chain[:, 0] >= right - 1.5)
+            or np.any(chain[:, 1] <= top + 0.5)
+            or np.any(chain[:, 1] >= bottom - 1.5)
+        ):
+            raise ValueError(
+                "試料が処理範囲の端に接しています。前景候補か画像範囲を広げてください"
+            )
+        chains[index] = chain
+    normal = np.array([direction[1], -direction[0]])
+    if np.dot(chains[0][0] - chains[1][0], normal) > 0:
+        chains.reverse()
+    return chains
+
+
+def smoothed_sides(contour, bounds, interval_points, axis) -> list[np.ndarray]:
+    for value, name in (
+        (MM_PER_PX, "MM_PER_PX"),
+        (EVALUATION_INTERVAL_MM, "EVALUATION_INTERVAL_MM"),
+    ):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name}を正の数値にしてください")
+    if not math.isfinite(SMOOTHING_WIDTH_MM) or SMOOTHING_WIDTH_MM < 0:
+        raise ValueError("SMOOTHING_WIDTH_MMを0以上の数値にしてください")
+    step = EVALUATION_INTERVAL_MM / MM_PER_PX
+    half_window = SMOOTHING_WIDTH_MM / MM_PER_PX / 2
+    origin, direction = axis
+    start, end = interval_positions(interval_points, axis)
+    sides = []
+    for chain in side_chains(contour, bounds, interval_points, axis):
+        raw_steps = np.linalg.norm(np.diff(chain, axis=0), axis=1)
+        distances = np.concatenate(([0.0], np.cumsum(raw_steps)))
+        positions = np.append(np.arange(0, distances[-1], step), distances[-1])
+        if len(positions) < 3:
+            raise ValueError(
+                "側辺に評価点が3点以上入るよう、評価間隔を小さくしてください"
+            )
+        dense_count = max(3, math.ceil(distances[-1] / min(1.0, step)) + 1)
+        dense_positions = np.linspace(0, distances[-1], dense_count)
+        dense_points = np.column_stack(
+            (
+                np.interp(dense_positions, distances, chain[:, 0]),
+                np.interp(dense_positions, distances, chain[:, 1]),
+            )
+        )
+        points = np.empty((len(positions), 2), dtype=np.float64)
+        for index, position in enumerate(positions):
+            nearby = np.abs(dense_positions - position) <= half_window + 1e-8
+            if half_window == 0 or np.count_nonzero(nearby) < 3:
+                for coordinate in (0, 1):
+                    points[index, coordinate] = np.interp(
+                        position, distances, chain[:, coordinate]
+                    )
+                continue
+            offsets = dense_positions[nearby] - position
+            matrix = np.column_stack((np.ones(len(offsets)), offsets))
+            # 端では窓を区間内に切り詰め、直線の方向を保つ局所直線を使う。
+            coefficients, _, _, _ = np.linalg.lstsq(
+                matrix, dense_points[nearby], rcond=None
+            )
+            points[index] = coefficients[0]
+        # 平滑化後も両端を指定した断面上へ戻す。
+        for index, position in ((0, start), (-1, end)):
+            correction = position - np.dot(points[index] - origin, direction)
+            points[index] += correction * direction
+        sides.append(points)
+    return sides
+
+
+def measure_contour(
+    contour: np.ndarray,
+    bounds: tuple[int, int, int, int],
+    interval_points: np.ndarray,
+    axis: Axis,
+) -> dict:
+    sides = smoothed_sides(contour, bounds, interval_points, axis)
+    start, end = interval_positions(interval_points, axis)
+    interval_mm = (end - start) * MM_PER_PX
     row = {
-        "image_width": width,
-        "image_height": height,
         "mm_per_px": MM_PER_PX,
-        "start_y": start_y,
-        "end_y": end_y,
-        "left_px": left_px,
-        "left_mm": left_px * MM_PER_PX,
-        "right_px": right_px,
-        "right_mm": right_px * MM_PER_PX,
-        "total_px": total_px,
-        "total_mm": total_px * MM_PER_PX,
+        "interval_length_mm": interval_mm,
+        "evaluation_interval_mm": EVALUATION_INTERVAL_MM,
+        "smoothing_width_mm": SMOOTHING_WIDTH_MM,
     }
+    for side, name in ((0, "left"), (1, "right")):
+        steps = np.diff(sides[side], axis=0)
+        length_px = float(np.linalg.norm(steps, axis=1).sum())
+        row[f"{name}_px"] = length_px
+        row[f"{name}_mm"] = length_px * MM_PER_PX
+        row[f"{name}_excess_percent"] = (length_px * MM_PER_PX / interval_mm - 1) * 100
+    row["total_px"] = row["left_px"] + row["right_px"]
+    row["total_mm"] = row["left_mm"] + row["right_mm"]
+    return row
+
+
+def draw_axis_and_sections(image: np.ndarray, interval_points: np.ndarray, axis: Axis):
+    origin, direction = axis
+    normal = np.array([direction[1], -direction[0]])
+    start, end = interval_positions(interval_points, axis)
+    reach = math.hypot(*image.shape[:2])
+    for position in (start, end):
+        center = origin + position * direction
+        ends = np.rint([center - reach * normal, center + reach * normal]).astype(int)
+        cv.line(image, tuple(ends[0]), tuple(ends[1]), (0, 255, 255), 1)
+    ends = np.rint([origin + start * direction, origin + end * direction]).astype(int)
+    cv.line(image, tuple(ends[0]), tuple(ends[1]), (255, 255, 0), 2)
+
+
+def measurement_overlay(image, contour, bounds, interval_points, axis) -> np.ndarray:
+    sides = smoothed_sides(contour, bounds, interval_points, axis)
     overlay = image.copy()
-    overlay[:start_y] //= 2
-    overlay[end_y + 1 :] //= 2
-    for y in (start_y, end_y):
-        cv.line(overlay, (0, y), (width - 1, y), (0, 255, 255), 1)
-    for points in (left_points, right_points):
-        cv.polylines(overlay, [np.array(points, np.int32)], False, (0, 0, 255), 2)
+    for points in sides:
+        cv.polylines(overlay, [np.rint(points).astype(np.int32)], False, (0, 0, 255), 2)
+    draw_axis_and_sections(overlay, interval_points, axis)
     draw_edge_names(overlay)
+    return overlay
+
+
+def measure_lengths(image, regions, interval_points, axis) -> tuple[dict, np.ndarray]:
+    contour, bounds = extract_specimen(image, regions)
+    row = measure_contour(contour, bounds, interval_points, axis)
+    row["image_height"], row["image_width"] = image.shape[:2]
+    overlay = measurement_overlay(image, contour, bounds, interval_points, axis)
     return row, overlay
 
 
@@ -214,13 +478,19 @@ def main() -> None:
     input_path: Path | None = None
     image: np.ndarray | None = None
     height = width = 1
-    regions: dict[int, list[RectRatios]] = {label: [] for label in REGION_NAMES}
+    regions: dict[int, list[PolygonRatios]] = {label: [] for label in REGION_NAMES}
     region_rows: list[tuple[int, int]] = []
     photo: tk.PhotoImage | None = None
     scale = 1.0
     offset_x = offset_y = 0.0
     pan_start: tuple[int, int] | None = None
-    drag_start_ratios: tuple[float, float] | None = None
+    pending_polygon: PolygonRatios = []
+    interval_center: tuple[float, float] | None = None
+    interval_points: np.ndarray | None = None
+    manual_points: list[tuple[float, float]] = []
+    contour: np.ndarray | None = None
+    bounds: tuple[int, int, int, int] | None = None
+    axis: Axis | None = None
 
     measurement: dict | None = None
     result_image: np.ndarray | None = None
@@ -233,12 +503,11 @@ def main() -> None:
     status = tk.StringVar()
     file_text = tk.StringVar(value="未読込")
 
-    start_text = tk.StringVar(value="0")
-    end_text = tk.StringVar()
-    interval_text = tk.StringVar(value="区間長：—")
+    length_text = tk.StringVar()
+    axis_text = tk.StringVar(value="軸：未推定")
 
     def load_image() -> None:
-        nonlocal image, input_path, height, width
+        nonlocal image, input_path, height, width, interval_center
         selected = filedialog.askopenfilename(
             parent=root,
             title="補正画像を選ぶ",
@@ -259,12 +528,16 @@ def main() -> None:
         input_path = Path(selected).resolve()
         height, width = image.shape[:2]
         file_text.set(f"{input_path.name}  ({width} × {height} px)")
-        start_text.set("0")
-        end_text.set(str(height - 1))
+        interval_center = None
         clear_regions()
         fit_image()
 
     def on_regions_changed() -> None:
+        nonlocal contour, bounds, axis, interval_points
+        contour = bounds = axis = interval_points = None
+        pending_polygon.clear()
+        manual_points.clear()
+        axis_text.set("軸：未推定")
         region_rows.clear()
         region_list.delete(0, tk.END)
         for label, name in REGION_NAMES.items():
@@ -277,18 +550,19 @@ def main() -> None:
         render()
 
     def clear_regions() -> None:
-        for rectangles in regions.values():
-            rectangles.clear()
+        for polygons in regions.values():
+            polygons.clear()
         on_regions_changed()
 
     def show_initial(_event=None) -> None:
+        pending_polygon.clear()
+        manual_points.clear()
         view.set("initial")
         selection_target.set("region")
         render()
 
     def render(_event=None) -> None:
-        nonlocal photo, drag_start_ratios
-        drag_start_ratios = None
+        nonlocal photo
         canvas.delete("all")
         if image is None:
             return
@@ -324,68 +598,58 @@ def main() -> None:
                     (display_height, display_width), cv.GC_PR_BGD, np.uint8
                 )
                 for label in (cv.GC_PR_FGD, cv.GC_BGD, cv.GC_FGD):
-                    for left, top, right, bottom in regions[label]:
-                        x0 = max(
-                            0,
-                            round(offset_x + int(left * width) * scale - display_left),
-                        )
-                        y0 = max(
-                            0, round(offset_y + int(top * height) * scale - display_top)
-                        )
-                        x1 = max(
-                            0,
-                            round(offset_x + int(right * width) * scale - display_left),
-                        )
-                        y1 = max(
-                            0,
-                            round(
-                                offset_y + int(bottom * height) * scale - display_top
-                            ),
-                        )
-                        preview_labels[y0:y1, x0:x1] = label
+                    for polygon in regions[label]:
+                        pixels = polygon_pixels(polygon, width, height)
+                        pixels = np.rint(
+                            pixels * scale
+                            + (offset_x - display_left, offset_y - display_top)
+                        ).astype(np.int32)
+                        cv.fillPoly(preview_labels, [pixels], label)
                 small = cv.addWeighted(small, 0.65, PALETTE[preview_labels], 0.35, 0)
             photo = tk.PhotoImage(master=root, data=encode_png(small), format="PNG")
             canvas.create_image(display_left, display_top, image=photo, anchor="nw")
         selection = region_list.curselection()
         if view.get() == "initial" and selection:
             label, index = region_rows[selection[0]]
-            left_ratio, top_ratio, right_ratio, bottom_ratio = regions[label][index]
-            canvas.create_rectangle(
-                offset_x + left_ratio * width * scale,
-                offset_y + top_ratio * height * scale,
-                offset_x + right_ratio * width * scale,
-                offset_y + bottom_ratio * height * scale,
+            points = canvas_polygon(regions[label][index])
+            canvas.create_polygon(
+                *points,
                 outline="yellow",
                 width=2,
+                fill="",
             )
-        for name, value in (("開始", start_text), ("終了", end_text)):
-            try:
-                row_y = int(value.get())
-            except ValueError:
-                continue
-            if not 0 <= row_y < height:
-                continue
-            # 行番号を画像上の画素中心へ合わせる。
-            line_y = offset_y + (row_y + 0.5) * scale
-            if not 0 <= line_y < canvas_height or display_width <= 0:
-                continue
+        if pending_polygon:
+            points = canvas_polygon(pending_polygon)
+            if len(pending_polygon) > 1:
+                canvas.create_line(*points, fill="white", width=2, dash=(5, 3))
+            for x, y in zip(points[::2], points[1::2]):
+                canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="white")
+        if interval_center is not None:
+            x = offset_x + interval_center[0] * scale
+            y = offset_y + interval_center[1] * scale
+            canvas.create_oval(x - 4, y - 4, x + 4, y + 4, outline="yellow", width=2)
+            canvas.create_text(x + 7, y, text="中心", fill="yellow", anchor="w")
+        if axis is not None and interval_points is not None:
+            origin, direction = axis
+            normal = np.array([direction[1], -direction[0]])
+            start, end = interval_positions(np.asarray(interval_points), axis)
+            for position in (start, end):
+                center = origin + position * direction
+                reach = math.hypot(width, height)
+                ends = np.array([center - reach * normal, center + reach * normal])
+                ends = ends * scale + (offset_x, offset_y)
+                canvas.create_line(
+                    *ends.ravel(), fill="yellow", width=2, tags="interval"
+                )
+            ends = np.array([origin + start * direction, origin + end * direction])
+            ends = ends * scale + (offset_x, offset_y)
             canvas.create_line(
-                display_left,
-                line_y,
-                display_right,
-                line_y,
-                fill="yellow",
-                width=2,
-                tags="interval",
+                *ends.ravel(), fill="cyan", width=2, dash=(6, 3), tags="axis"
             )
-            canvas.create_text(
-                display_left + 8,
-                max(38, line_y - 3),
-                text=f"{name} y={row_y}",
-                fill="yellow",
-                anchor="sw",
-                tags="interval",
-            )
+        for point in manual_points:
+            x = offset_x + point[0] * scale
+            y = offset_y + point[1] * scale
+            canvas.create_oval(x - 4, y - 4, x + 4, y + 4, outline="cyan", width=2)
         for name, x, anchor in (("DR", 8, "nw"), ("OP", canvas_width - 8, "ne")):
             item = canvas.create_text(
                 x,
@@ -400,6 +664,17 @@ def main() -> None:
             if box is not None:
                 background = canvas.create_rectangle(box, fill="#242424", outline="")
                 canvas.tag_lower(background, item)
+
+    def canvas_polygon(polygon: PolygonRatios) -> list[float]:
+        points = []
+        for x_ratio, y_ratio in polygon:
+            points.extend(
+                (
+                    offset_x + x_ratio * (width - 1) * scale,
+                    offset_y + y_ratio * (height - 1) * scale,
+                )
+            )
+        return points
 
     def fit_image() -> None:
         nonlocal scale, offset_x, offset_y, pan_start
@@ -444,15 +719,8 @@ def main() -> None:
         pan_start = None
         canvas.configure(cursor="crosshair")
 
-    def image_ratios(event: tk.Event) -> tuple[float, float]:
-        x_ratio = (event.x - offset_x) / (width * scale)
-        y_ratio = (event.y - offset_y) / (height * scale)
-        x_ratio = min(1.0, max(0.0, x_ratio))
-        y_ratio = min(1.0, max(0.0, y_ratio))
-        return x_ratio, y_ratio
-
-    def start_draw(event: tk.Event) -> None:
-        nonlocal drag_start_ratios
+    def click_image(event: tk.Event) -> None:
+        nonlocal axis, interval_center, interval_points
         if image is None:
             return
         if (
@@ -460,59 +728,74 @@ def main() -> None:
             and offset_y <= event.y < offset_y + height * scale
         ):
             target = selection_target.get()
-            if target in ("start", "end"):
-                row_y = min(height - 1, int((event.y - offset_y) / scale))
-                if target == "start":
-                    start_text.set(str(row_y))
+            point = ((event.x - offset_x) / scale, (event.y - offset_y) / scale)
+            point = (min(width - 1, point[0]), min(height - 1, point[1]))
+            if target == "center":
+                pending_polygon.clear()
+                interval_center = point
+                on_interval_changed()
+                return
+            if target == "axis":
+                if contour is None or bounds is None or interval_center is None:
+                    status.set("先に区間を指定し、試料抽出・軸を自動推定してください")
+                    return
+                clear_results()
+                view.set("initial")
+                manual_points.append(point)
+                if len(manual_points) == 2:
+                    axis = None
+                    try:
+                        proposed_axis = manual_axis(np.asarray(manual_points))
+                        length_mm = positive_value(length_text.get(), "基準区間長")
+                        interval_points = fixed_interval_points(
+                            np.asarray(interval_center), length_mm, proposed_axis
+                        )
+                    except ValueError as error:
+                        status.set(str(error))
+                        axis_text.set("軸：未設定")
+                    else:
+                        axis = proposed_axis
+                        axis_text.set("軸：手動2点")
+                        status.set("")
+                    manual_points.clear()
                 else:
-                    end_text.set(str(row_y))
+                    axis = None
+                    interval_points = None
+                    axis_text.set("手動軸：1点")
+                    status.set("")
+                render()
                 return
             if view.get() != "initial":
                 return
-            drag_start_ratios = image_ratios(event)
+            clear_results()
+            pending_polygon.append((point[0] / (width - 1), point[1] / (height - 1)))
+            status.set(f"多角形：{len(pending_polygon)}点")
+            render()
 
-    def drag_draw(event: tk.Event) -> None:
-        if drag_start_ratios is None:
+    def finish_polygon() -> None:
+        if image is None or not pending_polygon:
             return
-        start_x_ratio, start_y_ratio = drag_start_ratios
-        end_x_ratio, end_y_ratio = image_ratios(event)
-        start_canvas_x = offset_x + start_x_ratio * width * scale
-        start_canvas_y = offset_y + start_y_ratio * height * scale
-        end_canvas_x = offset_x + end_x_ratio * width * scale
-        end_canvas_y = offset_y + end_y_ratio * height * scale
-        canvas.delete("drag")
-        canvas.create_rectangle(
-            start_canvas_x,
-            start_canvas_y,
-            end_canvas_x,
-            end_canvas_y,
-            outline="white",
-            width=2,
-            dash=(5, 3),
-            tags="drag",
-        )
-
-    def end_draw(event: tk.Event) -> None:
-        nonlocal drag_start_ratios
-        if drag_start_ratios is None:
+        try:
+            polygon_pixels(pending_polygon, width, height)
+        except ValueError as error:
+            status.set(str(error))
             return
-        start_x_ratio, start_y_ratio = drag_start_ratios
-        end_x_ratio, end_y_ratio = image_ratios(event)
-        left_ratio, right_ratio = sorted((start_x_ratio, end_x_ratio))
-        top_ratio, bottom_ratio = sorted((start_y_ratio, end_y_ratio))
-        drag_start_ratios = None
-        canvas.delete("drag")
-        left_px = int(width * left_ratio)
-        right_px = int(width * right_ratio)
-        top_px = int(height * top_ratio)
-        bottom_px = int(height * bottom_ratio)
-        if left_px >= right_px or top_px >= bottom_px:
-            status.set("矩形を1画素以上に広げてください")
-            return
-        rect = (left_ratio, top_ratio, right_ratio, bottom_ratio)
-        label = mode.get()
-        regions[label].append(rect)
+        regions[mode.get()].append(list(pending_polygon))
         on_regions_changed()
+
+    def cancel_drawing() -> None:
+        pending_polygon.clear()
+        manual_points.clear()
+        if axis is None:
+            axis_text.set("軸：未推定")
+        status.set("")
+        render()
+
+    def select_target() -> None:
+        cancel_drawing()
+        if selection_target.get() == "region":
+            view.set("initial")
+        render()
 
     def delete_region() -> None:
         selection = region_list.curselection()
@@ -527,27 +810,75 @@ def main() -> None:
         result_image = None
         for item in result_table.get_children():
             result_table.set(item, "length", "—")
+            result_table.set(item, "excess", "—")
         save_measurement_button.state(["disabled"])
 
     def on_interval_changed(*_args) -> None:
-        interval_text.set("区間長：—")
-        try:
-            start_y = int(start_text.get())
-            end_y = int(end_text.get())
-        except ValueError:
-            start_y = end_y = -1
-        if (
-            image is not None
-            and 0 <= start_y < end_y < height
-            and math.isfinite(MM_PER_PX)
-            and MM_PER_PX > 0
-        ):
-            interval_mm = (end_y - start_y) * MM_PER_PX
-            interval_text.set(f"区間長：{interval_mm:.3f} mm")
+        nonlocal axis, interval_points
+        axis = interval_points = None
+        manual_points.clear()
+        axis_text.set("軸：未推定")
         clear_results()
         if view.get() == "result":
             view.set("initial")
+        if contour is not None and bounds is not None and interval_center is not None:
+            fit_axis()
+        else:
+            status.set("")
+        render()
+
+    def fit_axis() -> None:
+        nonlocal axis, interval_points
+        axis = interval_points = None
+        if contour is None or bounds is None or interval_center is None:
+            return
+        try:
+            length_mm = positive_value(length_text.get(), "基準区間長")
+            center = np.asarray(interval_center)
+            seed_axis = (center, np.array([0.0, 1.0]))
+            seed_points = fixed_interval_points(center, length_mm, seed_axis)
+            fitted_axis = estimate_axis(
+                contour, bounds, seed_points, fixed_length_mm=length_mm
+            )
+            interval_points = fixed_interval_points(center, length_mm, fitted_axis)
+            axis = fitted_axis
+        except (ValueError, cv.error) as error:
+            axis_text.set("軸：自動推定失敗")
+            status.set(str(error))
+            return
+        axis_text.set("軸：自動")
         status.set("")
+
+    def extract_and_estimate() -> None:
+        nonlocal contour, bounds, axis, interval_points
+        clear_results()
+        manual_points.clear()
+        contour = bounds = axis = interval_points = None
+        axis_text.set("軸：未推定")
+        view.set("initial")
+        if image is None:
+            status.set("補正画像を読み込んでください")
+            return
+        if pending_polygon or interval_center is None:
+            status.set("多角形を確定し、基準区間長と区間の中心を指定してください")
+            return
+        try:
+            length_mm = positive_value(length_text.get(), "基準区間長")
+            center = np.asarray(interval_center)
+            fixed_interval_points(center, length_mm, (center, np.array([0.0, 1.0])))
+        except ValueError as error:
+            status.set(str(error))
+            return
+        status.set("試料抽出中…")
+        root.update_idletasks()
+        try:
+            contour, bounds = extract_specimen(image, regions)
+        except ValueError as error:
+            status.set(str(error))
+        except cv.error:
+            status.set("試料を抽出できません。多角形を調整してください")
+        else:
+            fit_axis()
         render()
 
     def calculate() -> None:
@@ -559,16 +890,23 @@ def main() -> None:
         if image is None:
             status.set("補正画像を読み込んでください")
             return
-        try:
-            start_y = int(start_text.get())
-            end_y = int(end_text.get())
-        except ValueError:
-            status.set("開始yと終了yは整数で入力してください")
+        if (
+            pending_polygon
+            or manual_points
+            or contour is None
+            or bounds is None
+            or axis is None
+            or interval_points is None
+        ):
+            status.set("多角形と区間を指定し、軸を推定・確認してから計測してください")
             return
         status.set("計測中…")
         root.update_idletasks()
         try:
-            measured, overlay = measure_lengths(image, regions, start_y, end_y)
+            points = np.asarray(interval_points)
+            measured = measure_contour(contour, bounds, points, axis)
+            measured["image_height"], measured["image_width"] = image.shape[:2]
+            overlay = measurement_overlay(image, contour, bounds, points, axis)
         except ValueError as error:
             status.set(str(error))
             return
@@ -580,6 +918,10 @@ def main() -> None:
         for edge in ("left", "right", "total"):
             length_mm = measured[f"{edge}_mm"]
             result_table.set(edge, "length", f"{length_mm:.3f}")
+            if edge != "total":
+                result_table.set(
+                    edge, "excess", f"{measured[f'{edge}_excess_percent']:.3f}"
+                )
         view.set("result")
         save_measurement_button.state(["!disabled"])
         render()
@@ -608,6 +950,8 @@ def main() -> None:
         csv_path = Path(selected).resolve()
         try:
             initial_image = initial_overlay(image, regions)
+            if axis is not None and interval_points is not None:
+                draw_axis_and_sections(initial_image, np.asarray(interval_points), axis)
             write_measurement(
                 csv_path, input_path, measurement, initial_image, result_image
             )
@@ -628,20 +972,23 @@ def main() -> None:
     preview_tools = ttk.Frame(content)
     preview_tools.pack(fill="x", pady=(0, 4))
     ttk.Button(preview_tools, text="全体表示", command=fit_image).pack(side="left")
-    for value, name in (("region", "矩形"), ("start", "開始y"), ("end", "終了y")):
+    for value, name in (
+        ("region", "多角形"),
+        ("center", "区間の中心"),
+        ("axis", "手動軸2点"),
+    ):
         ttk.Radiobutton(
-            preview_tools, text=name, variable=selection_target, value=value
+            preview_tools,
+            text=name,
+            variable=selection_target,
+            value=value,
+            command=select_target,
         ).pack(side="left", padx=4)
-    ttk.Label(
-        content,
-        text="ホイール：拡大縮小　右ドラッグ：移動　開始y・終了y：クリックで指定",
-    ).pack(anchor="w")
     canvas = tk.Canvas(
         content, background="#242424", highlightthickness=0, cursor="crosshair"
     )
     canvas.pack(fill="both", expand=True)
 
-    ttk.Label(sidebar, text="矩形の種類（画像を左ドラッグ）").pack(anchor="w")
     swatches: list[tk.PhotoImage] = []
     for label, name in REGION_NAMES.items():
         blue, green, red = PALETTE[label]
@@ -660,57 +1007,72 @@ def main() -> None:
         ).pack(anchor="w", pady=2)
     region_list = tk.Listbox(sidebar, width=32, height=4, exportselection=False)
     region_list.pack(fill="x", pady=4)
+    polygon_actions = ttk.Frame(sidebar)
+    polygon_actions.pack(fill="x", pady=3)
     for name, action in (
-        ("選択した矩形を削除", delete_region),
-        ("矩形をすべて削除", clear_regions),
+        ("多角形を確定", finish_polygon),
+        ("描画を取消", cancel_drawing),
     ):
-        ttk.Button(sidebar, text=name, padding=(12, 5), command=action).pack(
+        ttk.Button(polygon_actions, text=name, command=action).pack(
+            side="left", expand=True, fill="x"
+        )
+    for name, action in (
+        ("選択した多角形を削除", delete_region),
+        ("多角形をすべて削除", clear_regions),
+    ):
+        ttk.Button(sidebar, text=name, padding=(12, 4), command=action).pack(
             fill="x", pady=3
         )
 
-    ttk.Label(sidebar, text="計測する区間（補正画像のy）").pack(anchor="w", pady=(8, 4))
-    for label, variable in (("開始y", start_text), ("終了y", end_text)):
-        row_frame = ttk.Frame(sidebar)
-        row_frame.pack(fill="x", pady=3)
-        ttk.Label(row_frame, text=label).pack(side="left")
-        ttk.Entry(row_frame, textvariable=variable, width=12).pack(side="right")
-    ttk.Label(sidebar, textvariable=interval_text).pack(anchor="w", pady=1)
-    ttk.Button(sidebar, text="長さを計測", padding=(12, 8), command=calculate).pack(
+    interval_controls = ttk.Frame(sidebar)
+    interval_controls.pack(fill="x", pady=(8, 3))
+    ttk.Label(interval_controls, text="基準区間長 (mm)").pack(side="left")
+    ttk.Entry(interval_controls, textvariable=length_text, width=10).pack(side="right")
+    ttk.Button(
+        sidebar, text="試料抽出・軸を自動推定", command=extract_and_estimate
+    ).pack(fill="x", pady=3)
+    ttk.Label(sidebar, textvariable=axis_text, wraplength=290).pack(anchor="w")
+    ttk.Label(
+        sidebar,
+        text=f"評価間隔 {EVALUATION_INTERVAL_MM:g} mm / 平滑化幅 {SMOOTHING_WIDTH_MM:g} mm",
+    ).pack(anchor="w")
+    ttk.Button(sidebar, text="長さを計測", padding=(12, 7), command=calculate).pack(
         fill="x", pady=4
     )
     result_table = ttk.Treeview(
         sidebar,
-        columns=("edge", "length"),
+        columns=("edge", "length", "excess"),
         show="headings",
         height=3,
         selectmode="none",
     )
     result_table.heading("edge", text="側辺")
     result_table.heading("length", text="長さ (mm)")
+    result_table.heading("excess", text="超過率 (%)")
     result_table.column("edge", width=60, stretch=False)
-    result_table.column("length", width=130, anchor="e")
+    result_table.column("length", width=105, anchor="e")
+    result_table.column("excess", width=95, anchor="e")
     for edge, label in (("left", "DR"), ("right", "OP"), ("total", "合計")):
-        result_table.insert("", "end", iid=edge, values=(label, "—"))
+        result_table.insert("", "end", iid=edge, values=(label, "—", "—"))
     result_table.pack(fill="x", pady=4)
     save_measurement_button = ttk.Button(
-        sidebar, text="CSV・画像2枚を保存", padding=(12, 8), command=save_measurement
+        sidebar, text="CSV・画像2枚を保存", padding=(12, 7), command=save_measurement
     )
     save_measurement_button.pack(fill="x", pady=4)
+    view_tools = ttk.Frame(sidebar)
+    view_tools.pack(fill="x")
     for value, name in (
         ("initial", "初期指定"),
         ("original", "元画像"),
         ("result", "計測結果"),
     ):
         ttk.Radiobutton(
-            sidebar, text=name, variable=view, value=value, command=render
-        ).pack(anchor="w")
+            view_tools, text=name, variable=view, value=value, command=render
+        ).pack(side="left")
 
-    start_text.trace_add("write", on_interval_changed)
-    end_text.trace_add("write", on_interval_changed)
+    length_text.trace_add("write", on_interval_changed)
     canvas.bind("<Configure>", render)
-    canvas.bind("<ButtonPress-1>", start_draw)
-    canvas.bind("<B1-Motion>", drag_draw)
-    canvas.bind("<ButtonRelease-1>", end_draw)
+    canvas.bind("<ButtonPress-1>", click_image)
     canvas.bind("<MouseWheel>", zoom)
     canvas.bind("<ButtonPress-3>", start_pan)
     canvas.bind("<B3-Motion>", pan)

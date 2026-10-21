@@ -493,7 +493,7 @@ def main():
             {"image": name, "length_mm": float(length_mm), "width_mm": float(width_mm)}
         )
 
-    input_path = project / "submissions/input/赤茶色の床と剥離した金属帯.png"
+    input_path = project / "sandbox/submissions/input/赤茶色の床と剥離した金属帯.png"
     original_bytes = input_path.read_bytes()
     image = cv.imdecode(np.frombuffer(original_bytes, np.uint8), cv.IMREAD_COLOR)
     assert image is not None

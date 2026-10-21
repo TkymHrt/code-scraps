@@ -1,6 +1,7 @@
 """既存の工程・GUI操作検証を、共通モジュールを含むコピーで再実行する。"""
 
 import argparse
+import csv
 import runpy
 import sys
 import tkinter as tk
@@ -8,6 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from unittest.mock import Mock, patch
 
+import cv2 as cv
 import numpy as np
 import verify_current_workflow
 import verify_length_comparison_local_gui
@@ -82,21 +84,30 @@ def verify_layout(output, screenshots):
                     filedialog, "askopenfilename", return_value=str(image_path)
                 ):
                     buttons["補正画像を読み込む"].invoke()
-                entries = [w for w in widgets if isinstance(w, ttk.Entry)]
-                for entry, value in zip(entries, ("20", "140")):
-                    root.setvar(str(entry.cget("textvariable")), value)
                 root.update()
                 canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
                 x0, y0, x1, y1 = canvas.bbox(canvas.find_all()[0])
-                canvas.event_generate(
-                    "<ButtonPress-1>", x=round(x0 + (x1 - x0) * 0.3), y=y0
-                )
-                canvas.event_generate(
-                    "<B1-Motion>", x=round(x0 + (x1 - x0) * 0.7), y=y1
-                )
-                canvas.event_generate(
-                    "<ButtonRelease-1>", x=round(x0 + (x1 - x0) * 0.7), y=y1
-                )
+
+                def click(x, y):
+                    canvas.event_generate(
+                        "<ButtonPress-1>",
+                        x=round(x0 + x * (x1 - x0) / 140),
+                        y=round(y0 + y * (y1 - y0) / 160),
+                    )
+
+                for point in ((42, 8), (98, 8), (98, 152), (42, 152)):
+                    click(*point)
+                buttons["多角形を確定"].invoke()
+                radios = {
+                    str(w.cget("text")): w
+                    for w in widgets
+                    if isinstance(w, ttk.Radiobutton)
+                }
+                entry = next(w for w in widgets if isinstance(w, ttk.Entry))
+                root.setvar(str(entry.cget("textvariable")), "25")
+                radios["区間の中心"].invoke()
+                click(70, 80)
+                buttons["試料抽出・軸を自動推定"].invoke()
                 root.update()
                 buttons["長さを計測"].invoke()
                 assert status() == "計測完了", status()
@@ -170,6 +181,133 @@ def verify_layout(output, screenshots):
     print(f"3画面の配置・入出力開始先・取消と不正選択時の結果維持を確認: {output}")
 
 
+def measure_with_axis_gui(directory, image_path, transform, original_size, screenshots):
+    """旧検証の画像作成・比較を使い、src版だけ新しい計測操作へ置き換える。"""
+    gui = run_refactored(copy_refactored("02_measure_edge_lengths_gui.py", directory))
+    root = tk.Tk()
+    root.attributes("-alpha", 0)
+    errors = []
+    image_bytes = image_path.read_bytes()
+    image = cv.imdecode(np.frombuffer(image_bytes, np.uint8), cv.IMREAD_COLOR)
+    assert image is not None
+    height, width = image.shape[:2]
+    original_width, original_height = original_size
+    csv_path = directory / f"output/{directory.name}_lengths.csv"
+
+    def exercise():
+        root.update()
+        widgets = descendants(root)
+        buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
+        radios = {
+            str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Radiobutton)
+        }
+        canvas = next(w for w in widgets if isinstance(w, tk.Canvas))
+        status_label = root.winfo_children()[0].winfo_children()[-1]
+
+        def invoke(name):
+            buttons[name].invoke()
+            root.update()
+
+        with patch.object(filedialog, "askopenfilename", return_value=str(image_path)):
+            invoke("補正画像を読み込む")
+        x0, y0, x1, y1 = canvas.bbox(canvas.find_all()[0])
+
+        def click(x, y):
+            canvas.event_generate(
+                "<ButtonPress-1>",
+                x=round(x0 + x * (x1 - x0) / width),
+                y=round(y0 + y * (y1 - y0) / height),
+            )
+
+        def transformed(points):
+            points = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+            return cv.perspectiveTransform(points, transform).reshape(-1, 2)
+
+        def draw(kind, left, top, right, bottom):
+            radios[kind].invoke()
+            radios["多角形"].invoke()
+            points = np.clip(
+                [(left, top), (right, top), (right, bottom), (left, bottom)],
+                (0, 0),
+                (width - 1, height - 1),
+            )
+            for point in points:
+                click(*point)
+            invoke("多角形を確定")
+
+        candidate = transformed(
+            [
+                (0.3052208835 * original_width, 0),
+                (0.697456493 * original_width, 0),
+                (0.697456493 * original_width, original_height),
+                (0.3052208835 * original_width, original_height),
+            ]
+        )
+        left, top = candidate.min(axis=0)
+        right, bottom = candidate.max(axis=0)
+        draw("前景候補（橙）", left, top, right, bottom)
+        draw("確実な背景（青）", 0, 0, left - width * 0.005, height - 1)
+        draw("確実な背景（青）", right + width * 0.005, 0, width - 1, height - 1)
+        foreground = transformed(
+            [
+                (0.400267738 * original_width, 80),
+                (0.60107095 * original_width, 80),
+                (0.60107095 * original_width, 1000),
+                (0.400267738 * original_width, 1000),
+            ]
+        )
+        left, top = foreground.min(axis=0)
+        right, bottom = foreground.max(axis=0)
+        draw("確実な前景（緑）", left, top, right, bottom)
+        entry = next(w for w in widgets if isinstance(w, ttk.Entry))
+        # 折返しを含む検証素材は、両端が側辺を1回ずつ切る同じ225mmで比較する。
+        root.setvar(str(entry.cget("textvariable")), "225")
+        center = transformed([(original_width / 2, 540)])[0]
+        radios["区間の中心"].invoke()
+        click(*center)
+        invoke("試料抽出・軸を自動推定")
+        assert len(canvas.find_withtag("axis")) == 1, root.getvar(
+            str(status_label.cget("textvariable"))
+        )
+        assert len(canvas.find_withtag("interval")) == 2
+        invoke("長さを計測")
+        status = root.getvar(str(status_label.cget("textvariable")))
+        assert status == "計測完了", status
+        assert buttons["CSV・画像2枚を保存"].instate(["!disabled"])
+        if screenshots:
+            capture(root, directory / "axis_measurement_gui.png")
+        with patch.object(filedialog, "asksaveasfilename", return_value=str(csv_path)):
+            invoke("CSV・画像2枚を保存")
+        assert csv_path.is_file()
+        assert csv_path.with_suffix(".png").is_file()
+        assert csv_path.with_name(f"{csv_path.stem}_initial.png").is_file()
+        assert image_path.read_bytes() == image_bytes
+        assert not errors, errors
+
+    try:
+        with (
+            patch.object(tk, "Tk", return_value=root),
+            patch.object(root, "mainloop", side_effect=exercise),
+            patch.object(
+                root,
+                "report_callback_exception",
+                side_effect=lambda kind, error, trace: errors.append(error),
+            ),
+        ):
+            gui["main"]()
+    finally:
+        root.destroy()
+    with csv_path.open(encoding="utf-8-sig", newline="") as source:
+        row = next(csv.DictReader(source))
+    assert "start_y" not in row and "end_y" not in row
+    interval_mm = float(row["interval_length_mm"])
+    assert np.isclose(interval_mm, 225)
+    for edge in ("left", "right"):
+        expected_percent = (float(row[f"{edge}_mm"]) / interval_mm - 1) * 100
+        assert np.isclose(float(row[f"{edge}_excess_percent"]), expected_percent)
+    return row
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
@@ -193,6 +331,9 @@ def main():
             patch.object(sys, "argv", arguments),
             patch.object(runpy, "run_path", run_refactored),
             patch.object(verification, "copy_current", copy_verification_script),
+            patch.object(
+                verify_current_workflow, "measure_with_gui", measure_with_axis_gui
+            ),
         ):
             verification.main()
     print(f"共通化した6本の校正・補正・計測・比較GUIを確認: {output}")
