@@ -6,7 +6,7 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 実行スクリプトと共通設定は `src/` 直下、補助モジュールは `src/utils/` に置いています。
 この版の計測GUIは、多角形による初期指定と、試料の長手軸に直角な断面を使う計測へ更新しています。
 旧版の矩形・水平区間による計測は変更していません。
-成果物はこの `src/` 一式です。[発表原稿とExcelでのグラフ作成手順](../PRESENTATION.md) も参照してください。
+成果物はこの `src/` 一式です。[発表原稿とPython・Excelでのグラフ作成手順](../PRESENTATION.md) も参照してください。
 
 ## ファイルの役割
 
@@ -19,6 +19,8 @@ GUIは `02` を基準に「上部＝入力と状態、左＝操作、右＝画�
 | `02_measure_edge_lengths_gui.py` | 多角形の指定、GrabCut、長手軸の推定、側辺長・超過率の計算、CSV・確認PNGの保存 |
 | `03_compare_edge_lengths_gui.py` | CSVの追加・削除、表とグラフを更新する局所比較GUI |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 厚さからの累積圧下率の計算、厚さ入力付きの比較GUI |
+| `04_plot_pass_metrics.py` | 対応表から計測CSVを読み、パス数に対する超過率・初回からの変化・DRとOPの差を3枚のPNGへ保存 |
+| `pass_measurements_template.csv` | 実験回・パス数・区間IDと計測CSVを対応付ける表のひな形 |
 | `video_frame_gui.py` | 動画を再生し、選んだ瞬間のフレームを元解像度のPNGで保存するGUI |
 | `measure_point_distance_gui.py` | 補正画像上の2点をクリックし、直線距離をmmで確認する補助GUI |
 | `workflow_settings.py` | 全工程の入出力先、板のマス数・寸法、`MM_PER_PX`、補正の出力範囲 `RECTIFY_ROI` |
@@ -185,6 +187,75 @@ CSVの列名は既存の `left_*`（DR）・`right_*`（OP）を使い、過去�
 旧CSVは従来どおり `(end_y - start_y) * mm_per_px` で区間長を読みますが、
 旧方式の数値には斜め姿勢と画素の階段形状の影響が含まれるため、新方式と混ぜて比較しません。
 この改修では比較GUIに超過率グラフは追加していません。
+
+### 対応表から3種類のグラフを一括作成する
+
+`04_plot_pass_metrics.py` は、対応表に指定した計測CSVを直接読み、3種類のPNGを保存するCLIです。
+数値を転記する必要はありません。既存の比較GUIとは別に使い、追加の依存関係はありません。
+
+`opencv-grabcut` フォルダから、次の3段階で使います。
+
+1. ひな形をコピーする。
+
+   ```powershell
+   Copy-Item src/pass_measurements_template.csv src/pass_measurements.csv
+   ```
+
+2. コピーした対応表を編集し、実際の実験回・パス数・区間ID・計測CSVのパスへ置き換える。
+   各CSVは `02` の「CSV・画像2枚を保存」で保存した新方式の計測CSVを使う。
+
+   ```csv
+   experiment_id,pass_number,section_id,measurement_csv
+   run01,0,a,output/run01_pass00_a.csv
+   run01,2,a,output/run01_pass02_a.csv
+   run01,4,a,output/run01_pass04_a.csv
+   ```
+
+3. 作図する。
+
+   ```powershell
+   uv run src/04_plot_pass_metrics.py src/pass_measurements.csv --out src/output/pass_graphs
+   ```
+
+ひな形のパスは例です。対応する計測CSVを用意してから実行します。
+コピー先の `src/pass_measurements.csv` は実験記録として手元に保管し、Git管理から除外しています。
+`measurement_csv` は絶対パス、または**対応表があるフォルダを基準とする相対パス**です。
+上の例では対応表が `src/` にあるため、`output/run01_pass00_a.csv` は `src/output/run01_pass00_a.csv` を指します。
+対応表を別フォルダへ移した場合は、相対パスも変更してください。
+
+| 出力名 | 縦軸 | 系列 |
+| --- | --- | --- |
+| `excess.png` | DR・OPの超過率（%） | 実験回・区間ID・側ごと |
+| `change_from_initial.png` | 同じ実験回・区間ID・側のパス0からの変化（パーセントポイント） | 実験回・区間ID・側ごと |
+| `dr_op_difference.png` | DR超過率 − OP超過率（パーセントポイント） | 実験回・区間IDごと |
+
+横軸には対応表の実際のパス数を使い、昇順に並べます。行の順序は問いません。
+欠測を0で埋めず、線は観測した点を結ぶ補助として使います。未観測パスの値を推定する線ではありません。
+複数の区間IDはそれぞれ別系列になり、平均・SDは計算しません。
+同じ区間IDは比較用の識別子であり、圧延後も同じ材料部分を追跡できていることは保証しません。
+
+入力時に次を確認し、不一致・不正があれば保存前に停止します。
+
+- `experiment_id` と `section_id` は空欄にしない。`pass_number` は0以上の偶数にする。
+- 各実験回・区間IDの組にパス0を含め、同じ組の同一パスを重複させない。
+- 同じ計測CSVを複数行で使い回さない。計測CSVは新方式の1計測1行を使い、旧方式のCSVを混ぜない。
+- 全計測の基準区間長・倍率・評価間隔・平滑化幅を揃える。条件を変えたデータは対応表を分ける。
+
+出力フォルダは自動作成し、同名の3枚は確認なしで上書きします。入力ファイルへの上書きは拒否します。
+再測定後は同じコマンドで作り直せます。色・軸範囲・文字サイズ・図の大きさ・DPIは、スクリプト冒頭の設定値で調整します。
+
+| 設定変数 | 変更するもの |
+| --- | --- |
+| `FIGURE_SIZE`、`SAVE_DPI` | 図の横・縦の大きさ（インチ）と保存解像度 |
+| `FONT_FAMILY`、`FONT_SIZE` | フォント名と文字サイズ。既定はWindowsの `Meiryo` |
+| `DR_COLOR`、`OP_COLOR`、`DIFFERENCE_COLOR` | DR・OP・左右差の色 |
+| `LINE_STYLES`、`MARKERS` | 実験回・区間IDごとに順に使う線種とマーカー |
+| `PASS_X_LIMITS` | 3図共通の横軸範囲 |
+| `EXCESS_Y_LIMITS`、`CHANGE_Y_LIMITS`、`DIFFERENCE_Y_LIMITS` | 各図の縦軸範囲 |
+
+軸範囲の `None` は自動設定です。例えば `EXCESS_Y_LIMITS = (0, 5)` で超過率図の縦軸を0～5%に固定できます。
+実験回別に図を作るときは軸範囲を揃え、範囲外の測定点を見落とさないよう確認します。
+Excelで自由に編集する場合や平均・SDを加える場合は、下記の集計手順と [発表用の作図手順](../PRESENTATION.md#5-実験結果) を使います。
 
 ### 実験回・圧延パスごとのExcel集計
 
@@ -570,4 +641,12 @@ Ruff・format・tyも通りました。今回の追加機能の実動画での�
 同日、push前にGUI整理後の関連53件（固定長9件、既知形状13件、新旧CSV5件、実Tk計測11件、基準画像補正14件、保存保護1件）を再実行し、すべて通りました。
 変更したPython 10本のRuff・format・tyも通りました。全工程の一括検証は上記の固定長版の記録を参照します。
 発表原稿、実測結果の差替欄、パス0・2・4・…のExcel集計・作図手順、指標の解釈と次の確認を [PRESENTATION.md](../PRESENTATION.md) にまとめました。
+
+同日、対応表から超過率・初回差・DR−OP差を一括作図する `04_plot_pass_metrics.py` と対応表のひな形を追加しました。
+`tests/` から `uv run python -m unittest -v test_pass_metrics test_axis_measurement_csv` を実行し、作図11件と既存CSV5件の計16件が通りました。
+3図の数値、実験回・区間ごとの初回差、欠測パスの数値軸、設定変更の反映、条件混在・重複・初回欠落の拒否、入力の上書き防止を確認しました。
+別の作業フォルダ・日本語パスからのCLI実行で3枚のPNGを読み取れることも確認しました。
+合成した2実験回の対応表で3枚を保存し、日本語・軸・凡例・負の差分・欠測を含むグラフを目視確認しました。
+この確認用のCSV・対応表・PNGは `tests/results/pass_metrics_20261022/` にあります（Git管理対象外、数値は実験結果ではありません）。
+今回の2本のPythonのRuff・format・tyも通りました。実際の圧延記録を使った運用、区間間の平均・SDの集計は今回確認していません。
 上記の数値検証は各改修時点の記録です。実際の圧延画像での精度と再現性は未検証です。
