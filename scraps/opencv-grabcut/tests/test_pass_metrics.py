@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -154,10 +155,7 @@ class PassMetricsTests(unittest.TestCase):
         self.assertEqual(len(figures), 3)
         for figure in figures:
             self.addCleanup(figure.clear)
-            count_note = figure.axes[0].get_xlabel()
-            self.assertIn("区間数 n", count_note)
-            self.assertIn("runA: パス0=2, パス2=2, パス6=1", count_note)
-            self.assertIn("runB: パス0=1, パス4=1", count_note)
+            self.assertEqual(figure.axes[0].get_xlabel(), "圧延パス数")
         excess, change, difference = figures
         self.assert_graph_contains(excess, [0, 2, 6], [2.5, 4.5, 5])
         self.assert_graph_contains(excess, [0, 2, 6], [5.5, 5, 8])
@@ -169,6 +167,66 @@ class PassMetricsTests(unittest.TestCase):
         self.assert_graph_contains(change, [0, 4], [0, 4])
         self.assert_graph_contains(difference, [0, 2, 6], [-3, -0.5, -3])
         self.assert_graph_contains(difference, [0, 4], [2, -5])
+
+    def test_paper_style_keeps_plot_clear_and_sides_distinct_in_grayscale(self):
+        rows = self.read_measurements(self.example_measurements())
+        figures = self.module["create_graphs"](rows)
+        for figure in figures:
+            self.addCleanup(figure.clear)
+            axis = figure.axes[0]
+            self.assertFalse(figure.get_suptitle())
+            self.assertFalse(axis.get_title())
+            for gridline in axis.get_xgridlines() + axis.get_ygridlines():
+                self.assertFalse(gridline.get_visible())
+            for spine in axis.spines.values():
+                self.assertTrue(spine.get_visible())
+            for coordinate_axis in (axis.xaxis, axis.yaxis):
+                tick = coordinate_axis.get_major_ticks()[0]
+                self.assertEqual(tick.get_tickdir(), "in")
+                self.assertTrue(tick.tick1line.get_visible())
+                self.assertTrue(tick.tick2line.get_visible())
+                self.assertTrue(tick.label1.get_visible())
+                self.assertFalse(tick.label2.get_visible())
+            self.assertFalse(axis.get_legend().get_frame_on())
+            lower, upper = axis.get_ylim()
+            self.assertLessEqual(lower, 0)
+            self.assertGreaterEqual(upper, 0)
+            # ゼロ基準線など、区間値とは無関係な線を追加しない。
+            for line in axis.lines:
+                self.assertNotEqual(list(line.get_xdata()), [0, 1])
+        for figure in figures[:2]:
+            series = {}
+            for line in figure.axes[0].lines:
+                if line.get_label() in ("runA DR", "runA OP", "runB DR"):
+                    series[line.get_label()] = line
+            self.assertNotEqual(
+                series["runA DR"].get_marker(), series["runA OP"].get_marker()
+            )
+            self.assertNotEqual(
+                series["runA DR"].get_linestyle(), series["runB DR"].get_linestyle()
+            )
+
+    def test_captions_preserve_measurement_conditions_and_section_counts(self):
+        rows = self.read_measurements(self.example_measurements())
+        captions = self.module["create_captions"](rows)
+        for title in (
+            "DR・OP側辺長の超過率",
+            "パス0からの超過率の変化",
+            "DR・OPの超過率の差",
+        ):
+            self.assertIn(title, captions)
+        for condition in (
+            "基準区間長 100 mm",
+            "倍率 0.25 mm/px",
+            "評価間隔 1 mm",
+            "平滑化幅 2 mm",
+        ):
+            self.assertIn(condition, captions)
+        self.assertIn("runA: パス0=2, パス2=2, パス6=1", captions)
+        self.assertIn("runB: パス0=1, パス4=1", captions)
+        self.assertIn("標本SD", captions)
+        self.assertIn("1区間", captions)
+        self.assertIn("独立", captions)
 
     def test_graphs_keep_raw_points_and_sample_sd_without_horizontal_jitter(self):
         rows = self.read_measurements(self.example_measurements())
@@ -376,9 +434,12 @@ class PassMetricsTests(unittest.TestCase):
             ("script", "excess.png"),
             ("measurement", "change_from_initial.png"),
             ("image", "dr_op_difference.png"),
+            ("measurement", "change_from_initial.svg"),
+            ("image", "dr_op_difference.svg"),
+            ("measurement", "figure_captions.txt"),
         ):
             with self.subTest(protected_kind=protected_kind):
-                directory = self.directory / protected_kind
+                directory = self.directory / (protected_kind + "_" + output_name)
                 directory.mkdir()
                 protected_path = directory / output_name
                 measurement_name = "measurement.csv"
@@ -405,12 +466,30 @@ class PassMetricsTests(unittest.TestCase):
                     "excess.png",
                     "change_from_initial.png",
                     "dr_op_difference.png",
+                    "excess.svg",
+                    "change_from_initial.svg",
+                    "dr_op_difference.svg",
+                    "figure_captions.txt",
                 ):
                     path = directory / name
                     if path != protected_path:
                         self.assertFalse(path.exists(), "入力衝突時は保存前に止める")
 
-    def test_cli_runs_from_another_directory_and_writes_three_readable_pngs(self):
+    def test_write_graphs_exports_seven_paths_and_captions_outside_figure(self):
+        rows = self.read_measurements(self.example_measurements())
+        output = self.directory / "export"
+        paths = self.module["write_graphs"](output, rows)
+        self.assertEqual(len(paths), 7)
+        self.assertEqual(set(paths), set(output.iterdir()))
+        for name in ("excess", "change_from_initial", "dr_op_difference"):
+            svg_root = ET.parse(output / f"{name}.svg").getroot()
+            self.assertEqual(svg_root.tag, "{http://www.w3.org/2000/svg}svg")
+        captions = (output / "figure_captions.txt").read_text(encoding="utf-8-sig")
+        self.assertEqual(captions, self.module["create_captions"](rows))
+        self.assertIn("runA: パス0=2, パス2=2, パス6=1", captions)
+        self.assertIn("倍率 0.25 mm/px", captions)
+
+    def test_cli_runs_from_another_directory_and_writes_png_svg_and_captions(self):
         measurements = self.example_measurements()
         script = copy_refactored(
             "04_plot_pass_metrics.py", self.directory, MEASUREMENTS=measurements
@@ -434,8 +513,16 @@ class PassMetricsTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
-            {path.name for path in output.glob("*.png")},
-            {"excess.png", "change_from_initial.png", "dr_op_difference.png"},
+            {path.name for path in output.iterdir()},
+            {
+                "excess.png",
+                "change_from_initial.png",
+                "dr_op_difference.png",
+                "excess.svg",
+                "change_from_initial.svg",
+                "dr_op_difference.svg",
+                "figure_captions.txt",
+            },
         )
         for path in output.glob("*.png"):
             image = cv.imdecode(
@@ -445,6 +532,13 @@ class PassMetricsTests(unittest.TestCase):
             self.assertGreater(image.shape[0], 100)
             self.assertGreater(image.shape[1], 100)
             self.assertGreater(float(image.std()), 1.0)
+        for path in output.glob("*.svg"):
+            self.assertEqual(
+                ET.parse(path).getroot().tag, "{http://www.w3.org/2000/svg}svg"
+            )
+        captions = (output / "figure_captions.txt").read_text(encoding="utf-8-sig")
+        self.assertIn("runA: パス0=2, パス2=2, パス6=1", captions)
+        self.assertIn("評価間隔 1 mm", captions)
 
 
 if __name__ == "__main__":

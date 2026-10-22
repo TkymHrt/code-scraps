@@ -20,10 +20,10 @@ MEASUREMENTS = [
 GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"
 
 # 比較する図で共通に使う見た目。Noneの軸範囲は自動で決まる。
-FIGURE_SIZE = (10, 6)
+FIGURE_SIZE = (90 / 25.4, 70 / 25.4)  # 幅90 mm、高さ70 mm。
 FONT_FAMILY = "Meiryo"
-FONT_SIZE = 11
-SAVE_DPI = 180
+FONT_SIZE = 9
+SAVE_DPI = 600
 DR_COLOR = "#d96c17"
 OP_COLOR = "#15927e"
 DIFFERENCE_COLOR = "#5964a6"
@@ -146,17 +146,12 @@ def summarize_measurements(rows: list[dict]) -> list[dict]:
 
 def create_graphs(rows: list[dict]) -> list[Figure]:
     summaries = summarize_measurements(rows)
+    rcParams["font.family"] = "sans-serif"
     rcParams["font.sans-serif"] = [FONT_FAMILY, "DejaVu Sans"]
     rcParams["font.size"] = FONT_SIZE
+    rcParams["svg.fonttype"] = "path"
     figures = []
     axes = []
-    first = rows[0]
-    conditions = (
-        f"基準区間長 {first['interval_length_mm']:g} mm / "
-        f"倍率 {first['mm_per_px']:g} mm/px / "
-        f"評価間隔 {first['evaluation_interval_mm']:g} mm / "
-        f"平滑化幅 {first['smoothing_width_mm']:g} mm"
-    )
     passes = set()
     groups = {}
     for summary in summaries:
@@ -165,29 +160,33 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
             groups[experiment] = []
         groups[experiment].append(summary)
         passes.add(summary["pass_number"])
-    count_notes = []
-    for experiment, group in groups.items():
-        counts = []
-        for summary in group:
-            counts.append(f"パス{summary['pass_number']}={summary['count']}")
-        count_notes.append(f"区間数 n / {experiment}: " + ", ".join(counts))
-    for title, ylabel, limits in (
-        ("DR・OP側辺長の超過率", "超過率 [%]", EXCESS_Y_LIMITS),
-        ("パス0からの超過率の変化", "初回からの変化 [ポイント]", CHANGE_Y_LIMITS),
-        ("DR・OPの超過率の差", "DR − OP [ポイント]", DIFFERENCE_Y_LIMITS),
+    for ylabel, limits in (
+        ("超過率 [%]", EXCESS_Y_LIMITS),
+        ("初回からの変化 [ポイント]", CHANGE_Y_LIMITS),
+        ("DR − OP [ポイント]", DIFFERENCE_Y_LIMITS),
     ):
-        figure = Figure(figsize=FIGURE_SIZE, layout="constrained")
+        figure = Figure(figsize=FIGURE_SIZE, layout="constrained", facecolor="white")
         axis = figure.subplots()
-        figure.suptitle(title)
-        axis.set_title(
-            conditions + "\n小点：各区間 / 線：平均 / 誤差棒：±SD（n≧2）",
-            fontsize=FONT_SIZE - 2,
-        )
-        axis.set_xlabel("圧延パス数\n" + "\n".join(count_notes))
+        axis.set_facecolor("white")
+        axis.set_xlabel("圧延パス数")
         axis.set_ylabel(ylabel)
         axis.set_xticks(sorted(passes))
-        axis.axhline(0, linestyle="--", color="gray", linewidth=1)
-        axis.grid(alpha=0.3)
+        axis.grid(False, which="both")
+        axis.tick_params(
+            axis="both",
+            which="both",
+            direction="in",
+            top=True,
+            right=True,
+            labeltop=False,
+            labelright=False,
+            length=3,
+            width=0.8,
+        )
+        for spine in axis.spines.values():
+            spine.set_visible(True)
+            spine.set_color("black")
+            spine.set_linewidth(0.8)
         axis.margins(x=0.06)
         if PASS_X_LIMITS is not None:
             axis.set_xlim(PASS_X_LIMITS)
@@ -198,14 +197,14 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
     for index, experiment in enumerate(sorted(groups)):
         group = groups[experiment]
         line_style = LINE_STYLES[index % len(LINE_STYLES)]
-        marker = MARKERS[index % len(MARKERS)]
-        for axis_index, metric, side, color in (
-            (0, "left_excess_percent", "DR", DR_COLOR),
-            (0, "right_excess_percent", "OP", OP_COLOR),
-            (1, "left_change_points", "DR", DR_COLOR),
-            (1, "right_change_points", "OP", OP_COLOR),
-            (2, "difference_points", "DR−OP", DIFFERENCE_COLOR),
+        for axis_index, metric, side, color, side_index in (
+            (0, "left_excess_percent", "DR", DR_COLOR, 0),
+            (0, "right_excess_percent", "OP", OP_COLOR, 1),
+            (1, "left_change_points", "DR", DR_COLOR, 0),
+            (1, "right_change_points", "OP", OP_COLOR, 1),
+            (2, "difference_points", "DR−OP", DIFFERENCE_COLOR, 0),
         ):
+            marker = MARKERS[(2 * index + side_index) % len(MARKERS)]
             pass_numbers = []
             averages = []
             point_passes = []
@@ -228,7 +227,7 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
                     deviations.append(deviation)
             axis = axes[axis_index]
             axis.scatter(
-                point_passes, point_values, color=color, marker=marker, s=24, alpha=0.55
+                point_passes, point_values, color=color, marker=marker, s=8, alpha=0.6
             )
             axis.plot(
                 pass_numbers,
@@ -236,7 +235,10 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
                 label=f"{experiment} {side}",
                 color=color,
                 linestyle=line_style,
+                linewidth=0.9,
                 marker=marker,
+                markersize=4,
+                markeredgewidth=0.8,
                 markerfacecolor="white",
                 zorder=3,
             )
@@ -247,11 +249,71 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
                     yerr=deviations,
                     fmt="none",
                     ecolor=color,
-                    capsize=4,
+                    elinewidth=0.8,
+                    capsize=2,
+                    capthick=0.8,
                 )
     for axis in axes:
-        axis.legend(fontsize=FONT_SIZE - 1)
+        # 基準線を外しても、既定の縦軸範囲には0を含める。
+        if axis.get_autoscaley_on():
+            lower, upper = axis.get_ylim()
+            axis.set_ylim(min(0, lower), max(0, upper))
+        axis.legend(fontsize=FONT_SIZE - 1, frameon=False, loc="best")
     return figures
+
+
+def create_captions(rows: list[dict]) -> str:
+    summaries = summarize_measurements(rows)
+    first = rows[0]
+    conditions = (
+        f"基準区間長 {first['interval_length_mm']:g} mm / "
+        f"倍率 {first['mm_per_px']:g} mm/px / "
+        f"評価間隔 {first['evaluation_interval_mm']:g} mm / "
+        f"平滑化幅 {first['smoothing_width_mm']:g} mm"
+    )
+    counts = {}
+    for summary in summaries:
+        experiment = summary["experiment_id"]
+        if experiment not in counts:
+            counts[experiment] = []
+        counts[experiment].append(f"パス{summary['pass_number']}={summary['count']}")
+    count_notes = []
+    for experiment, values in counts.items():
+        count_notes.append(f"{experiment}: " + ", ".join(values))
+    common = (
+        "小さい塗りつぶし点は各区間、白抜き記号と線は平均、誤差棒は±標本SDを示す。\n"
+        "SDは区間数nが2以上の場合に表示し、1区間では求めない。\n"
+        + conditions
+        + "\n区間数 n（各パスで集計した区間の数）\n"
+        + "\n".join(count_notes)
+        + "\nnは同一画像内の区間数であり、独立した実験回数ではない。"
+    )
+    captions = []
+    for name, title, definition in (
+        (
+            "excess",
+            "DR・OP側辺長の超過率",
+            "超過率 = (側辺長 / 基準区間長 − 1) × 100 [%]。",
+        ),
+        (
+            "change_from_initial",
+            "パス0からの超過率の変化",
+            "同じ実験回・区間ID・側のパス0との差を、各区間で求めてから集計した。単位はパーセントポイント。",
+        ),
+        (
+            "dr_op_difference",
+            "DR・OPの超過率の差",
+            "同じ区間のDR超過率 − OP超過率を求めてから集計した。単位はパーセントポイント。",
+        ),
+    ):
+        captions.append(
+            f"{name}.png / {name}.svg\n図題案：{title}\n{definition}\n{common}"
+        )
+    return (
+        "図番号を原稿に合わせ、図題と説明を図の下に配置してください。\n\n"
+        + "\n\n".join(captions)
+        + "\n"
+    )
 
 
 def write_graphs(directory: Path, rows: list[dict]) -> list[Path]:
@@ -260,12 +322,21 @@ def write_graphs(directory: Path, rows: list[dict]) -> list[Path]:
         inputs.append(Path(row["measurement_csv"]))
         inputs.append(Path(row["image_path"]))
     paths = []
-    for name in ("excess.png", "change_from_initial.png", "dr_op_difference.png"):
-        paths.append(check_output_path(directory / name, ".png", inputs))
+    image_paths = []
+    for name in ("excess", "change_from_initial", "dr_op_difference"):
+        png_path = check_output_path(directory / f"{name}.png", ".png", inputs)
+        svg_path = check_output_path(directory / f"{name}.svg", ".svg", inputs)
+        image_paths.append((png_path, svg_path))
+        paths.extend([png_path, svg_path])
+    caption_path = check_output_path(directory / "figure_captions.txt", ".txt", inputs)
+    paths.append(caption_path)
     figures = create_graphs(rows)
+    captions = create_captions(rows)
     directory.mkdir(parents=True, exist_ok=True)
-    for path, figure in zip(paths, figures):
-        figure.savefig(path, dpi=SAVE_DPI)
+    for figure, (png_path, svg_path) in zip(figures, image_paths):
+        figure.savefig(png_path, dpi=SAVE_DPI)
+        figure.savefig(svg_path)
+    caption_path.write_text(captions, encoding="utf-8-sig")
     return paths
 
 
