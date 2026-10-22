@@ -1,6 +1,7 @@
 """コード内の入力設定を確認し、3図の数値と別フォルダからの実行を検証する。"""
 
 import csv
+import math
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import patch
 
 import cv2 as cv
 import numpy as np
+from matplotlib.collections import LineCollection, PathCollection
 from test_refactored_workflow import (
     copy_refactored,
     load_refactored,
@@ -87,31 +89,161 @@ class PassMetricsTests(unittest.TestCase):
                 return
         self.fail(f"グラフに期待する系列がありません: x={x_values}, y={y_values}")
 
-    def test_three_graphs_keep_numeric_passes_and_separate_initial_values(self):
+    def test_summary_keeps_section_baselines_and_experiments_separate(self):
         rows = self.read_measurements(self.example_measurements())
         self.assertEqual(len(rows), 7)
         for row in rows:
             self.assertIsInstance(row["pass_number"], int)
             self.assertTrue(Path(row["measurement_csv"]).is_absolute())
             self.assertIn("image_name", row)
+        summaries = self.module["summarize_measurements"](rows)
+        grouped = {}
+        for summary in summaries:
+            grouped[(summary["experiment_id"], summary["pass_number"])] = summary
+        self.assertEqual(
+            set(grouped),
+            {("runA", 0), ("runA", 2), ("runA", 6), ("runB", 0), ("runB", 4)},
+        )
+
+        initial = grouped[("runA", 0)]
+        self.assertEqual(initial["count"], 2)
+        np.testing.assert_allclose(initial["left_excess_percent_values"], [1, 4])
+        np.testing.assert_allclose(initial["right_excess_percent_values"], [2, 9])
+        self.assertAlmostEqual(initial["left_excess_percent_mean"], 2.5)
+        self.assertAlmostEqual(initial["left_excess_percent_sd"], math.sqrt(4.5))
+        self.assertAlmostEqual(initial["right_excess_percent_mean"], 5.5)
+        self.assertAlmostEqual(initial["right_excess_percent_sd"], math.sqrt(24.5))
+        self.assertEqual(initial["left_change_points_values"], [0, 0])
+        self.assertEqual(initial["right_change_points_values"], [0, 0])
+        self.assertEqual(initial["left_change_points_sd"], 0)
+
+        later = grouped[("runA", 2)]
+        self.assertEqual(later["count"], 2)
+        # 区間Aの初回は1/2%、区間Bは4/9%。各区間の差を求めてから集計する。
+        np.testing.assert_allclose(later["left_change_points_values"], [2, 2])
+        np.testing.assert_allclose(later["right_change_points_values"], [0, -1])
+        self.assertAlmostEqual(later["left_change_points_mean"], 2)
+        self.assertAlmostEqual(later["left_change_points_sd"], 0)
+        self.assertAlmostEqual(later["right_change_points_mean"], -0.5)
+        self.assertAlmostEqual(later["right_change_points_sd"], math.sqrt(0.5))
+        # DRとOPのばらつきを別々に合成せず、対応する区間の差を集計する。
+        np.testing.assert_allclose(later["difference_points_values"], [1, -2])
+        self.assertAlmostEqual(later["difference_points_mean"], -0.5)
+        self.assertAlmostEqual(later["difference_points_sd"], math.sqrt(4.5))
+
+        missing_section = grouped[("runA", 6)]
+        self.assertEqual(missing_section["count"], 1)
+        np.testing.assert_allclose(missing_section["left_change_points_values"], [4])
+        np.testing.assert_allclose(missing_section["right_change_points_values"], [6])
+        np.testing.assert_allclose(missing_section["difference_points_values"], [-3])
+        for metric in (
+            "left_excess_percent",
+            "right_excess_percent",
+            "left_change_points",
+            "right_change_points",
+            "difference_points",
+        ):
+            self.assertIsNone(missing_section[f"{metric}_sd"])
+        self.assertAlmostEqual(grouped[("runB", 0)]["left_excess_percent_mean"], 10)
+        self.assertAlmostEqual(grouped[("runB", 4)]["left_change_points_mean"], -3)
+        self.assertAlmostEqual(grouped[("runB", 4)]["right_change_points_mean"], 4)
+
+    def test_three_graphs_show_experiment_means_at_numeric_passes(self):
+        rows = self.read_measurements(self.example_measurements())
         figures = self.module["create_graphs"](rows)
         self.assertEqual(len(figures), 3)
         for figure in figures:
             self.addCleanup(figure.clear)
+            count_note = figure.axes[0].get_xlabel()
+            self.assertIn("区間数 n", count_note)
+            self.assertIn("runA: パス0=2, パス2=2, パス6=1", count_note)
+            self.assertIn("runB: パス0=1, パス4=1", count_note)
         excess, change, difference = figures
-        self.assert_graph_contains(excess, [0, 2, 6], [1, 3, 5])
-        self.assert_graph_contains(excess, [0, 2, 6], [2, 2, 8])
+        self.assert_graph_contains(excess, [0, 2, 6], [2.5, 4.5, 5])
+        self.assert_graph_contains(excess, [0, 2, 6], [5.5, 5, 8])
         self.assert_graph_contains(excess, [0, 4], [10, 7])
         self.assert_graph_contains(excess, [0, 4], [8, 12])
         self.assert_graph_contains(change, [0, 2, 6], [0, 2, 4])
-        self.assert_graph_contains(change, [0, 2, 6], [0, 0, 6])
+        self.assert_graph_contains(change, [0, 2, 6], [0, -0.5, 6])
         self.assert_graph_contains(change, [0, 4], [0, -3])
         self.assert_graph_contains(change, [0, 4], [0, 4])
-        self.assert_graph_contains(change, [0, 2], [0, 2])
-        self.assert_graph_contains(change, [0, 2], [0, -1])
-        self.assert_graph_contains(difference, [0, 2, 6], [-1, 1, -3])
+        self.assert_graph_contains(difference, [0, 2, 6], [-3, -0.5, -3])
         self.assert_graph_contains(difference, [0, 4], [2, -5])
-        self.assert_graph_contains(difference, [0, 2], [-5, -2])
+
+    def test_graphs_keep_raw_points_and_sample_sd_without_horizontal_jitter(self):
+        rows = self.read_measurements(self.example_measurements())
+        figures = self.module["create_graphs"](rows)
+        expected_points = [
+            [
+                (0, 1),
+                (0, 2),
+                (0, 4),
+                (0, 9),
+                (0, 10),
+                (0, 8),
+                (2, 3),
+                (2, 2),
+                (2, 6),
+                (2, 8),
+                (4, 7),
+                (4, 12),
+                (6, 5),
+                (6, 8),
+            ],
+            [(0, 0)] * 6
+            + [(2, 2), (2, 0), (2, 2), (2, -1), (4, -3), (4, 4), (6, 4), (6, 6)],
+            [(0, -1), (0, -5), (0, 2), (2, 1), (2, -2), (4, -5), (6, -3)],
+        ]
+        for figure, expected in zip(figures, expected_points):
+            self.addCleanup(figure.clear)
+            raw_points = []
+            error_segments = []
+            for collection in figure.axes[0].collections:
+                if isinstance(collection, PathCollection):
+                    raw_points.extend(collection.get_offsets().tolist())
+                elif isinstance(collection, LineCollection):
+                    for segment in collection.get_segments():
+                        if len(segment) == 2:
+                            error_segments.append(segment)
+            raw_tuples = []
+            for point in raw_points:
+                raw_tuples.append(tuple(point))
+            actual = np.asarray(sorted(raw_tuples))
+            expected = np.asarray(sorted(expected))
+            np.testing.assert_array_equal(actual[:, 0], expected[:, 0])
+            np.testing.assert_allclose(actual[:, 1], expected[:, 1])
+            self.assertTrue(error_segments, "2区間あるパスのSDを表示する")
+            for segment in error_segments:
+                self.assertEqual(segment[0][0], segment[1][0])
+                self.assertIn(segment[0][0], (0, 2), "1区間のパスにはSDを描かない")
+        # 初回DRの標本SDはsqrt(4.5)。母標準偏差との取り違えも確認する。
+        target = np.array([[0, 2.5 - math.sqrt(4.5)], [0, 2.5 + math.sqrt(4.5)]])
+        matching_segments = []
+        for collection in figures[0].axes[0].collections:
+            if isinstance(collection, LineCollection):
+                matching_segments.extend(collection.get_segments())
+        sample_sd_found = False
+        for segment in matching_segments:
+            if np.asarray(segment).shape == (2, 2) and np.allclose(segment, target):
+                sample_sd_found = True
+        self.assertTrue(sample_sd_found)
+
+    def test_single_section_has_no_sample_sd_or_errorbar(self):
+        first = self.measurement("first.csv", 1, 2)
+        later = self.measurement("later.csv", 3, 5)
+        rows = self.read_measurements(
+            [("runA", 0, "A", first.name), ("runA", 2, "A", later.name)]
+        )
+        summaries = self.module["summarize_measurements"](rows)
+        for summary in summaries:
+            self.assertEqual(summary["count"], 1)
+            self.assertIsNone(summary["difference_points_sd"])
+        figures = self.module["create_graphs"](rows)
+        for figure in figures:
+            self.addCleanup(figure.clear)
+            for collection in figure.axes[0].collections:
+                if isinstance(collection, LineCollection):
+                    self.assertEqual(len(collection.get_segments()), 0)
 
     def test_each_series_requires_pass_zero(self):
         first = self.measurement("first.csv")
@@ -178,6 +310,17 @@ class PassMetricsTests(unittest.TestCase):
         for measurements in cases:
             with self.subTest(measurements=measurements), self.assertRaises(ValueError):
                 self.read_measurements(measurements)
+
+    def test_distinct_sections_can_share_one_source_image(self):
+        first = self.measurement("section_a.csv", 1, 2, image_path="same_image.png")
+        second = self.measurement("section_b.csv", 3, 4, image_path="same_image.png")
+        rows = self.read_measurements(
+            [("runA", 0, "A", first.name), ("runA", 0, "B", second.name)]
+        )
+        self.assertEqual(rows[0]["image_path"], rows[1]["image_path"])
+        summary = self.module["summarize_measurements"](rows)[0]
+        self.assertEqual(summary["count"], 2)
+        self.assertAlmostEqual(summary["left_excess_percent_mean"], 2)
 
     def test_empty_measurements_are_rejected(self):
         with self.assertRaises(ValueError):

@@ -1,7 +1,8 @@
-"""冒頭に指定した計測CSVから、超過率・初回差・DR−OP差を保存する。"""
+"""計測CSVから、各区間の超過率・初回差・DR−OP差と平均・SDを保存する。"""
 
 import math
 from pathlib import Path
+from statistics import mean, stdev
 
 from matplotlib import rcParams
 from matplotlib.figure import Figure
@@ -91,9 +92,60 @@ def read_pass_measurements(measurements: list[tuple[str, int, str, str]]) -> lis
     return rows
 
 
-def create_graphs(rows: list[dict]) -> list[Figure]:
+def summarize_measurements(rows: list[dict]) -> list[dict]:
     if not rows:
         raise ValueError("計測結果を1件以上指定してください")
+    initials = {}
+    for row in rows:
+        if row["pass_number"] == 0:
+            key = (row["experiment_id"], row["section_id"])
+            initials[key] = row
+    groups = {}
+    for row in rows:
+        section_key = (row["experiment_id"], row["section_id"])
+        if section_key not in initials:
+            raise ValueError(
+                f"初回差の基準となるパス0がありません: {section_key[0]} / {section_key[1]}"
+            )
+        initial = initials[section_key]
+        key = (row["experiment_id"], row["pass_number"])
+        if key not in groups:
+            groups[key] = {
+                "left_excess_percent": [],
+                "right_excess_percent": [],
+                "left_change_points": [],
+                "right_change_points": [],
+                "difference_points": [],
+            }
+        values = groups[key]
+        dr = row["left_excess_percent"]
+        op = row["right_excess_percent"]
+        values["left_excess_percent"].append(dr)
+        values["right_excess_percent"].append(op)
+        # 差のばらつきは、対応する区間同士で差を求めてから計算する。
+        values["left_change_points"].append(dr - initial["left_excess_percent"])
+        values["right_change_points"].append(op - initial["right_excess_percent"])
+        values["difference_points"].append(dr - op)
+    summaries = []
+    for key in sorted(groups):
+        count = len(groups[key]["left_excess_percent"])
+        summary = {
+            "experiment_id": key[0],
+            "pass_number": key[1],
+            "count": count,
+        }
+        for metric, values in groups[key].items():
+            summary[f"{metric}_values"] = values
+            summary[f"{metric}_mean"] = mean(values)
+            summary[f"{metric}_sd"] = None
+            if count >= 2:
+                summary[f"{metric}_sd"] = stdev(values)
+        summaries.append(summary)
+    return summaries
+
+
+def create_graphs(rows: list[dict]) -> list[Figure]:
+    summaries = summarize_measurements(rows)
     rcParams["font.sans-serif"] = [FONT_FAMILY, "DejaVu Sans"]
     rcParams["font.size"] = FONT_SIZE
     figures = []
@@ -107,12 +159,18 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
     )
     passes = set()
     groups = {}
-    for row in rows:
-        key = (row["experiment_id"], row["section_id"])
-        if key not in groups:
-            groups[key] = {}
-        groups[key][row["pass_number"]] = row
-        passes.add(row["pass_number"])
+    for summary in summaries:
+        experiment = summary["experiment_id"]
+        if experiment not in groups:
+            groups[experiment] = []
+        groups[experiment].append(summary)
+        passes.add(summary["pass_number"])
+    count_notes = []
+    for experiment, group in groups.items():
+        counts = []
+        for summary in group:
+            counts.append(f"パス{summary['pass_number']}={summary['count']}")
+        count_notes.append(f"区間数 n / {experiment}: " + ", ".join(counts))
     for title, ylabel, limits in (
         ("DR・OP側辺長の超過率", "超過率 [%]", EXCESS_Y_LIMITS),
         ("パス0からの超過率の変化", "初回からの変化 [ポイント]", CHANGE_Y_LIMITS),
@@ -121,8 +179,11 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
         figure = Figure(figsize=FIGURE_SIZE, layout="constrained")
         axis = figure.subplots()
         figure.suptitle(title)
-        axis.set_title(conditions, fontsize=FONT_SIZE - 2)
-        axis.set_xlabel("圧延パス数")
+        axis.set_title(
+            conditions + "\n小点：各区間 / 線：平均 / 誤差棒：±SD（n≧2）",
+            fontsize=FONT_SIZE - 2,
+        )
+        axis.set_xlabel("圧延パス数\n" + "\n".join(count_notes))
         axis.set_ylabel(ylabel)
         axis.set_xticks(sorted(passes))
         axis.axhline(0, linestyle="--", color="gray", linewidth=1)
@@ -134,55 +195,60 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
             axis.set_ylim(limits)
         figures.append(figure)
         axes.append(axis)
-    for index, key in enumerate(sorted(groups)):
-        group = groups[key]
-        if 0 not in group:
-            raise ValueError(
-                f"初回差の基準となるパス0がありません: {key[0]} / {key[1]}"
-            )
-        pass_numbers = sorted(group)
-        label = f"{key[0]} / {key[1]}"
+    for index, experiment in enumerate(sorted(groups)):
+        group = groups[experiment]
         line_style = LINE_STYLES[index % len(LINE_STYLES)]
         marker = MARKERS[index % len(MARKERS)]
-        for edge, side, color in (
-            ("left", "DR", DR_COLOR),
-            ("right", "OP", OP_COLOR),
+        for axis_index, metric, side, color in (
+            (0, "left_excess_percent", "DR", DR_COLOR),
+            (0, "right_excess_percent", "OP", OP_COLOR),
+            (1, "left_change_points", "DR", DR_COLOR),
+            (1, "right_change_points", "OP", OP_COLOR),
+            (2, "difference_points", "DR−OP", DIFFERENCE_COLOR),
         ):
-            values = []
-            changes = []
-            initial = group[0][f"{edge}_excess_percent"]
-            for pass_number in pass_numbers:
-                excess = group[pass_number][f"{edge}_excess_percent"]
-                values.append(excess)
-                changes.append(excess - initial)
-            axes[0].plot(
+            pass_numbers = []
+            averages = []
+            point_passes = []
+            point_values = []
+            sd_passes = []
+            sd_averages = []
+            deviations = []
+            for summary in group:
+                pass_number = summary["pass_number"]
+                average = summary[f"{metric}_mean"]
+                pass_numbers.append(pass_number)
+                averages.append(average)
+                for value in summary[f"{metric}_values"]:
+                    point_passes.append(pass_number)
+                    point_values.append(value)
+                deviation = summary[f"{metric}_sd"]
+                if deviation is not None:
+                    sd_passes.append(pass_number)
+                    sd_averages.append(average)
+                    deviations.append(deviation)
+            axis = axes[axis_index]
+            axis.scatter(
+                point_passes, point_values, color=color, marker=marker, s=24, alpha=0.55
+            )
+            axis.plot(
                 pass_numbers,
-                values,
-                label=f"{label} {side}",
+                averages,
+                label=f"{experiment} {side}",
                 color=color,
                 linestyle=line_style,
                 marker=marker,
+                markerfacecolor="white",
+                zorder=3,
             )
-            axes[1].plot(
-                pass_numbers,
-                changes,
-                label=f"{label} {side}",
-                color=color,
-                linestyle=line_style,
-                marker=marker,
-            )
-        differences = []
-        for pass_number in pass_numbers:
-            row = group[pass_number]
-            differences.append(row["left_excess_percent"] - row["right_excess_percent"])
-        axes[2].plot(
-            pass_numbers,
-            differences,
-            label=label,
-            color=DIFFERENCE_COLOR,
-            linestyle=line_style,
-            marker=marker,
-        )
+            if sd_passes:
+                axis.errorbar(
+                    sd_passes,
+                    sd_averages,
+                    yerr=deviations,
+                    fmt="none",
+                    ecolor=color,
+                    capsize=4,
+                )
     for axis in axes:
         axis.legend(fontsize=FONT_SIZE - 1)
     return figures
