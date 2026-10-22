@@ -56,6 +56,7 @@
 | 計測結果の比較 | `03_compare_edge_lengths_gui.py` | CSVの実測側辺長・100mm換算を表とグラフで比較 |
 | 厚さを用いた比較 | `03_compare_edge_lengths_with_thickness_gui.py` | 実測厚さから累積圧下率を求め、側辺長との関係を比較 |
 | パス数ごとの作図 | `04_plot_pass_metrics.py` | 実験回・パス・区間と計測CSVを記入し、超過率・初回差・DRとOPの差を各区間の点と平均・SDで3枚のPNGへ一括出力 |
+| 実験回同士の比較 | `05_plot_experiment_comparison.py` | DR／OPを左右に分け、同じ3指標について実験回を色・記号・線種で区別して表示 |
 | 共通部分 | `workflow_settings.py`、`utils/` | 倍率・入出力先、画像とCSVの処理、比較処理、GUIの共通部分 |
 
 全工程を一括で自動処理する方式ではなく、人が画像と途中結果を確認しながら進める構成です。
@@ -236,6 +237,33 @@ SDは2区間以上の場合に求め、1区間ではSDを表示しない。
 > Small filled symbols represent individual measurement intervals; open symbols and lines indicate means. Error bars represent ±1 sample standard deviation across intervals (n ≥ 2) and are omitted for n = 1. Measurement conditions: reference interval length, [L] mm; image scale, [s] mm/px; evaluation interval, [h] mm; smoothing width, [w] mm. The number of intervals was [n for each experiment and pass].
 
 ここでの `n` は画像内の計測区間数であり、独立した実験回数ではない。同じ区間IDでも同じ材料部分の追跡を保証しないため、Fig. 2は指定した区間IDを対応させた初回差として説明する。
+
+### 異なる実験回を比較する図
+
+実験回同士を比べる場合は、追加の `05_plot_experiment_comparison.py` を使う。既存の `04` の設定・使い方は変わらない。
+`05` 冒頭の `MEASUREMENTS` に比較する回のCSVを並べ、`uv run src/05_plot_experiment_comparison.py` で作図する。
+各行は `04` と同じ「実験回、パス数、区間ID、計測CSV」の順で、各実験回・区間IDにパス0を含める。
+[2回・2区間の設定例](src/README.md#異なる実験回を並べて比較する) を参照する。
+
+主図の超過率と補助図の初回差は左DR・右OPの2パネルにし、左右の縦軸範囲を揃える。DR−OP差は1パネルにする。
+実験回ごとの色・記号・線種は全図で共通とする。各区間の点、各回・パス内の平均、区間間のSDを表示し、実験回同士はまとめて平均しない。
+出力は `src/output/experiment_comparison/` のPNG3枚だけで、`04` の既定出力とは分ける。
+2パネル図の既定幅は180mm、左右差の図は90mmで、高さはともに70mm、9pt・600dpiとする。
+
+主図から「同じパスで各回の値がどれだけ違うか」、初回差から「初期状態からの変化が共通するか」、DR−OP差から「左右の偏りが各回で再現するか」を順に説明する。
+同条件の繰り返しと、材料・温度・圧下条件などを変えた実験は区別する。圧下スケジュールが異なれば、同じパス数でも同じ加工量とは限らない。
+その場合は、実測厚さに基づく累積圧下率での比較も別途検討する。`05` はパス数を横軸にし、条件別集約や実験回間の平均・SD、統計検定は行わない。
+区間間SDを実験の再現性や実験回間のばらつきとして説明せず、独立した実験回数と各回・パスの区間数を原稿に明記する。
+
+英文キャプションでは、上記3指標の定義に加え、実験回とパネルの対応を記載する。図番号は掲載順に直す。
+
+- `excess.png`: **Fig. 1. Comparison of excess edge length among rolling experiments as a function of the number of rolling passes: (a) DR side and (b) OP side.**
+- `change_from_initial.png`: **Fig. 2. Comparison of changes in excess edge length from pass 0 among rolling experiments: (a) DR side and (b) OP side.** Changes are calculated for each experiment and measurement interval ID before averaging.
+- `dr_op_difference.png`: **Fig. 3. Comparison of DR−OP differences in excess edge length among rolling experiments.** Positive values indicate larger excess edge length on the DR side.
+
+必要に応じて次の共通説明と、前節の計測条件・区間数を添える。
+
+> Colors, marker shapes, and line styles identify individual experiments consistently across all panels. Small filled symbols represent individual measurement intervals; open symbols and lines indicate means within each experiment and pass. Error bars represent ±1 sample standard deviation across intervals (n ≥ 2) and are omitted for n = 1. Experiments are not pooled.
 
 ### Excelに残す原票
 

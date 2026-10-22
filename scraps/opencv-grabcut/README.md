@@ -22,6 +22,7 @@
 | `03_compare_edge_lengths_gui.py` | 計測CSVからDR・OPの実測長・100mm換算を比較する |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 実測厚さを加え、撮影順／累積圧下率で側辺長を比較する |
 | `04_plot_pass_metrics.py` | 計測CSVから、パス別の超過率・初回差・DR−OP差を各区間の点と平均・SDで3枚のPNGに保存する |
+| `05_plot_experiment_comparison.py` | DR／OPを左右のパネルに分け、実験回を色・記号・線種で区別して3指標を比較する |
 
 入出力先・倍率は `src/workflow_settings.py`、画像入出力・CSV・比較・GUIの共通処理は `src/utils/` にあります。
 別の場所へ持ち出す場合は、実行するスクリプトと共通設定、`utils/` を一緒にコピーします。
@@ -68,6 +69,12 @@ uv run src/04_plot_pass_metrics.py
 補助線なし・内向き目盛りの体裁で、各図を600dpiのPNGへ保存します。題目と説明は原稿側で図の下に記載し、計測条件・区間数も必要に応じて添えます。
 [Pythonの詳しい使い方](src/README.md#スクリプト内の設定から3種類のグラフを一括作成する) と [Excelでの集計手順](PRESENTATION.md) を参照してください。
 
+異なる実験回を並べて比較する場合は、追加の `05_plot_experiment_comparison.py` を使います。既存の `04` はそのまま使えます。
+`05` 冒頭の `MEASUREMENTS` に比較する各回のCSVを指定し、`uv run src/05_plot_experiment_comparison.py` で実行します。
+既定の保存先は `src/output/experiment_comparison/` で、`04` の出力先とは別です。
+超過率と初回差はDR／OPの2パネル、DR−OP差は1パネルで、実験回同士を平均せずに表示します。
+[実験回比較版の設定と使い方](src/README.md#異なる実験回を並べて比較する) を参照してください。
+
 ## 検証
 
 今回の計測変更に関係するテストは、`tests/` から次のように実行します。
@@ -75,7 +82,7 @@ uv run src/04_plot_pass_metrics.py
 ```powershell
 uv run python -m unittest -v test_fixed_measurement_interval test_axis_measurement test_axis_measurement_csv test_refactored_measurement_gui test_reference_frame_rectification test_refactored_workflow.RefactoredWorkflowTests.test_polygon_measurement_csv_and_images_preserve_input_protection
 # 作図とCSV読込の確認
-uv run python -m unittest -v test_pass_metrics test_axis_measurement_csv
+uv run python -m unittest -v test_experiment_comparison test_pass_metrics test_axis_measurement_csv
 ```
 
 一連の操作検証は題材フォルダから実行します。保存先には、まだ存在しないフォルダを指定します。
