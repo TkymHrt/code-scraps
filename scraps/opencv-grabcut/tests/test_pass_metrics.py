@@ -154,7 +154,7 @@ class PassMetricsTests(unittest.TestCase):
         self.assertEqual(len(figures), 3)
         for figure in figures:
             self.addCleanup(figure.clear)
-            self.assertEqual(figure.axes[0].get_xlabel(), "圧延パス数")
+            self.assertEqual(figure.axes[0].get_xlabel(), "Number of rolling passes")
         excess, change, difference = figures
         self.assert_graph_contains(excess, [0, 2, 6], [2.5, 4.5, 5])
         self.assert_graph_contains(excess, [0, 2, 6], [5.5, 5, 8])

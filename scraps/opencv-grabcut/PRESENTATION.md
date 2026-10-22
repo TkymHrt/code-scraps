@@ -220,8 +220,22 @@ SDは2区間以上の場合に求め、1区間ではSDを表示しない。
 既定は約90×70mm、9ptで、図注を含まない図本体の大きさとする。幅85mmなら `FIGURE_SIZE = (85 / 25.4, 70 / 25.4)` と指定できる。
 これは論文原稿用の初期体裁であり、投稿先ごとの図幅・文字サイズ・言語・受理形式に合わせて調整する。
 例えば [「鉄と鋼」の執筆要領](https://tetsutohagane.net/submission/guide_to_authors/instructions_to_authors) は図番号・図注を画像へ含めず、通常85mm幅、図中文字は英文とする。
-現在の軸名は日本語なので、英文指定の場合はコード内の軸名を英語へ直す。
+軸名は英語とし、実験回の凡例には `MEASUREMENTS` に記入した名前をそのまま使う。
 補助線を省く考え方は [Natureの作図指針](https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/)、90mmの単段幅の例は [Elsevierの図寸法指針](https://www.elsevier.com/about/policies-and-standards/author/artwork-and-media-instructions/artwork-sizing) を参照する。
+
+### 英文キャプション例
+
+図の下に記載する例を示す。図番号は本文の掲載順へ直し、`[ ]` は実際の計測条件・各実験回とパスの区間数へ置き換える。キャプション用の別ファイルは出力しない。
+
+- `excess.png`: **Fig. 1. Excess edge length on the DR and OP sides as a function of the number of rolling passes.** Excess edge length is defined as E = 100(l/L − 1), where l is the measured side-edge length and L is the reference interval length.
+- `change_from_initial.png`: **Fig. 2. Change in excess edge length from pass 0 on the DR and OP sides.** Changes are calculated as E(p) − E(0), in percentage points, for each experiment and measurement interval ID before averaging.
+- `dr_op_difference.png`: **Fig. 3. Difference in excess edge length between the DR and OP sides as a function of the number of rolling passes.** Differences are calculated as E(DR) − E(OP), in percentage points, for each measurement interval before averaging. Positive values indicate larger excess edge length on the DR side.
+
+必要に応じて各キャプションへ次の説明を添える。
+
+> Small filled symbols represent individual measurement intervals; open symbols and lines indicate means. Error bars represent ±1 sample standard deviation across intervals (n ≥ 2) and are omitted for n = 1. Measurement conditions: reference interval length, [L] mm; image scale, [s] mm/px; evaluation interval, [h] mm; smoothing width, [w] mm. The number of intervals was [n for each experiment and pass].
+
+ここでの `n` は画像内の計測区間数であり、独立した実験回数ではない。同じ区間IDでも同じ材料部分の追跡を保証しないため、Fig. 2は指定した区間IDを対応させた初回差として説明する。
 
 ### Excelに残す原票
 

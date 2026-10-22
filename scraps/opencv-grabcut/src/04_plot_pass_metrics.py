@@ -160,14 +160,14 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
         groups[experiment].append(summary)
         passes.add(summary["pass_number"])
     for ylabel, limits in (
-        ("超過率 [%]", EXCESS_Y_LIMITS),
-        ("初回からの変化 [ポイント]", CHANGE_Y_LIMITS),
-        ("DR − OP [ポイント]", DIFFERENCE_Y_LIMITS),
+        ("Excess edge length (%)", EXCESS_Y_LIMITS),
+        ("Change from pass 0\n(percentage points)", CHANGE_Y_LIMITS),
+        ("DR − OP (percentage points)", DIFFERENCE_Y_LIMITS),
     ):
         figure = Figure(figsize=FIGURE_SIZE, layout="constrained", facecolor="white")
         axis = figure.subplots()
         axis.set_facecolor("white")
-        axis.set_xlabel("圧延パス数")
+        axis.set_xlabel("Number of rolling passes")
         axis.set_ylabel(ylabel)
         axis.set_xticks(sorted(passes))
         axis.grid(False, which="both")
