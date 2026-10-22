@@ -21,7 +21,7 @@
 | `02_measure_edge_lengths_gui.py` | 多角形で試料を抽出し、長手軸に直角な固定長区間の側辺長・超過率をCSVと確認PNGへ保存する |
 | `03_compare_edge_lengths_gui.py` | 計測CSVからDR・OPの実測長・100mm換算を比較する |
 | `03_compare_edge_lengths_with_thickness_gui.py` | 実測厚さを加え、撮影順／累積圧下率で側辺長を比較する |
-| `04_plot_pass_metrics.py` | 計測CSVから、パス別の超過率・初回差・DR−OP差を各区間の点と平均・SDで3図のPNG・SVGと図注案に保存する |
+| `04_plot_pass_metrics.py` | 計測CSVから、パス別の超過率・初回差・DR−OP差を各区間の点と平均・SDで3枚のPNGに保存する |
 
 入出力先・倍率は `src/workflow_settings.py`、画像入出力・CSV・比較・GUIの共通処理は `src/utils/` にあります。
 別の場所へ持ち出す場合は、実行するスクリプトと共通設定、`utils/` を一緒にコピーします。
@@ -65,7 +65,7 @@ uv run src/04_plot_pass_metrics.py
 測定値の転記や別の対応表CSVは不要です。計測CSVの相対パスは `src/` が基準です。
 同じ画像の複数区間は、それぞれ別名のCSVへ保存し、区間IDを `a`・`b` などに分けて指定します。
 図には各区間の点、実験回・パスごとの平均と区間間の標本SDを表示します。1区間の場合はSDを表示しません。
-補助線なし・内向き目盛りの体裁で、各図を600dpiのPNGとSVGへ保存します。題目・計測条件・区間数は同時出力の `figure_captions.txt` にまとめ、原稿側で図の下に配置します。
+補助線なし・内向き目盛りの体裁で、各図を600dpiのPNGへ保存します。題目と説明は原稿側で図の下に記載し、計測条件・区間数も必要に応じて添えます。
 [Pythonの詳しい使い方](src/README.md#スクリプト内の設定から3種類のグラフを一括作成する) と [Excelでの集計手順](PRESENTATION.md) を参照してください。
 
 ## 検証

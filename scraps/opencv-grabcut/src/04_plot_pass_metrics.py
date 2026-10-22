@@ -149,7 +149,6 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
     rcParams["font.family"] = "sans-serif"
     rcParams["font.sans-serif"] = [FONT_FAMILY, "DejaVu Sans"]
     rcParams["font.size"] = FONT_SIZE
-    rcParams["svg.fonttype"] = "path"
     figures = []
     axes = []
     passes = set()
@@ -262,81 +261,18 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
     return figures
 
 
-def create_captions(rows: list[dict]) -> str:
-    summaries = summarize_measurements(rows)
-    first = rows[0]
-    conditions = (
-        f"基準区間長 {first['interval_length_mm']:g} mm / "
-        f"倍率 {first['mm_per_px']:g} mm/px / "
-        f"評価間隔 {first['evaluation_interval_mm']:g} mm / "
-        f"平滑化幅 {first['smoothing_width_mm']:g} mm"
-    )
-    counts = {}
-    for summary in summaries:
-        experiment = summary["experiment_id"]
-        if experiment not in counts:
-            counts[experiment] = []
-        counts[experiment].append(f"パス{summary['pass_number']}={summary['count']}")
-    count_notes = []
-    for experiment, values in counts.items():
-        count_notes.append(f"{experiment}: " + ", ".join(values))
-    common = (
-        "小さい塗りつぶし点は各区間、白抜き記号と線は平均、誤差棒は±標本SDを示す。\n"
-        "SDは区間数nが2以上の場合に表示し、1区間では求めない。\n"
-        + conditions
-        + "\n区間数 n（各パスで集計した区間の数）\n"
-        + "\n".join(count_notes)
-        + "\nnは同一画像内の区間数であり、独立した実験回数ではない。"
-    )
-    captions = []
-    for name, title, definition in (
-        (
-            "excess",
-            "DR・OP側辺長の超過率",
-            "超過率 = (側辺長 / 基準区間長 − 1) × 100 [%]。",
-        ),
-        (
-            "change_from_initial",
-            "パス0からの超過率の変化",
-            "同じ実験回・区間ID・側のパス0との差を、各区間で求めてから集計した。単位はパーセントポイント。",
-        ),
-        (
-            "dr_op_difference",
-            "DR・OPの超過率の差",
-            "同じ区間のDR超過率 − OP超過率を求めてから集計した。単位はパーセントポイント。",
-        ),
-    ):
-        captions.append(
-            f"{name}.png / {name}.svg\n図題案：{title}\n{definition}\n{common}"
-        )
-    return (
-        "図番号を原稿に合わせ、図題と説明を図の下に配置してください。\n\n"
-        + "\n\n".join(captions)
-        + "\n"
-    )
-
-
 def write_graphs(directory: Path, rows: list[dict]) -> list[Path]:
     inputs = [Path(__file__)]
     for row in rows:
         inputs.append(Path(row["measurement_csv"]))
         inputs.append(Path(row["image_path"]))
     paths = []
-    image_paths = []
-    for name in ("excess", "change_from_initial", "dr_op_difference"):
-        png_path = check_output_path(directory / f"{name}.png", ".png", inputs)
-        svg_path = check_output_path(directory / f"{name}.svg", ".svg", inputs)
-        image_paths.append((png_path, svg_path))
-        paths.extend([png_path, svg_path])
-    caption_path = check_output_path(directory / "figure_captions.txt", ".txt", inputs)
-    paths.append(caption_path)
+    for name in ("excess.png", "change_from_initial.png", "dr_op_difference.png"):
+        paths.append(check_output_path(directory / name, ".png", inputs))
     figures = create_graphs(rows)
-    captions = create_captions(rows)
     directory.mkdir(parents=True, exist_ok=True)
-    for figure, (png_path, svg_path) in zip(figures, image_paths):
-        figure.savefig(png_path, dpi=SAVE_DPI)
-        figure.savefig(svg_path)
-    caption_path.write_text(captions, encoding="utf-8-sig")
+    for path, figure in zip(paths, figures):
+        figure.savefig(path, dpi=SAVE_DPI)
     return paths
 
 
