@@ -1,8 +1,7 @@
-"""計測CSVから、各区間の超過率・初回差・DR−OP差と平均・SDを保存する。"""
+"""冒頭に指定した計測CSVから、超過率・初回差・DR−OP差を保存する。"""
 
 import math
 from pathlib import Path
-from statistics import mean, stdev
 
 from matplotlib import rcParams
 from matplotlib.figure import Figure
@@ -20,10 +19,10 @@ MEASUREMENTS = [
 GRAPH_DIRECTORY = OUTPUT_DIRECTORY / "pass_graphs"
 
 # 比較する図で共通に使う見た目。Noneの軸範囲は自動で決まる。
-FIGURE_SIZE = (90 / 25.4, 70 / 25.4)  # 幅90 mm、高さ70 mm。
+FIGURE_SIZE = (10, 6)
 FONT_FAMILY = "Meiryo"
-FONT_SIZE = 9
-SAVE_DPI = 600
+FONT_SIZE = 11
+SAVE_DPI = 180
 DR_COLOR = "#d96c17"
 OP_COLOR = "#15927e"
 DIFFERENCE_COLOR = "#5964a6"
@@ -55,6 +54,10 @@ def read_pass_measurements(measurements: list[tuple[str, int, str, str]]) -> lis
                 f"同じ計測CSVを重複して指定しないでください: {measurement_path.name}"
             )
         measurement = read_lengths(measurement_path)
+        if "left_excess_percent" not in measurement:
+            raise ValueError(
+                f"長手軸と平滑化を使った新形式の計測CSVを指定してください: {measurement_path.name}"
+            )
         if reference_measurement is None:
             reference_measurement = measurement
         for column in (
@@ -92,100 +95,42 @@ def read_pass_measurements(measurements: list[tuple[str, int, str, str]]) -> lis
     return rows
 
 
-def summarize_measurements(rows: list[dict]) -> list[dict]:
+def create_graphs(rows: list[dict]) -> list[Figure]:
     if not rows:
         raise ValueError("計測結果を1件以上指定してください")
-    initials = {}
-    for row in rows:
-        if row["pass_number"] == 0:
-            key = (row["experiment_id"], row["section_id"])
-            initials[key] = row
-    groups = {}
-    for row in rows:
-        section_key = (row["experiment_id"], row["section_id"])
-        if section_key not in initials:
-            raise ValueError(
-                f"初回差の基準となるパス0がありません: {section_key[0]} / {section_key[1]}"
-            )
-        initial = initials[section_key]
-        key = (row["experiment_id"], row["pass_number"])
-        if key not in groups:
-            groups[key] = {
-                "left_excess_percent": [],
-                "right_excess_percent": [],
-                "left_change_points": [],
-                "right_change_points": [],
-                "difference_points": [],
-            }
-        values = groups[key]
-        dr = row["left_excess_percent"]
-        op = row["right_excess_percent"]
-        values["left_excess_percent"].append(dr)
-        values["right_excess_percent"].append(op)
-        # 差のばらつきは、対応する区間同士で差を求めてから計算する。
-        values["left_change_points"].append(dr - initial["left_excess_percent"])
-        values["right_change_points"].append(op - initial["right_excess_percent"])
-        values["difference_points"].append(dr - op)
-    summaries = []
-    for key in sorted(groups):
-        count = len(groups[key]["left_excess_percent"])
-        summary = {
-            "experiment_id": key[0],
-            "pass_number": key[1],
-            "count": count,
-        }
-        for metric, values in groups[key].items():
-            summary[f"{metric}_values"] = values
-            summary[f"{metric}_mean"] = mean(values)
-            summary[f"{metric}_sd"] = None
-            if count >= 2:
-                summary[f"{metric}_sd"] = stdev(values)
-        summaries.append(summary)
-    return summaries
-
-
-def create_graphs(rows: list[dict]) -> list[Figure]:
-    summaries = summarize_measurements(rows)
-    rcParams["font.family"] = "sans-serif"
     rcParams["font.sans-serif"] = [FONT_FAMILY, "DejaVu Sans"]
     rcParams["font.size"] = FONT_SIZE
     figures = []
     axes = []
+    first = rows[0]
+    conditions = (
+        f"基準区間長 {first['interval_length_mm']:g} mm / "
+        f"倍率 {first['mm_per_px']:g} mm/px / "
+        f"評価間隔 {first['evaluation_interval_mm']:g} mm / "
+        f"平滑化幅 {first['smoothing_width_mm']:g} mm"
+    )
     passes = set()
     groups = {}
-    for summary in summaries:
-        experiment = summary["experiment_id"]
-        if experiment not in groups:
-            groups[experiment] = []
-        groups[experiment].append(summary)
-        passes.add(summary["pass_number"])
-    for ylabel, limits in (
-        ("Excess edge length (%)", EXCESS_Y_LIMITS),
-        ("Change from pass 0\n(percentage points)", CHANGE_Y_LIMITS),
-        ("DR − OP (percentage points)", DIFFERENCE_Y_LIMITS),
+    for row in rows:
+        key = (row["experiment_id"], row["section_id"])
+        if key not in groups:
+            groups[key] = {}
+        groups[key][row["pass_number"]] = row
+        passes.add(row["pass_number"])
+    for title, ylabel, limits in (
+        ("DR・OP側辺長の超過率", "超過率 [%]", EXCESS_Y_LIMITS),
+        ("パス0からの超過率の変化", "初回からの変化 [ポイント]", CHANGE_Y_LIMITS),
+        ("DR・OPの超過率の差", "DR − OP [ポイント]", DIFFERENCE_Y_LIMITS),
     ):
-        figure = Figure(figsize=FIGURE_SIZE, layout="constrained", facecolor="white")
+        figure = Figure(figsize=FIGURE_SIZE, layout="constrained")
         axis = figure.subplots()
-        axis.set_facecolor("white")
-        axis.set_xlabel("Number of rolling passes")
+        figure.suptitle(title)
+        axis.set_title(conditions, fontsize=FONT_SIZE - 2)
+        axis.set_xlabel("圧延パス数")
         axis.set_ylabel(ylabel)
         axis.set_xticks(sorted(passes))
-        axis.grid(False, which="both")
-        axis.tick_params(
-            axis="both",
-            which="both",
-            direction="in",
-            top=True,
-            right=True,
-            labeltop=False,
-            labelright=False,
-            length=3,
-            width=0.8,
-        )
-        for spine in axis.spines.values():
-            spine.set_visible(True)
-            spine.set_color("black")
-            spine.set_linewidth(0.8)
+        axis.axhline(0, linestyle="--", color="gray", linewidth=1)
+        axis.grid(alpha=0.3)
         axis.margins(x=0.06)
         if PASS_X_LIMITS is not None:
             axis.set_xlim(PASS_X_LIMITS)
@@ -193,71 +138,57 @@ def create_graphs(rows: list[dict]) -> list[Figure]:
             axis.set_ylim(limits)
         figures.append(figure)
         axes.append(axis)
-    for index, experiment in enumerate(sorted(groups)):
-        group = groups[experiment]
-        line_style = LINE_STYLES[index % len(LINE_STYLES)]
-        for axis_index, metric, side, color, side_index in (
-            (0, "left_excess_percent", "DR", DR_COLOR, 0),
-            (0, "right_excess_percent", "OP", OP_COLOR, 1),
-            (1, "left_change_points", "DR", DR_COLOR, 0),
-            (1, "right_change_points", "OP", OP_COLOR, 1),
-            (2, "difference_points", "DR−OP", DIFFERENCE_COLOR, 0),
-        ):
-            marker = MARKERS[(2 * index + side_index) % len(MARKERS)]
-            pass_numbers = []
-            averages = []
-            point_passes = []
-            point_values = []
-            sd_passes = []
-            sd_averages = []
-            deviations = []
-            for summary in group:
-                pass_number = summary["pass_number"]
-                average = summary[f"{metric}_mean"]
-                pass_numbers.append(pass_number)
-                averages.append(average)
-                for value in summary[f"{metric}_values"]:
-                    point_passes.append(pass_number)
-                    point_values.append(value)
-                deviation = summary[f"{metric}_sd"]
-                if deviation is not None:
-                    sd_passes.append(pass_number)
-                    sd_averages.append(average)
-                    deviations.append(deviation)
-            axis = axes[axis_index]
-            axis.scatter(
-                point_passes, point_values, color=color, marker=marker, s=8, alpha=0.6
+    for index, key in enumerate(sorted(groups)):
+        group = groups[key]
+        if 0 not in group:
+            raise ValueError(
+                f"初回差の基準となるパス0がありません: {key[0]} / {key[1]}"
             )
-            axis.plot(
+        pass_numbers = sorted(group)
+        label = f"{key[0]} / {key[1]}"
+        line_style = LINE_STYLES[index % len(LINE_STYLES)]
+        marker = MARKERS[index % len(MARKERS)]
+        for edge, side, color in (
+            ("left", "DR", DR_COLOR),
+            ("right", "OP", OP_COLOR),
+        ):
+            values = []
+            changes = []
+            initial = group[0][f"{edge}_excess_percent"]
+            for pass_number in pass_numbers:
+                excess = group[pass_number][f"{edge}_excess_percent"]
+                values.append(excess)
+                changes.append(excess - initial)
+            axes[0].plot(
                 pass_numbers,
-                averages,
-                label=f"{experiment} {side}",
+                values,
+                label=f"{label} {side}",
                 color=color,
                 linestyle=line_style,
-                linewidth=0.9,
                 marker=marker,
-                markersize=4,
-                markeredgewidth=0.8,
-                markerfacecolor="white",
-                zorder=3,
             )
-            if sd_passes:
-                axis.errorbar(
-                    sd_passes,
-                    sd_averages,
-                    yerr=deviations,
-                    fmt="none",
-                    ecolor=color,
-                    elinewidth=0.8,
-                    capsize=2,
-                    capthick=0.8,
-                )
+            axes[1].plot(
+                pass_numbers,
+                changes,
+                label=f"{label} {side}",
+                color=color,
+                linestyle=line_style,
+                marker=marker,
+            )
+        differences = []
+        for pass_number in pass_numbers:
+            row = group[pass_number]
+            differences.append(row["left_excess_percent"] - row["right_excess_percent"])
+        axes[2].plot(
+            pass_numbers,
+            differences,
+            label=label,
+            color=DIFFERENCE_COLOR,
+            linestyle=line_style,
+            marker=marker,
+        )
     for axis in axes:
-        # 基準線を外しても、既定の縦軸範囲には0を含める。
-        if axis.get_autoscaley_on():
-            lower, upper = axis.get_ylim()
-            axis.set_ylim(min(0, lower), max(0, upper))
-        axis.legend(fontsize=FONT_SIZE - 1, frameon=False, loc="best")
+        axis.legend(fontsize=FONT_SIZE - 1)
     return figures
 
 
