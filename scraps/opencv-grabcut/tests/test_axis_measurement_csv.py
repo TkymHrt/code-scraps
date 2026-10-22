@@ -1,4 +1,4 @@
-"""長手軸を使う新CSVと、水平区間を使った旧CSVの読込を確認する。"""
+"""長手軸を使う計測CSVの読込と、不正なCSVの拒否を確認する。"""
 
 import csv
 import tempfile
@@ -52,15 +52,14 @@ class AxisMeasurementCsvTests(unittest.TestCase):
         self.assertEqual(rows[0]["left_per_100mm"], 102)
         self.assertEqual(rows[0]["right_per_100mm"], 104)
 
-    def test_new_interval_does_not_use_legacy_horizontal_rows(self):
+    def test_zero_smoothing_width_is_allowed(self):
         row = self.new_row()
-        row.update({"start_y": "invalid", "end_y": -1, "smoothing_width_mm": 0})
+        row["smoothing_width_mm"] = 0
         self.write_row(row)
         saved = self.module["read_lengths"](self.path)
-        self.assertEqual(saved["interval_length_mm"], 125)
         self.assertEqual(saved["smoothing_width_mm"], 0)
 
-    def test_legacy_csv_keeps_horizontal_interval_and_existing_columns(self):
+    def test_legacy_horizontal_interval_csv_is_rejected(self):
         self.write_row(
             {
                 "image_path": "old.png",
@@ -71,18 +70,12 @@ class AxisMeasurementCsvTests(unittest.TestCase):
                 "right_mm": 110,
             }
         )
-        saved = self.module["read_lengths"](self.path)
-        self.assertEqual(saved["interval_length_mm"], 100)
-        self.assertEqual(saved["image_path"], str(self.directory / "old.png"))
-        self.assertEqual(saved["left_per_100mm"], 105)
-        self.assertEqual(saved["start_y"], 20)
-        self.assertNotIn("image_name", saved)
-        self.assertNotIn("left_excess_percent", saved)
+        with self.assertRaises(ValueError):
+            self.module["read_lengths"](self.path)
 
-    def test_missing_new_columns_do_not_fall_back_to_legacy(self):
+    def test_each_required_column_is_checked(self):
         row = self.new_row()
-        row.update({"start_y": 0, "end_y": 400})
-        for column in self.new_row():
+        for column in row:
             broken = dict(row)
             del broken[column]
             self.write_row(broken)

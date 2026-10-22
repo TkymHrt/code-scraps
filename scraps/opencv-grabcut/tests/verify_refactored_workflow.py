@@ -14,8 +14,11 @@ import numpy as np
 import verify_current_workflow
 import verify_length_comparison_local_gui
 import verify_length_comparison_thickness_gui
-from test_length_comparison_local_gui import sample_csv
-from test_refactored_workflow import copy_refactored, run_refactored
+from test_refactored_workflow import (
+    copy_refactored,
+    run_refactored,
+    sample_measurement_csv,
+)
 from verify_parameter_guis import capture, descendants
 
 
@@ -29,7 +32,7 @@ def copy_verification_script(filename, directory, **settings):
 
 def verify_layout(output, screenshots):
     output.mkdir()
-    paths = [sample_csv(output, f"sample{index}") for index in range(4)]
+    paths = [sample_measurement_csv(output, f"sample{index}") for index in range(4)]
     bad = output / "bad.csv"
     bad.write_text("bad csv", encoding="utf-8")
     for filename in (
@@ -333,6 +336,16 @@ def main():
             patch.object(verification, "copy_current", copy_verification_script),
             patch.object(
                 verify_current_workflow, "measure_with_gui", measure_with_axis_gui
+            ),
+            patch.object(
+                verify_length_comparison_local_gui,
+                "sample_csv",
+                sample_measurement_csv,
+            ),
+            patch.object(
+                verify_length_comparison_thickness_gui,
+                "sample_csv",
+                sample_measurement_csv,
             ),
         ):
             verification.main()

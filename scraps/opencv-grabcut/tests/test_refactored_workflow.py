@@ -33,6 +33,30 @@ COMMON_MODULES = (
 ORIGINAL_RUN_PATH = runpy.run_path
 
 
+def sample_measurement_csv(
+    directory, name, interval=100, left=104, right=102, scale=0.25
+):
+    """src版の計測GUIが保存する列で比較用データを作る。"""
+    path = directory / f"{name}.csv"
+    row = {
+        "image_path": f"{name}.png",
+        "image_name": f"{name}.png",
+        "mm_per_px": scale,
+        "interval_length_mm": interval,
+        "left_mm": left,
+        "right_mm": right,
+        "left_excess_percent": (left / interval - 1) * 100,
+        "right_excess_percent": (right / interval - 1) * 100,
+        "evaluation_interval_mm": 1.0,
+        "smoothing_width_mm": 2.0,
+    }
+    with path.open("w", encoding="utf-8-sig", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    return path
+
+
 def copy_refactored(filename, directory, **settings):
     shutil.copyfile(
         REFACTORED / "workflow_settings.py", directory / "workflow_settings.py"
@@ -142,9 +166,9 @@ for name in ('03_compare_edge_lengths_gui.py', '03_compare_edge_lengths_with_thi
 
     def test_shared_file_selection_keeps_order_and_rejects_a_whole_bad_batch(self):
         common = load_refactored("gui_parts.py")
-        existing = sample_csv(self.directory, "existing").resolve()
-        second = sample_csv(self.directory, "second").resolve()
-        third = sample_csv(self.directory, "third").resolve()
+        existing = sample_measurement_csv(self.directory, "existing").resolve()
+        second = sample_measurement_csv(self.directory, "second").resolve()
+        third = sample_measurement_csv(self.directory, "third").resolve()
         paths = [existing]
         root = Mock()
         with patch.object(
@@ -494,9 +518,61 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
                         assert saved is not None
                         self.assertEqual(saved.shape, (800, 1440, 3))
 
+    def test_new_measurement_csv_in_all_six_comparison_graph_modes(self):
+        paths = [
+            sample_measurement_csv(self.directory, "p00", 100, 104, 102),
+            sample_measurement_csv(self.directory, "p02", 200, 208, 204),
+            sample_measurement_csv(self.directory, "p04", 100, 108, 106),
+        ]
+        samples = []
+        for path, thickness in zip(paths, (10, 8, 6)):
+            samples.append({"csv_path": path, "thickness_mm": thickness})
+        for filename in (
+            "03_compare_edge_lengths_gui.py",
+            "03_compare_edge_lengths_with_thickness_gui.py",
+        ):
+            gui = load_refactored(filename)
+            with_thickness = "with_thickness" in filename
+            options = {}
+            if with_thickness:
+                rows = gui["compare_lengths_with_thickness"](samples, 10)
+                options["initial_thickness_mm"] = 10
+            else:
+                rows = gui["read_measurements"](paths)
+            self.assertEqual(rows[0]["image_name"], "p00.png")
+            self.assertAlmostEqual(rows[0]["left_excess_percent"], 4)
+            for normalized in (False, True):
+                modes = (False, True) if with_thickness else (False,)
+                for reduction_axis in modes:
+                    arguments = [normalized]
+                    if with_thickness:
+                        arguments.append(reduction_axis)
+                    with self.subTest(filename=filename, modes=arguments):
+                        figure = gui["create_graph"](rows, *arguments, **options)
+                        axis = figure.axes[0]
+                        expected_x = [0, 20, 40] if reduction_axis else [1, 2, 3]
+                        expected_left = (
+                            [104, 104, 108] if normalized else [104, 208, 108]
+                        )
+                        expected_right = (
+                            [102, 102, 106] if normalized else [102, 204, 106]
+                        )
+                        np.testing.assert_allclose(
+                            axis.lines[0].get_xdata(), expected_x
+                        )
+                        np.testing.assert_allclose(
+                            axis.lines[0].get_ydata(), expected_left
+                        )
+                        np.testing.assert_allclose(
+                            axis.lines[1].get_ydata(), expected_right
+                        )
+                        saved = self.directory / "comparison.png"
+                        gui["write_graph"](saved, rows, *arguments, **options)
+                        self.assertEqual(saved.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
     def test_invalid_csv_and_graph_destinations_are_rejected(self):
         common = load_refactored("length_comparison.py")
-        path = sample_csv(self.directory, "sample")
+        path = sample_measurement_csv(self.directory, "sample")
         rows = common["read_measurements"]([path])
         source_image = Path(rows[0]["image_path"])
         source_image.write_bytes(b"protected image")
@@ -511,11 +587,14 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
             original = list(csv.DictReader(source))[0]
         for column, value in (
             ("image_path", ""),
+            ("image_name", ""),
             ("mm_per_px", "nan"),
-            ("start_y", "-1"),
-            ("end_y", "20.5"),
+            ("interval_length_mm", "0"),
+            ("evaluation_interval_mm", "0"),
+            ("smoothing_width_mm", "-1"),
             ("left_mm", "99"),
             ("right_mm", "inf"),
+            ("left_excess_percent", "999"),
         ):
             bad = dict(original, **{column: value})
             with path.open("w", encoding="utf-8-sig", newline="") as output:
@@ -524,7 +603,7 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
                 writer.writerow(bad)
             with self.subTest(column=column), self.assertRaises(ValueError):
                 common["read_lengths"](path)
-        path = sample_csv(self.directory, "valid")
+        path = sample_measurement_csv(self.directory, "valid")
         thickness = load_refactored("03_compare_edge_lengths_with_thickness_gui.py")
         for value in (None, "", "abc", 0, -1, "nan", "inf"):
             with self.subTest(thickness=value), self.assertRaises(ValueError):

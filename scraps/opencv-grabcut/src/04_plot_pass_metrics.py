@@ -54,10 +54,6 @@ def read_pass_measurements(measurements: list[tuple[str, int, str, str]]) -> lis
                 f"同じ計測CSVを重複して指定しないでください: {measurement_path.name}"
             )
         measurement = read_lengths(measurement_path)
-        if "left_excess_percent" not in measurement:
-            raise ValueError(
-                f"長手軸と平滑化を使った新形式の計測CSVを指定してください: {measurement_path.name}"
-            )
         if reference_measurement is None:
             reference_measurement = measurement
         for column in (
