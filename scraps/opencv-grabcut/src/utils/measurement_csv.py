@@ -20,7 +20,6 @@ def positive_value(value: float | str | None, name: str) -> float:
 def read_lengths(path: Path) -> dict:
     required = (
         "image_path",
-        "image_name",
         "mm_per_px",
         "interval_length_mm",
         "left_mm",
@@ -70,7 +69,7 @@ def read_lengths(path: Path) -> dict:
     image_path = (path.parent / saved["image_path"]).resolve()
     row = {
         "image_path": str(image_path),
-        "image_name": saved["image_name"],
+        "image_name": image_path.name,
         "mm_per_px": scale,
         "interval_length_mm": interval_mm,
         "evaluation_interval_mm": evaluation_interval_mm,

@@ -59,6 +59,27 @@ class AxisMeasurementCsvTests(unittest.TestCase):
         saved = self.module["read_lengths"](self.path)
         self.assertEqual(saved["smoothing_width_mm"], 0)
 
+    def test_image_name_is_derived_when_column_is_missing(self):
+        row = self.new_row()
+        image_path = self.directory / "元画像 試料.png"
+        row["image_path"] = str(image_path)
+        del row["image_name"]
+        self.write_row(row)
+        saved = self.module["read_lengths"](self.path)
+        self.assertEqual(saved["image_name"], image_path.name)
+        self.assertEqual(saved["image_path"], str(image_path.resolve()))
+
+    def test_image_name_always_comes_from_image_path(self):
+        image_path = self.directory / "元画像 試料.png"
+        for image_name in ("別の名前.png", ""):
+            row = self.new_row()
+            row["image_path"] = str(image_path)
+            row["image_name"] = image_name
+            self.write_row(row)
+            with self.subTest(image_name=image_name):
+                saved = self.module["read_lengths"](self.path)
+                self.assertEqual(saved["image_name"], image_path.name)
+
     def test_legacy_horizontal_interval_csv_is_rejected(self):
         self.write_row(
             {
@@ -75,6 +96,7 @@ class AxisMeasurementCsvTests(unittest.TestCase):
 
     def test_each_required_column_is_checked(self):
         row = self.new_row()
+        del row["image_name"]
         for column in row:
             broken = dict(row)
             del broken[column]
@@ -94,7 +116,6 @@ class AxisMeasurementCsvTests(unittest.TestCase):
 
     def test_invalid_new_measurement_values_are_rejected(self):
         invalid_values = (
-            ("image_name", ""),
             ("interval_length_mm", 0),
             ("interval_length_mm", "nan"),
             ("left_mm", 124),

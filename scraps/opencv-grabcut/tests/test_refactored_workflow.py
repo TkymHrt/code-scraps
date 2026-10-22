@@ -587,7 +587,6 @@ for name in ('01_rectify_images.py', '02_measure_edge_lengths_gui.py'):
             original = list(csv.DictReader(source))[0]
         for column, value in (
             ("image_path", ""),
-            ("image_name", ""),
             ("mm_per_px", "nan"),
             ("interval_length_mm", "0"),
             ("evaluation_interval_mm", "0"),
