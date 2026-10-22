@@ -36,8 +36,16 @@ def read_lengths(path: Path) -> dict:
                 required = common_columns + ("image_name",) + axis_columns
             else:
                 required = common_columns + ("start_y", "end_y")
-            if not set(required).issubset(columns):
-                raise ValueError(f"計測GUIの長さCSVを選んでください: {path.name}")
+            missing_columns = []
+            for column in required:
+                if column not in columns:
+                    missing_columns.append(column)
+            if missing_columns:
+                missing_text = ", ".join(missing_columns)
+                raise ValueError(
+                    f"計測CSVの列が不足しています: {path.resolve()}\n"
+                    f"不足列: {missing_text}"
+                )
             saved_rows = list(reader)
     except (OSError, UnicodeError, csv.Error) as error:
         raise ValueError(f"CSVを読み込めません: {path.name}") from error

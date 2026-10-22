@@ -89,6 +89,16 @@ class AxisMeasurementCsvTests(unittest.TestCase):
             with self.subTest(column=column), self.assertRaises(ValueError):
                 self.module["read_lengths"](self.path)
 
+    def test_missing_column_error_identifies_csv_path_and_column(self):
+        row = self.new_row()
+        del row["smoothing_width_mm"]
+        self.write_row(row)
+        with self.assertRaises(ValueError) as caught:
+            self.module["read_lengths"](self.path)
+        message = str(caught.exception)
+        self.assertIn(str(self.path.resolve()), message)
+        self.assertIn("smoothing_width_mm", message)
+
     def test_invalid_new_measurement_values_are_rejected(self):
         invalid_values = (
             ("image_name", ""),
