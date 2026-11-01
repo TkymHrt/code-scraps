@@ -3,7 +3,8 @@
 ハーフミラーで反射した赤色7セグを、OpenCVによる色抽出と点灯パターンの照合で読みます。学習モデルは使いません。
 左から3桁目と4桁目の間に小数点があるものとし、整数側の不要な先頭桁は消灯していても位置を保ちます。
 
-実行用は `read_meter.py`、動画シミュレーションは `sandbox/simulate_meter.py`、自動検証は `tests/` に置きます。
+読み取りは `read_meter.py`、位置の校正は `calibrate_meter.py`、動画シミュレーションは `sandbox/simulate_meter.py` です。
+いずれも先頭の設定を変更して実行します。コマンド引数や設定JSONは使いません。自動検証は `tests/` に置きます。
 実機画像がまだないため、撮影位置と赤色のしきい値は現場で校正する前提です。
 
 ## 方式と対象
@@ -34,7 +35,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 .\.venv\Scripts\python.exe sandbox/simulate_meter.py
-.\.venv\Scripts\python.exe read_meter.py read --video outputs/simulation/meter.avi --config outputs/simulation/meter_config.json --csv outputs/simulation/readings.csv
+.\.venv\Scripts\python.exe read_meter.py
 ```
 
 上段に補正後の表示と読み取り領域、下段に赤色の抽出結果が出ます。黄色い小枠は点灯・消灯を決められない領域です。`Q` または `Esc` で停止します。動画はおおむね元のfpsで表示しますが、処理時間が加わるので厳密な再生時計にはなりません。
@@ -45,35 +46,45 @@ python -m venv .venv
 |---|---|
 | `outputs/simulation/meter.avi` | 合成したカメラ動画 |
 | `outputs/simulation/truth.csv` | フレームごとの正解と条件名 |
-| `outputs/simulation/meter_config.json` | 合成動画に対応する校正 |
 | `outputs/simulation/preview.png` | 鏡像のサンプル画像 |
-| `outputs/simulation/readings.csv` | 読み取りプログラムの出力 |
+| `outputs/readings.csv` | 読み取りプログラムの出力 |
 
-画面を出さず、各フレームを順番に処理する場合は `--headless` を付けます。JSONLもファイルに残せます。
+読み取り側の初期設定は、この合成動画の位置に合わせてあります。すでに動画があれば生成は省略できます。
+変更する場所は `read_meter.py` の先頭です。
+
+| 設定 | 意味 |
+|---|---|
+| `SOURCE` | カメラは整数の `0` など。動画は `BASE_DIR / "outputs/simulation/meter.avi"` などのパス |
+| `CSV_FILE` | CSV保存先。既存ファイルは上書きしない |
+| `SHOW_PREVIEW` | `True` は確認画面を表示、`False` は画面なしで処理 |
+| `FRAME_SIZE` | 校正時の撮影解像度 `[幅, 高さ]` |
+| `REFLECTION` | 鏡像の補正方向 |
+| `DISPLAY_CORNERS` | 反射補正後の表示面の四隅 |
+| `DIGIT_BOXES` | 透視補正後の6桁の枠 |
+
+画面なしで処理する場合は `SHOW_PREVIEW = False` にします。JSONLもファイルに残せます。
 
 ```powershell
-.\.venv\Scripts\python.exe read_meter.py read --video outputs/simulation/meter.avi --config outputs/simulation/meter_config.json --csv outputs/simulation/headless.csv --headless > outputs/simulation/readings.jsonl
+.\.venv\Scripts\python.exe read_meter.py > outputs/readings.jsonl
 ```
 
-校正・CSV・シミュレーションの生成先は上書きしません。再実行時は新しい保存先を指定します。生成物、実測データ、仮想環境はGitの対象外です。
+CSV・シミュレーションの生成先は上書きしません。再実行時は先頭の `CSV_FILE` や `OUTPUT_DIR` を変更します。生成物、実測データ、仮想環境はGitの対象外です。
 
-```powershell
-.\.venv\Scripts\python.exe sandbox/simulate_meter.py --output-dir outputs/simulation-vertical --reflection vertical --frames-per-value 20 --fps 30
-```
+シミュレーターも先頭の `OUTPUT_DIR`、`FRAMES_PER_VALUE`、`FPS`、`REFLECTION` を変更して使います。反射方向を変えた場合は、読み取り側の `REFLECTION` も合わせます。
 
 ## 実機を校正する
 
 1. ハーフミラーとカメラを固定し、6桁が十分な大きさで写るようにします。映り込みを遮る黒い覆いを使い、ピント、露光、ゲイン、ホワイトバランスをカメラ側で調整します。赤が白飛びすると色抽出ができません。調整後は自動変更を止めます。
 2. 可能なら全桁が `8` になる表示テスト、または全セグメントの外形が分かる状態を使います。消灯や `1` の細い光だけを囲まず、**その桁が8だった場合の7本すべての外接枠**を指定する必要があります。
-3. 以下を実行します。カメラ番号が違う場合は `0` を変更します。
+3. `calibrate_meter.py` 先頭の `SOURCE = 0` をカメラ番号に合わせ、`REFLECTION` を選んで実行します。録画なら `SOURCE = r"C:\measurement\recorded.avi"` のように動画パスを指定します。
 
 ```powershell
-.\.venv\Scripts\python.exe read_meter.py calibrate --camera 0 --config meter_config.json --reflection horizontal
+.\.venv\Scripts\python.exe calibrate_meter.py
 ```
 
 反射補正は設置方向に合わせて選びます。「カメラが上にある」ことだけでは補正方向は決まりません。既知の数字、例えば `123.456` が正しい順序・上下で見える設定を選んでください。
 
-| `--reflection` | 補正 |
+| `REFLECTION` | 補正 |
 |---|---|
 | `horizontal` | 左右反転（既定） |
 | `vertical` | 上下反転 |
@@ -82,23 +93,26 @@ python -m venv .venv
 
 4. プレビューで `Space` を押して画像を止めます。**反射補正後の画像**で、6桁全体を含む表示面の四隅を「左上→右上→右下→左下」の順にクリックし、`Enter` を押します。消灯した桁の場所も含めます。四隅の選び直しは `R`、中止は `Q` または `Esc` です。
 5. 透視補正後の画像で、左から順に6個の桁枠をドラッグし、各回 `Enter` で確定します。枠は7本の外接枠に合わせ、余分な背景や桁間の隙間を入れません。消灯した桁も選びます。選択済みの枠は黄色で表示されます。中止は `C` です。
-6. 保存されたJSONを使って読み取ります。
+6. 校正が終わると、`FRAME_SIZE`、`REFLECTION`、`DISPLAY_CORNERS`、`DIGIT_BOXES` の4項目がPythonの代入文で表示されます。`read_meter.py` 先頭の同名設定をその内容に置き換え、`SOURCE` と `CSV_FILE` も実機用に変更します。
 
-```powershell
-.\.venv\Scripts\python.exe read_meter.py read --camera 0 --config meter_config.json --csv outputs/measurement-001.csv
+```python
+SOURCE = 0
+CSV_FILE = BASE_DIR / "outputs/measurement-001.csv"
 ```
 
-校正用に録画した動画も使えます。動画の校正プレビューでは `N` で次のフレームへ進み、`Space` で選択に入ります。
+7. 読み取りスクリプトを実行します。
 
 ```powershell
-.\.venv\Scripts\python.exe read_meter.py calibrate --video recorded.avi --config outputs/recorded_config.json --reflection vertical
+.\.venv\Scripts\python.exe read_meter.py
 ```
+
+動画の校正プレビューでは `N` で次のフレームへ進み、`Space` で選択に入ります。校正スクリプトは読み取り側のコードを書き換えず、設定値を表示するだけです。
 
 撮影解像度が校正時と違えば停止します。カメラ読み取りでは校正時の解像度を要求しますが、カメラが対応しない場合は自動的に合わせられません。カメラやミラーを動かしたときも再校正してください。
 
 ## 出力の読み方
 
-標準出力は1フレーム1行のJSONL、`--csv` は同じ項目のCSVです。説明やエラーは標準エラーに出します。`Ctrl+C` でもCSVを閉じてカメラを解放します。カメラの途中切断はエラー終了します。
+標準出力は1フレーム1行のJSONL、`CSV_FILE` は同じ項目のCSVです。`Ctrl+C` でもCSVを閉じてカメラを解放します。カメラの途中切断はエラー終了します。
 
 ```json
 {"frame_index":2,"captured_at":"2026-11-02T00:00:00.067+00:00","source_time_seconds":0.066667,"status":"ok","display":"  1234","raw_value":"1.234","value":"1.234","reason":""}
@@ -121,15 +135,15 @@ python -m venv .venv
 
 ## 赤抽出と点灯判定の調整
 
-設定JSONの次の値を現場に合わせます。
+`read_meter.py` 先頭の次の値を現場に合わせます。
 
 | 設定 | 初期値 | 意味 |
 |---|---|---|
-| `red_min` | 70 | 赤成分Rの下限（0〜255の画像） |
-| `red_margin` | 40 | `R - max(G, B)` の下限。白い反射を除く |
-| `off_fraction` | 0.15 | 各サンプル領域の赤い画素率がこれ以下なら消灯 |
-| `on_fraction` | 0.65 | 赤い画素率がこれ以上なら点灯 |
-| `stable_frames` | 3 | 確定に必要な同じ有効値の連続フレーム数 |
+| `RED_MIN` | 70 | 赤成分Rの下限（0〜255の画像） |
+| `RED_MARGIN` | 40 | `R - max(G, B)` の下限。白い反射を除く |
+| `OFF_FRACTION` | 0.15 | 各サンプル領域の赤い画素率がこれ以下なら消灯 |
+| `ON_FRACTION` | 0.65 | 赤い画素率がこれ以上なら点灯 |
+| `STABLE_FRAMES` | 3 | 確定に必要な同じ有効値の連続フレーム数 |
 
 例えば赤い画素率が0.40なら、消灯にも点灯にも寄せず、そのフレームを無効にします。下段の抽出画像を見て、背景が黒、点灯部が白になるように調整してください。境界を無理に緩める前に、撮影の白飛び・ピント・枠のずれを確認します。
 
@@ -143,12 +157,14 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-- Python 3.14.8 / OpenCV 5.0.0 / NumPy 2.5.4、および Python 3.12.14 / OpenCV 4.14.0 / NumPy 2.5.3で13テスト成功。
+- 引数処理と設定JSONを削除した構成で、動画生成から読み取り・CSV保存までスクリプト内の設定だけで実行して確認。`python read_meter.py` の引数なし実行でも168フレームを読み、正解と全件一致。
+- Python 3.14.8 / OpenCV 5.0.0 / NumPy 2.5.4、および Python 3.12.14 / OpenCV 4.14.0 / NumPy 2.5.3で14テスト成功。
 - 0〜9の全数字を6桁の全位置で照合。固定小数、先頭消灯、4種類の反射、透視、ぼけ、雑音、暗い表示を確認。
 - 曖昧な点灯、途中・小数側の消灯、非赤色、全消灯を拒否。無効後の同値復帰でも連続判定をやり直すことを確認。
 - 動画からJSONL・CSVへの通し実行、保存先の上書き拒否、解像度不一致、模擬カメラ切断時の停止と解放を確認。
 - 別途、既定の合成動画168フレームを正解CSVと照合。正常132フレームの `raw_value` は全件一致、異常36フレームは全件無効。確定値110件、安定待ち22件、無効36件。
-- 校正GUIで動画送り、静止、四隅・6桁枠の選択、JSON保存を操作確認。GUIで選んだ枠でも同じ168フレームの `raw_value` が全件正解と一致。表示比率と中止操作も確認。
+- 初版では校正GUIで動画送り、静止、四隅・6桁枠の選択を操作確認。GUIで選んだ枠でも同じ168フレームの `raw_value` が全件正解と一致。現在は校正を別スクリプトに分け、JSON保存を設定値の表示に変更した。
+- 分離後はGUIを模擬して、表示された4設定を読み取り側へ適用し正しく認識することとカメラ解放を確認。分離後のGUI操作は未再確認。
 - このPCで合成フレーム504枚の反射補正・透視補正・認識を測定し、中央値0.79ms、95パーセンタイル0.97ms/枚。撮影・動画復号・GUI・ログ保存を含まない参考値。
 
 シミュレーターは認識側の定数を読み込まず、別途定義した多角形で描画しています。ただし、枠の位置を正確に知っている合成条件です。上の結果は実機の精度や撮影速度の保証ではありません。

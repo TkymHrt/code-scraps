@@ -1,14 +1,13 @@
 """合成した計器画像と動画で、認識結果と出力の扱いを確認する。"""
 
+import ast
 import csv
 import importlib.util
 import io
 import json
-import subprocess
-import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -27,14 +26,69 @@ spec = importlib.util.spec_from_file_location(
 simulate_meter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(simulate_meter)
 
+calibration_spec = importlib.util.spec_from_file_location(
+    "calibrate_meter", TOPIC / "calibrate_meter.py"
+)
+calibrate_meter = importlib.util.module_from_spec(calibration_spec)
+calibration_spec.loader.exec_module(calibrate_meter)
+
+
+class CalibrationTests(unittest.TestCase):
+    def test_printed_calibration_can_be_copied_into_reader(self):
+        frame = simulate_meter.make_frame("  1234", reflection="vertical")
+        capture = Mock()
+        capture.isOpened.return_value = True
+        capture.read.return_value = (True, frame)
+
+        def choose_corners(window_name, callback):
+            for x, y in simulate_meter.DISPLAY_CORNERS:
+                callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+
+        rois = []
+        for position in range(6):
+            rois.append((position * 120 + 14, 13, 92, 174))
+        output = io.StringIO()
+        with patch.multiple(calibrate_meter, SOURCE=0, REFLECTION="vertical"):
+            with patch.multiple(
+                calibrate_meter.cv2,
+                VideoCapture=Mock(return_value=capture),
+                namedWindow=Mock(),
+                resizeWindow=Mock(),
+                imshow=Mock(),
+                waitKey=Mock(side_effect=[ord(" "), 13]),
+                setMouseCallback=Mock(side_effect=choose_corners),
+                selectROI=Mock(side_effect=rois),
+                destroyWindow=Mock(),
+                destroyAllWindows=Mock(),
+            ):
+                with redirect_stdout(output), redirect_stderr(io.StringIO()):
+                    calibrate_meter.main()
+        capture.release.assert_called_once()
+
+        # 表示された代入文は実行せず、右辺のリテラルだけを読む。
+        settings = {}
+        for line in output.getvalue().splitlines():
+            name, literal = line.split("=", 1)
+            settings[name.strip()] = ast.literal_eval(literal.strip())
+        self.assertEqual(
+            set(settings),
+            {"FRAME_SIZE", "REFLECTION", "DISPLAY_CORNERS", "DIGIT_BOXES"},
+        )
+        with patch.multiple(read_meter, **settings):
+            image = read_meter.rectify_display(frame)
+            reading, _ = read_meter.recognize_display(image)
+        self.assertEqual(reading["raw_value"], "1.234")
+
 
 class RecognitionTests(unittest.TestCase):
     def setUp(self):
-        self.settings = simulate_meter.make_config("none")
+        reflection = patch.object(read_meter, "REFLECTION", "none")
+        reflection.start()
+        self.addCleanup(reflection.stop)
 
     def recognize(self, display):
         image = simulate_meter.draw_display(display)
-        reading, mask = read_meter.recognize_display(image, self.settings)
+        reading, mask = read_meter.recognize_display(image)
         self.assertEqual(mask.shape, (200, 720))
         return reading
 
@@ -77,28 +131,28 @@ class RecognitionTests(unittest.TestCase):
         image = simulate_meter.draw_display("888888")
         # 最初の桁の上辺を半分隠す。消灯とも点灯とも確定させない。
         cv2.rectangle(image, (30, 10), (60, 29), (8, 8, 8), -1)
-        reading, _ = read_meter.recognize_display(image, self.settings)
+        reading, _ = read_meter.recognize_display(image)
         self.assertIsNone(reading["raw_value"])
         self.assertTrue(reading["reason"])
         fraction = reading["fractions"][0][0]
-        self.assertGreater(fraction, self.settings["off_fraction"])
-        self.assertLess(fraction, self.settings["on_fraction"])
+        self.assertGreater(fraction, read_meter.OFF_FRACTION)
+        self.assertLess(fraction, read_meter.ON_FRACTION)
 
     def test_non_red_light_is_not_a_lit_segment(self):
         for color in [(230, 230, 230), (230, 15, 15), (15, 230, 15)]:
             with self.subTest(color=color):
                 image = simulate_meter.draw_display("      ")
                 image[:, :] = color
-                reading, _ = read_meter.recognize_display(image, self.settings)
+                reading, _ = read_meter.recognize_display(image)
                 self.assertIsNone(reading["raw_value"])
 
     def test_perspective_and_all_reflection_directions(self):
         for reflection in ["none", "horizontal", "vertical", "both"]:
             with self.subTest(reflection=reflection):
-                settings = simulate_meter.make_config(reflection)
                 frame = simulate_meter.make_frame(" 12345", reflection=reflection)
-                image = read_meter.rectify_display(frame, settings)
-                reading, _ = read_meter.recognize_display(image, settings)
+                with patch.object(read_meter, "REFLECTION", reflection):
+                    image = read_meter.rectify_display(frame)
+                reading, _ = read_meter.recognize_display(image)
                 self.assertEqual(reading["raw_value"], "12.345")
 
     def test_all_normal_simulation_conditions(self):
@@ -113,19 +167,19 @@ class RecognitionTests(unittest.TestCase):
             if not expected:
                 continue
             with self.subTest(display=display, scenario=scenario):
-                settings = simulate_meter.make_config("horizontal")
                 frame = simulate_meter.make_frame(
                     display, "horizontal", brightness, blur, noise, seed=23
                 )
-                image = read_meter.rectify_display(frame, settings)
-                reading, _ = read_meter.recognize_display(image, settings)
+                with patch.object(read_meter, "REFLECTION", "horizontal"):
+                    image = read_meter.rectify_display(frame)
+                reading, _ = read_meter.recognize_display(image)
                 self.assertEqual(reading["raw_value"], expected)
 
     def test_frame_size_must_match_calibration(self):
         frame = simulate_meter.make_frame("123456", reflection="none")
         smaller_frame = cv2.resize(frame, (480, 180))
         with self.assertRaises(ValueError):
-            read_meter.rectify_display(smaller_frame, self.settings)
+            read_meter.rectify_display(smaller_frame)
 
 
 class VideoOutputTests(unittest.TestCase):
@@ -133,61 +187,40 @@ class VideoOutputTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.output = Path(cls.temporary.name)
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-X",
-                "utf8",
-                str(TOPIC / "sandbox" / "simulate_meter.py"),
-                "--output-dir",
-                str(cls.output),
-                "--frames-per-value",
-                "5",
-            ],
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr)
+        with patch.multiple(
+            simulate_meter,
+            OUTPUT_DIR=cls.output,
+            FRAMES_PER_VALUE=5,
+            FPS=30.0,
+            REFLECTION="horizontal",
+        ):
+            with redirect_stdout(io.StringIO()):
+                simulate_meter.main()
 
     @classmethod
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def run_reader(self, csv_path, config_path=None, video_path=None):
-        if config_path is None:
-            config_path = self.output / "meter_config.json"
+    def run_reader(self, csv_path, video_path=None):
         if video_path is None:
             video_path = self.output / "meter.avi"
-        return subprocess.run(
-            [
-                sys.executable,
-                "-X",
-                "utf8",
-                str(TOPIC / "read_meter.py"),
-                "read",
-                "--video",
-                str(video_path),
-                "--config",
-                str(config_path),
-                "--csv",
-                str(csv_path),
-                "--headless",
-            ],
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=60,
-        )
+        output = io.StringIO()
+        with patch.multiple(
+            read_meter,
+            SOURCE=video_path,
+            CSV_FILE=csv_path,
+            SHOW_PREVIEW=False,
+            REFLECTION="horizontal",
+        ):
+            with redirect_stdout(output):
+                read_meter.main()
+        return output.getvalue()
 
     def test_video_to_jsonl_and_csv_with_stability_reset(self):
         csv_path = self.output / "readings.csv"
-        result = self.run_reader(csv_path)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.run_reader(csv_path)
         records = []
-        for line in result.stdout.splitlines():
+        for line in output.splitlines():
             records.append(json.loads(line))
         with (self.output / "truth.csv").open(encoding="utf-8", newline="") as file:
             truth = list(csv.DictReader(file))
@@ -237,8 +270,8 @@ class VideoOutputTests(unittest.TestCase):
         csv_path = self.output / "existing.csv"
         original = "以前の測定値\n123.456\n"
         csv_path.write_text(original, encoding="utf-8")
-        result = self.run_reader(csv_path)
-        self.assertNotEqual(result.returncode, 0)
+        with self.assertRaises(FileExistsError):
+            self.run_reader(csv_path)
         self.assertEqual(csv_path.read_text(encoding="utf-8"), original)
 
     def test_same_value_after_invalid_requires_new_stability(self):
@@ -261,11 +294,10 @@ class VideoOutputTests(unittest.TestCase):
                 writer.write(simulate_meter.make_frame(display, "horizontal"))
         finally:
             writer.release()
-        result = self.run_reader(self.output / "interrupted.csv", video_path=video_path)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.run_reader(self.output / "interrupted.csv", video_path=video_path)
         statuses = []
         values = []
-        for line in result.stdout.splitlines():
+        for line in output.splitlines():
             record = json.loads(line)
             statuses.append(record["status"])
             values.append(record["value"])
@@ -290,19 +322,14 @@ class VideoOutputTests(unittest.TestCase):
         frame = simulate_meter.make_frame("  1234", "horizontal")
         capture.read.side_effect = [(True, frame), (False, None)]
         csv_path = self.output / "camera_disconnect.csv"
-        arguments = [
-            "read_meter.py",
-            "read",
-            "--camera",
-            "0",
-            "--headless",
-            "--config",
-            str(self.output / "meter_config.json"),
-            "--csv",
-            str(csv_path),
-        ]
         output = io.StringIO()
-        with patch.object(sys, "argv", arguments):
+        with patch.multiple(
+            read_meter,
+            SOURCE=0,
+            CSV_FILE=csv_path,
+            SHOW_PREVIEW=False,
+            REFLECTION="horizontal",
+        ):
             with patch.object(read_meter.cv2, "VideoCapture", return_value=capture):
                 with redirect_stdout(output):
                     with self.assertRaises(RuntimeError):
@@ -314,13 +341,18 @@ class VideoOutputTests(unittest.TestCase):
         self.assertEqual(records[0]["value"], "")
 
     def test_mismatched_video_size_fails_without_a_value(self):
-        settings = simulate_meter.make_config("horizontal")
-        settings["frame_size"] = [1280, 720]
-        config_path = self.output / "wrong_size.json"
-        config_path.write_text(json.dumps(settings), encoding="utf-8")
-        result = self.run_reader(self.output / "wrong_size.csv", config_path)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), "")
+        output = io.StringIO()
+        with patch.multiple(
+            read_meter,
+            SOURCE=self.output / "meter.avi",
+            CSV_FILE=self.output / "wrong_size.csv",
+            SHOW_PREVIEW=False,
+            FRAME_SIZE=[1280, 720],
+        ):
+            with redirect_stdout(output):
+                with self.assertRaises(ValueError):
+                    read_meter.main()
+        self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":

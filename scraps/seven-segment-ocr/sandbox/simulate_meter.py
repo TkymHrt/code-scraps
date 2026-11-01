@@ -1,12 +1,16 @@
 """カメラがない場所でも試せる、反射した赤色7セグ計器の動画を作る。"""
 
-import argparse
 import csv
-import json
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = BASE_DIR / "outputs/simulation"
+FRAMES_PER_VALUE = 12
+FPS = 30.0
+REFLECTION = "horizontal"
 
 DISPLAY_WIDTH = 720
 DISPLAY_HEIGHT = 200
@@ -134,53 +138,25 @@ def make_scenarios():
     return scenarios
 
 
-def make_config(reflection):
-    """生成した映像に対応する設定。実機では四隅を選び直す。"""
-    digit_boxes = []
-    for digit_index in range(6):
-        left = 120 * digit_index
-        digit_boxes.append([left + 14, 13, left + 106, 187])
-    return {
-        "frame_size": [FRAME_WIDTH, FRAME_HEIGHT],
-        "display_corners": DISPLAY_CORNERS,
-        "reflection": reflection,
-        "digit_boxes": digit_boxes,
-        "red_min": 70,
-        "red_margin": 40,
-        "off_fraction": 0.15,
-        "on_fraction": 0.65,
-        "stable_frames": 3,
-    }
-
-
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/simulation"))
-    parser.add_argument("--frames-per-value", type=int, default=12)
-    parser.add_argument("--fps", type=float, default=30.0)
-    parser.add_argument(
-        "--reflection",
-        choices=["horizontal", "vertical", "both", "none"],
-        default="horizontal",
-    )
-    args = parser.parse_args()
-    if args.frames_per_value < 1 or not np.isfinite(args.fps) or args.fps <= 0:
-        parser.error("frames-per-value と fps は正の値で指定してください。")
+    if FRAMES_PER_VALUE < 1 or not np.isfinite(FPS) or FPS <= 0:
+        raise ValueError("FRAMES_PER_VALUE と FPS は正の値にしてください。")
+    if REFLECTION not in ("horizontal", "vertical", "both", "none"):
+        raise ValueError("REFLECTION は horizontal / vertical / both / none です。")
 
-    video_path = args.output_dir / "meter.avi"
-    truth_path = args.output_dir / "truth.csv"
-    config_path = args.output_dir / "meter_config.json"
-    preview_path = args.output_dir / "preview.png"
-    for output_path in [video_path, truth_path, config_path, preview_path]:
+    video_path = OUTPUT_DIR / "meter.avi"
+    truth_path = OUTPUT_DIR / "truth.csv"
+    preview_path = OUTPUT_DIR / "preview.png"
+    for output_path in [video_path, truth_path, preview_path]:
         if output_path.exists():
-            parser.error(
-                f"既存ファイルは上書きしません: {output_path}。別の --output-dir を指定してください。"
+            raise FileExistsError(
+                f"既存ファイルは上書きしません: {output_path}。OUTPUT_DIR を変更してください。"
             )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
         str(video_path),
         cv2.VideoWriter_fourcc(*"MJPG"),
-        args.fps,
+        FPS,
         (FRAME_WIDTH, FRAME_HEIGHT),
     )
     if not writer.isOpened():
@@ -201,10 +177,10 @@ def main():
                 blur_sigma,
                 noise_sigma,
             ) in make_scenarios():
-                for repeat in range(args.frames_per_value):
+                for repeat in range(FRAMES_PER_VALUE):
                     frame = make_frame(
                         display,
-                        args.reflection,
+                        REFLECTION,
                         brightness,
                         blur_sigma,
                         noise_sigma,
@@ -214,26 +190,21 @@ def main():
                     truth_writer.writerow(
                         [
                             frame_index,
-                            f"{frame_index / args.fps:.6f}",
+                            f"{frame_index / FPS:.6f}",
                             display,
                             value,
                             scenario,
                         ]
                     )
-                    if frame_index == 4 * args.frames_per_value:
+                    if frame_index == 4 * FRAMES_PER_VALUE:
                         if not cv2.imwrite(str(preview_path), frame):
                             raise RuntimeError("プレビュー画像を保存できません。")
                     frame_index += 1
     finally:
         writer.release()
 
-    config_path.write_text(
-        json.dumps(make_config(args.reflection), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(f"動画: {video_path} ({frame_index} frames, {args.fps:g} fps)")
+    print(f"動画: {video_path} ({frame_index} frames, {FPS:g} fps)")
     print(f"正解: {truth_path}")
-    print(f"設定: {config_path}")
     print(f"画像: {preview_path}")
 
 
