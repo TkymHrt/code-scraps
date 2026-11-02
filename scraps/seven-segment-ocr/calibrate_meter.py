@@ -1,4 +1,4 @@
-"""表示面と6桁の位置を選び、read_meter.pyへ貼る設定を表示する。"""
+"""表示面と各桁7個の領域を選び、read_meter.pyへ貼る設定を表示する。"""
 
 import sys
 
@@ -150,33 +150,51 @@ def main():
             corrected, transform, (DISPLAY_WIDTH, DISPLAY_HEIGHT)
         )
         cv2.destroyWindow(window)
-        boxes = []
-        previous_right = 0
-        while len(boxes) < 6:
-            preview = image.copy()
-            for left, top, right, bottom in boxes:
-                cv2.rectangle(preview, (left, top), (right, bottom), (0, 255, 255), 1)
-            title = f"Digit {len(boxes) + 1}/6: box as if 8, ENTER confirm, C cancel"
-            x, y, width, height = cv2.selectROI(title, preview, showCrosshair=True)
-            cv2.destroyWindow(title)
-            if width == 0 or height == 0:
-                return
-            right = x + width
-            bottom = y + height
-            if not (previous_right <= x < right <= DISPLAY_WIDTH):
-                print(
-                    "桁枠は左から順に、重ならないよう選び直してください。",
-                    file=sys.stderr,
+        segment_names = [
+            "top",
+            "upper-right",
+            "lower-right",
+            "bottom",
+            "lower-left",
+            "upper-left",
+            "middle",
+        ]
+        segment_boxes = []
+        for digit_index in range(6):
+            boxes = []
+            segment_boxes.append(boxes)
+            while len(boxes) < 7:
+                preview = image.copy()
+                for selected_boxes in segment_boxes:
+                    for left, top, right, bottom in selected_boxes:
+                        cv2.rectangle(
+                            preview,
+                            (left, top),
+                            (right - 1, bottom - 1),
+                            (0, 255, 255),
+                            1,
+                        )
+                segment_index = len(boxes)
+                title = (
+                    f"Digit {digit_index + 1}/6 - {segment_index + 1}/7 "
+                    f"{segment_names[segment_index]}: ENTER confirm, C cancel"
                 )
-                continue
-            if not (0 <= y < bottom <= DISPLAY_HEIGHT) or width < 20 or height < 40:
-                print(
-                    "桁枠を画像内で幅20・高さ40以上に選び直してください。",
-                    file=sys.stderr,
-                )
-                continue
-            boxes.append([x, y, right, bottom])
-            previous_right = right
+                x, y, width, height = cv2.selectROI(title, preview, showCrosshair=True)
+                cv2.destroyWindow(title)
+                if width == 0 or height == 0:
+                    return
+                right = x + width
+                bottom = y + height
+                if not (
+                    0 <= x < right <= DISPLAY_WIDTH
+                    and 0 <= y < bottom <= DISPLAY_HEIGHT
+                ):
+                    print(
+                        "セグメント枠を補正画像内に選び直してください。",
+                        file=sys.stderr,
+                    )
+                    continue
+                boxes.append([x, y, right, bottom])
 
         print(
             "以下の4行をread_meter.py先頭の同名設定へ貼り付けてください。",
@@ -185,7 +203,7 @@ def main():
         print("FRAME_SIZE = " + repr([frame.shape[1], frame.shape[0]]))
         print("REFLECTION = " + repr(REFLECTION))
         print("DISPLAY_CORNERS = " + repr(points))
-        print("DIGIT_BOXES = " + repr(boxes))
+        print("SEGMENT_BOXES = " + repr(segment_boxes))
     finally:
         capture.release()
         cv2.destroyAllWindows()

@@ -21,17 +21,69 @@ SHOW_PREVIEW = True
 FRAME_SIZE = [960, 360]
 REFLECTION = "horizontal"  # horizontal / vertical / both / none
 DISPLAY_CORNERS = [[110, 92], [846, 61], [866, 289], [91, 309]]
-DIGIT_BOXES = [
-    [14, 13, 106, 187],
-    [134, 13, 226, 187],
-    [254, 13, 346, 187],
-    [374, 13, 466, 187],
-    [494, 13, 586, 187],
-    [614, 13, 706, 187],
+# 補正後の画像の絶対座標 [左, 上, 右, 下]。右・下の画素は含めない。
+# 左の桁から6組。各組は上、右上、右下、下、左下、左上、中央の順。
+SEGMENT_BOXES = [
+    [
+        [42, 15, 78, 25],
+        [95, 41, 104, 76],
+        [95, 124, 104, 159],
+        [42, 175, 78, 185],
+        [16, 124, 25, 159],
+        [16, 41, 25, 76],
+        [42, 95, 78, 105],
+    ],
+    [
+        [162, 15, 198, 25],
+        [215, 41, 224, 76],
+        [215, 124, 224, 159],
+        [162, 175, 198, 185],
+        [136, 124, 145, 159],
+        [136, 41, 145, 76],
+        [162, 95, 198, 105],
+    ],
+    [
+        [282, 15, 318, 25],
+        [335, 41, 344, 76],
+        [335, 124, 344, 159],
+        [282, 175, 318, 185],
+        [256, 124, 265, 159],
+        [256, 41, 265, 76],
+        [282, 95, 318, 105],
+    ],
+    [
+        [402, 15, 438, 25],
+        [455, 41, 464, 76],
+        [455, 124, 464, 159],
+        [402, 175, 438, 185],
+        [376, 124, 385, 159],
+        [376, 41, 385, 76],
+        [402, 95, 438, 105],
+    ],
+    [
+        [522, 15, 558, 25],
+        [575, 41, 584, 76],
+        [575, 124, 584, 159],
+        [522, 175, 558, 185],
+        [496, 124, 505, 159],
+        [496, 41, 505, 76],
+        [522, 95, 558, 105],
+    ],
+    [
+        [642, 15, 678, 25],
+        [695, 41, 704, 76],
+        [695, 124, 704, 159],
+        [642, 175, 678, 185],
+        [616, 124, 625, 159],
+        [616, 41, 625, 76],
+        [642, 95, 678, 105],
+    ],
 ]
 
 RED_MIN = 70
 RED_MARGIN = 40
+WHITE_MIN = 200  # B・G・Rのすべてがこの値以上なら白飛び候補
+RED_SEED_FRACTION = 0.05  # 白飛びを補う連結領域に必要な赤色の面積 / 選択枠の面積
 OFF_FRACTION = 0.15
 ON_FRACTION = 0.65
 STABLE_FRAMES = 3
@@ -39,16 +91,6 @@ STABLE_FRAMES = 3
 DISPLAY_WIDTH = 720
 DISPLAY_HEIGHT = 200
 
-# 各桁の外接枠を幅・高さ1とした座標。順序は上、右上、右下、下、左下、左上、中央。
-SEGMENT_REGIONS = [
-    (0.30, 0.01, 0.70, 0.07),
-    (0.88, 0.16, 0.98, 0.36),
-    (0.88, 0.64, 0.98, 0.84),
-    (0.30, 0.93, 0.70, 0.99),
-    (0.02, 0.64, 0.12, 0.84),
-    (0.02, 0.16, 0.12, 0.36),
-    (0.30, 0.47, 0.70, 0.53),
-]
 PATTERN_TO_DIGIT = {
     "1111110": "0",
     "0110000": "1",
@@ -91,6 +133,25 @@ def correct_reflection(frame):
     raise ValueError("反射方向が不正です。")
 
 
+def validate_segment_boxes():
+    if len(SEGMENT_BOXES) != 6:
+        raise ValueError("SEGMENT_BOXESは消灯桁も含め6桁分必要です。")
+    for boxes in SEGMENT_BOXES:
+        if len(boxes) != 7:
+            raise ValueError("各桁のセグメント枠は7個必要です。")
+        for box in boxes:
+            if len(box) != 4:
+                raise ValueError("各枠は[左, 上, 右, 下]の4座標にしてください。")
+            for coordinate in box:
+                if not isinstance(coordinate, int):
+                    raise ValueError("セグメント枠の座標は整数にしてください。")
+            left, top, right, bottom = box
+            if not (0 <= left < right <= DISPLAY_WIDTH):
+                raise ValueError("セグメント枠の横範囲を補正画像内にしてください。")
+            if not (0 <= top < bottom <= DISPLAY_HEIGHT):
+                raise ValueError("セグメント枠の縦範囲を補正画像内にしてください。")
+
+
 def rectify_display(frame):
     height, width = frame.shape[:2]
     if [width, height] != FRAME_SIZE:
@@ -111,31 +172,49 @@ def recognize_display(image):
     red = image[:, :, 2].astype(np.int16)
     red_excess = red - np.maximum(blue, green)
     red_pixels = (red >= RED_MIN) & (red_excess >= RED_MARGIN)
+    white_pixels = (blue >= WHITE_MIN) & (green >= WHITE_MIN) & (red >= WHITE_MIN)
     mask = red_pixels.astype(np.uint8) * 255
 
     display = ""
     all_fractions = []
-    for left, top, right, bottom in DIGIT_BOXES:
-        digit_mask = mask[top:bottom, left:right]
-        digit_height, digit_width = digit_mask.shape
+    all_patterns = []
+    for boxes in SEGMENT_BOXES:
         pattern = ""
         fractions = []
-        for x1, y1, x2, y2 in SEGMENT_REGIONS:
-            region_left = round(x1 * digit_width)
-            region_top = round(y1 * digit_height)
-            region_right = round(x2 * digit_width)
-            region_bottom = round(y2 * digit_height)
-            region = digit_mask[region_top:region_bottom, region_left:region_right]
-            fraction = cv2.countNonZero(region) / region.size
+        for left, top, right, bottom in boxes:
+            region_red = red_pixels[top:bottom, left:right]
+            region_white = white_pixels[top:bottom, left:right]
+            region_lit = region_red.copy()
+            candidates = (region_red | region_white).astype(np.uint8)
+            component_count, labels = cv2.connectedComponents(
+                candidates, connectivity=8
+            )
+            minimum_red_count = math.ceil(region_red.size * RED_SEED_FRACTION)
+            # 白い反射が別のセグメントから入り込まないよう、枠ごとに補う。
+            for component_index in range(1, component_count):
+                component = labels == component_index
+                red_count = np.count_nonzero(region_red & component)
+                if red_count >= minimum_red_count:
+                    region_lit |= component
+
+            region_mask = mask[top:bottom, left:right]
+            region_mask[region_lit] = 255
+            fraction = np.count_nonzero(region_lit) / region_lit.size
+            unsupported_white = region_white & ~region_lit
+            unsupported_fraction = np.count_nonzero(unsupported_white) / region_lit.size
             fractions.append(fraction)
             if fraction >= ON_FRACTION:
                 pattern += "1"
+            elif unsupported_fraction > OFF_FRACTION:
+                # 赤が完全に失われた点灯を消灯にすると、8を0などと誤読する。
+                pattern += "?"
             elif fraction <= OFF_FRACTION:
                 pattern += "0"
             else:
                 pattern += "?"
         display += PATTERN_TO_DIGIT.get(pattern, "?")
         all_fractions.append(fractions)
+        all_patterns.append(pattern)
 
     raw_value = None
     reason = ""
@@ -155,27 +234,23 @@ def recognize_display(image):
         "raw_value": raw_value,
         "reason": reason,
         "fractions": all_fractions,
+        "patterns": all_patterns,
     }
     return reading, mask
 
 
 def draw_preview(image, mask, reading, status):
     annotated = image.copy()
-    for digit_index, box in enumerate(DIGIT_BOXES):
-        left, top, right, bottom = box
-        cv2.rectangle(annotated, (left, top), (right, bottom), (160, 160, 160), 1)
-        for segment_index, region in enumerate(SEGMENT_REGIONS):
-            x1, y1, x2, y2 = region
-            start = (
-                left + round(x1 * (right - left)),
-                top + round(y1 * (bottom - top)),
-            )
-            end = (left + round(x2 * (right - left)), top + round(y2 * (bottom - top)))
-            fraction = reading["fractions"][digit_index][segment_index]
+    for digit_index, boxes in enumerate(SEGMENT_BOXES):
+        for segment_index, box in enumerate(boxes):
+            left, top, right, bottom = box
+            state = reading["patterns"][digit_index][segment_index]
             color = (0, 200, 0)
-            if OFF_FRACTION < fraction < ON_FRACTION:
+            if state == "?":
                 color = (0, 200, 255)
-            cv2.rectangle(annotated, start, end, color, 1)
+            elif state == "0":
+                color = (160, 160, 160)
+            cv2.rectangle(annotated, (left, top), (right - 1, bottom - 1), color, 1)
     mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
     panel = np.vstack([annotated, mask_bgr])
     label = f"{status}: [{reading['display']}] {reading['reason']}   Q: quit"
@@ -187,19 +262,9 @@ def draw_preview(image, mask, reading, status):
 
 def main():
     validate_corners(DISPLAY_CORNERS, FRAME_SIZE[0], FRAME_SIZE[1])
-    if len(DIGIT_BOXES) != 6:
-        raise ValueError("DIGIT_BOXESは消灯桁も含め6個必要です。")
-    previous_right = 0
-    for left, top, right, bottom in DIGIT_BOXES:
-        if not (previous_right <= left < right <= DISPLAY_WIDTH):
-            raise ValueError(
-                "桁枠は補正画像内で左から順に、重ならないよう指定してください。"
-            )
-        if not (0 <= top < bottom <= DISPLAY_HEIGHT):
-            raise ValueError("桁枠が補正画像からはみ出しています。")
-        if right - left < 20 or bottom - top < 40:
-            raise ValueError("桁枠が小さすぎます。校正し直してください。")
-        previous_right = right
+    validate_segment_boxes()
+    if not (0 <= WHITE_MIN <= 255 and 0 < RED_SEED_FRACTION <= 1):
+        raise ValueError("WHITE_MINは0〜255、RED_SEED_FRACTIONは0より大きく1以下です。")
     if not 0 <= OFF_FRACTION < ON_FRACTION <= 1 or STABLE_FRAMES < 1:
         raise ValueError("点灯率の大小関係とSTABLE_FRAMESを確認してください。")
     if CSV_FILE.exists():
