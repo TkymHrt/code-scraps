@@ -149,11 +149,9 @@ def recognize_display(image):
     mask = red_pixels.astype(np.uint8) * 255
 
     display = ""
-    all_fractions = []
     all_patterns = []
     for boxes in SEGMENT_BOXES:
         pattern = ""
-        fractions = []
         for left, top, right, bottom in boxes:
             region_red = red_pixels[top:bottom, left:right]
             region_white = white_pixels[top:bottom, left:right]
@@ -175,7 +173,6 @@ def recognize_display(image):
             fraction = np.count_nonzero(region_lit) / region_lit.size
             unsupported_white = region_white & ~region_lit
             unsupported_fraction = np.count_nonzero(unsupported_white) / region_lit.size
-            fractions.append(fraction)
             if fraction >= ON_FRACTION:
                 pattern += "1"
             elif unsupported_fraction > OFF_FRACTION:
@@ -186,7 +183,6 @@ def recognize_display(image):
             else:
                 pattern += "?"
         display += PATTERN_TO_DIGIT.get(pattern, "?")
-        all_fractions.append(fractions)
         all_patterns.append(pattern)
 
     raw_value = None
@@ -206,13 +202,12 @@ def recognize_display(image):
         "display": display,
         "raw_value": raw_value,
         "reason": reason,
-        "fractions": all_fractions,
         "patterns": all_patterns,
     }
     return reading, mask
 
 
-def draw_preview(image, mask, reading, status):
+def draw_preview(image, mask, reading, line_thickness):
     annotated = image.copy()
     for digit_index, boxes in enumerate(SEGMENT_BOXES):
         for segment_index, box in enumerate(boxes):
@@ -223,28 +218,23 @@ def draw_preview(image, mask, reading, status):
                 color = (0, 200, 255)
             elif state == "0":
                 color = (160, 160, 160)
-            cv2.rectangle(annotated, (left, top), (right - 1, bottom - 1), color, 1)
+            cv2.rectangle(
+                annotated, (left, top), (right - 1, bottom - 1), color, line_thickness
+            )
     mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    panel = np.vstack([annotated, mask_bgr])
-    label = f"{status}: [{reading['display']}] {reading['reason']}   Q: quit"
-    cv2.putText(
-        panel,
-        label,
-        (8, image.shape[0] + 18),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (255, 255, 0),
-        1,
-    )
-    return panel
+    return np.vstack([annotated, mask_bgr])
 
 
 def main():
     validate_segment_boxes()
+    if not (0 <= RED_MIN <= 255 and 0 < RED_MARGIN <= 255):
+        raise ValueError("RED_MINは0〜255、RED_MARGINは0より大きく255以下です。")
     if not (0 <= WHITE_MIN <= 255 and 0 < RED_SEED_FRACTION <= 1):
         raise ValueError("WHITE_MINは0〜255、RED_SEED_FRACTIONは0より大きく1以下です。")
-    if not 0 <= OFF_FRACTION < ON_FRACTION <= 1 or STABLE_FRAMES < 1:
-        raise ValueError("点灯率の大小関係とSTABLE_FRAMESを確認してください。")
+    if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
+        raise ValueError("点灯率は0 <= OFF_FRACTION < ON_FRACTION <= 1にしてください。")
+    if not isinstance(STABLE_FRAMES, int) or STABLE_FRAMES < 1:
+        raise ValueError("STABLE_FRAMESは1以上の整数にしてください。")
 
     is_camera = isinstance(SOURCE, int)
     if is_camera:
@@ -263,12 +253,23 @@ def main():
         success, frame = capture.read()
         if not success:
             raise RuntimeError("最初の画像を取得できません。")
+        received_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        received_time = time.monotonic()
+        start_time = received_time
         image = prepare_frame(frame)
         fps = capture.get(cv2.CAP_PROP_FPS)
         if not is_camera and (not math.isfinite(fps) or fps <= 0):
             raise RuntimeError(
                 "動画のfpsを取得できません。時刻を付けられないため停止します。"
             )
+        window = "Seven segment OCR"
+        if SHOW_PREVIEW:
+            cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+            height, width = image.shape[:2]
+            panel_height = height * 2
+            scale = min(1.0, 1280 / width, 720 / panel_height)
+            cv2.resizeWindow(window, round(width * scale), round(panel_height * scale))
+            line_thickness = max(1, round(1 / scale))
         CSV_DIR.mkdir(parents=True, exist_ok=True)
         csv_number = 1
         while True:
@@ -282,7 +283,7 @@ def main():
         print("CSV: " + str(csv_path), file=sys.stderr)
         fields = [
             "frame_index",
-            "captured_at",
+            "received_at",
             "source_time_seconds",
             "status",
             "display",
@@ -295,11 +296,9 @@ def main():
         previous_value = None
         consecutive_count = 0
         frame_index = 0
-        start_time = time.monotonic()
         while True:
-            captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             if is_camera:
-                source_time = time.monotonic() - start_time
+                source_time = received_time - start_time
             else:
                 source_time = frame_index / fps
             reading, mask = recognize_display(image)
@@ -321,7 +320,7 @@ def main():
                     value = raw_value
             row = {
                 "frame_index": frame_index,
-                "captured_at": captured_at,
+                "received_at": received_at,
                 "source_time_seconds": round(source_time, 6),
                 "status": status,
                 "display": reading["display"],
@@ -333,15 +332,18 @@ def main():
             csv_file.flush()
             print(json.dumps(row, ensure_ascii=True), flush=True)
             if SHOW_PREVIEW:
-                cv2.imshow(
-                    "Seven segment OCR",
-                    draw_preview(image, mask, reading, status),
+                cv2.setWindowTitle(
+                    window,
+                    f"{status}: {raw_value or '---'} {reading['reason']}   Q / Esc: quit",
                 )
+                cv2.imshow(window, draw_preview(image, mask, reading, line_thickness))
                 delay = 1
                 if not is_camera:
                     delay = max(1, round(1000 / fps))
                 key = cv2.waitKey(delay) & 0xFF
                 if key in (27, ord("q")):
+                    break
+                if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                     break
             success, frame = capture.read()
             if not success:
@@ -350,6 +352,8 @@ def main():
                         "カメラ画像の取得に失敗しました。収集を停止します。"
                     )
                 break
+            received_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            received_time = time.monotonic()
             image = prepare_frame(frame)
             frame_index += 1
     finally:

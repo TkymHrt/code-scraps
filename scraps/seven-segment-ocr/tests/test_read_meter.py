@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -53,29 +54,58 @@ for digit_index in range(6):
 
 
 class CalibrationTests(unittest.TestCase):
-    def run_calibration(self, rois):
-        frame = simulate_meter.make_frame("  1234", reflection="vertical")
+    def calibration_rois(self):
+        rois = []
+        for digit_boxes in read_meter.SEGMENT_BOXES:
+            for left, top, right, bottom in digit_boxes:
+                rois.append((left, top, right - left, bottom - top))
+        return rois
+
+    def run_calibration(self, rois=None, keys=None, frame=None, visibility=None):
+        if rois is None:
+            rois = self.calibration_rois()
+        if keys is None:
+            keys = [ord(" "), 13]
+        if frame is None:
+            frame = simulate_meter.make_frame("  1234", reflection="vertical")
         capture = Mock()
         capture.isOpened.return_value = True
         capture.read.return_value = (True, frame)
 
         output = io.StringIO()
         select_roi = Mock(side_effect=rois)
+        named_window = Mock()
+        resize_window = Mock()
+        visible = Mock(return_value=1, side_effect=visibility)
+        wait_key = Mock(side_effect=keys)
         with patch.multiple(calibrate_meter, SOURCE=0, REFLECTION="vertical"):
             with patch.multiple(
                 calibrate_meter.cv2,
                 VideoCapture=Mock(return_value=capture),
-                namedWindow=Mock(),
-                resizeWindow=Mock(),
+                namedWindow=named_window,
+                resizeWindow=resize_window,
+                setWindowTitle=Mock(),
                 imshow=Mock(),
-                waitKey=Mock(return_value=ord(" ")),
+                waitKey=wait_key,
                 selectROI=select_roi,
-                destroyWindow=Mock(),
+                getWindowProperty=visible,
                 destroyAllWindows=Mock(),
             ):
                 with redirect_stdout(output), redirect_stderr(io.StringIO()):
                     calibrate_meter.main()
         capture.release.assert_called_once()
+        named_window.assert_called_once_with("Calibration", cv2.WINDOW_NORMAL)
+        height, width = frame.shape[:2]
+        scale = min(1.0, 1280 / width, 720 / height)
+        resize_window.assert_called_once_with(
+            "Calibration", round(width * scale), round(height * scale)
+        )
+        for call in select_roi.call_args_list:
+            self.assertEqual(call.args[0], "Calibration")
+            self.assertEqual(call.args[1].shape, frame.shape)
+            self.assertFalse(call.kwargs["printNotice"])
+        for call in wait_key.call_args_list:
+            self.assertEqual(call.args, (30,))
 
         # 表示された代入文は実行せず、右辺のリテラルだけを読む。
         settings = {}
@@ -86,11 +116,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_printed_calibration_can_be_copied_into_reader(self):
         boxes = deepcopy(read_meter.SEGMENT_BOXES)
-        rois = []
-        for digit_boxes in boxes:
-            for left, top, right, bottom in digit_boxes:
-                rois.append((left, top, right - left, bottom - top))
-        settings, select_roi = self.run_calibration(rois)
+        settings, select_roi = self.run_calibration()
         self.assertEqual(
             set(settings),
             {"FRAME_SIZE", "REFLECTION", "SEGMENT_BOXES"},
@@ -108,19 +134,45 @@ class CalibrationTests(unittest.TestCase):
 
     def test_cancel_during_segment_selection_prints_no_partial_settings(self):
         rois = [(42, 15, 36, 10), (95, 41, 9, 35), (0, 0, 0, 0)]
-        settings, select_roi = self.run_calibration(rois)
+        settings, select_roi = self.run_calibration(rois, keys=[ord(" "), ord("q")])
         self.assertEqual(settings, {})
         self.assertEqual(select_roi.call_count, 3)
 
     def test_outside_segment_selection_is_retried(self):
         boxes = deepcopy(read_meter.SEGMENT_BOXES)
-        rois = [(959, 10, 10, 10)]
-        for digit_boxes in boxes:
-            for left, top, right, bottom in digit_boxes:
-                rois.append((left, top, right - left, bottom - top))
+        rois = [(959, 10, 10, 10)] + self.calibration_rois()
         settings, select_roi = self.run_calibration(rois)
         self.assertEqual(settings["SEGMENT_BOXES"], boxes)
         self.assertEqual(select_roi.call_count, 43)
+
+    def test_review_can_undo_across_digit_boundary_then_resume(self):
+        rois = self.calibration_rois()
+        first_selections = rois[:6] + [(10, 10, 5, 5), (20, 20, 5, 5)]
+        selections = first_selections + [(0, 0, 0, 0)] + rois[6:]
+        keys = [ord(" "), ord("b"), ord("b"), 13, 13]
+        settings, select_roi = self.run_calibration(selections, keys=keys)
+        self.assertEqual(settings["SEGMENT_BOXES"], read_meter.SEGMENT_BOXES)
+        self.assertEqual(select_roi.call_count, 45)
+
+    def test_final_review_can_cancel_without_printing_settings(self):
+        settings, select_roi = self.run_calibration(keys=[ord(" "), ord("q")])
+        self.assertEqual(settings, {})
+        self.assertEqual(select_roi.call_count, 42)
+
+    def test_resized_window_keeps_high_resolution_image_coordinates(self):
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+        rois = self.calibration_rois()
+        rois[0] = (3000, 1800, 100, 50)
+        settings, _ = self.run_calibration(rois, frame=frame)
+        self.assertEqual(settings["FRAME_SIZE"], [3840, 2160])
+        self.assertEqual(settings["SEGMENT_BOXES"][0][0], [3000, 1800, 3100, 1850])
+
+    def test_closed_window_cancels_at_preview_selection_or_review(self):
+        cases = [[0], [cv2.error("window destroyed")], [1, 0], [1] * 43 + [0]]
+        for visibility in cases:
+            with self.subTest(visibility=visibility):
+                settings, _ = self.run_calibration(visibility=visibility)
+                self.assertEqual(settings, {})
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -163,12 +215,22 @@ class ConfigurationTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         read_meter.validate_segment_boxes()
 
-    def test_white_recovery_thresholds_are_checked_before_opening_input(self):
+    def test_thresholds_and_stable_frame_count_are_checked_before_opening_input(self):
         invalid_settings = [
+            {"RED_MIN": -1},
+            {"RED_MIN": 256},
+            {"RED_MARGIN": 0},
+            {"RED_MARGIN": 256},
             {"WHITE_MIN": -1},
             {"WHITE_MIN": 256},
             {"RED_SEED_FRACTION": 0},
             {"RED_SEED_FRACTION": 1.1},
+            {"OFF_FRACTION": -0.1},
+            {"OFF_FRACTION": 0.7, "ON_FRACTION": 0.7},
+            {"ON_FRACTION": 1.1},
+            {"STABLE_FRAMES": 0},
+            {"STABLE_FRAMES": 2.5},
+            {"STABLE_FRAMES": float("nan")},
         ]
         for settings in invalid_settings:
             with self.subTest(settings=settings):
@@ -235,10 +297,12 @@ class RecognitionTests(unittest.TestCase):
         image = simulate_meter.draw_display("888888")
         # 最初の桁の上辺を半分隠す。消灯とも点灯とも確定させない。
         cv2.rectangle(image, (30, 10), (60, 29), (8, 8, 8), -1)
-        reading, _ = read_meter.recognize_display(image)
+        reading, mask = read_meter.recognize_display(image)
         self.assertIsNone(reading["raw_value"])
         self.assertTrue(reading["reason"])
-        fraction = reading["fractions"][0][0]
+        left, top, right, bottom = read_meter.SEGMENT_BOXES[0][0]
+        region_mask = mask[top:bottom, left:right]
+        fraction = np.count_nonzero(region_mask) / region_mask.size
         self.assertGreater(fraction, read_meter.OFF_FRACTION)
         self.assertLess(fraction, read_meter.ON_FRACTION)
 
@@ -273,7 +337,8 @@ class RecognitionTests(unittest.TestCase):
                             left, top, right, bottom = box
                             core_mask = mask[top + 1 : bottom - 1, left + 1 : right - 1]
                             self.assertTrue(np.all(core_mask == 255))
-                            fraction = reading["fractions"][digit_index][segment_index]
+                            region_mask = mask[top:bottom, left:right]
+                            fraction = np.count_nonzero(region_mask) / region_mask.size
                             self.assertGreaterEqual(fraction, read_meter.ON_FRACTION)
 
     def test_fully_white_segment_is_uncertain_instead_of_becoming_another_digit(self):
@@ -442,7 +507,19 @@ class VideoOutputTests(unittest.TestCase):
                     float(expected["time_seconds"]),
                     places=5,
                 )
-                self.assertTrue(record["captured_at"])
+                received_at = datetime.fromisoformat(record["received_at"])
+                self.assertEqual(received_at.utcoffset(), timedelta(0))
+                self.assertEqual(
+                    set(record),
+                    {
+                        "frame_index", "received_at", "source_time_seconds", "status",
+                        "display", "raw_value", "value", "reason",
+                    },
+                )
+                self.assertEqual(set(csv_record), set(record))
+                for field, field_value in record.items():
+                    csv_value = "" if field_value is None else str(field_value)
+                    self.assertEqual(csv_record[field], csv_value, field)
                 if value is None:
                     expected_status = "invalid"
                     previous_value = None
@@ -626,6 +703,144 @@ class VideoOutputTests(unittest.TestCase):
                     read_meter.main()
         self.assertEqual(output.getvalue(), "")
         self.assertFalse(csv_dir.exists())
+
+
+class MeasurementOperationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.csv_dir = Path(temporary.name)
+        self.frame = simulate_meter.make_frame("  1234", "horizontal")
+        self.capture = Mock()
+        self.capture.isOpened.return_value = True
+        self.capture.get.return_value = 30.0
+        self.capture.read.return_value = (True, self.frame)
+        settings = patch.multiple(
+            read_meter,
+            SOURCE=0,
+            CSV_DIR=self.csv_dir,
+            SHOW_PREVIEW=True,
+            REFLECTION="horizontal",
+        )
+        settings.start()
+        self.addCleanup(settings.stop)
+        self.gui = {
+            "VideoCapture": Mock(return_value=self.capture),
+            "namedWindow": Mock(),
+            "resizeWindow": Mock(),
+            "setWindowTitle": Mock(),
+            "imshow": Mock(),
+            "waitKey": Mock(return_value=ord("q")),
+            "getWindowProperty": Mock(return_value=1),
+            "destroyAllWindows": Mock(),
+        }
+        gui_patches = patch.multiple(read_meter.cv2, **self.gui)
+        gui_patches.start()
+        self.addCleanup(gui_patches.stop)
+
+    def run_reader(self):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            read_meter.main()
+        records = []
+        for line in output.getvalue().splitlines():
+            records.append(json.loads(line))
+        return records
+
+    def test_large_preview_fits_screen_and_keeps_full_image_for_recognition(self):
+        self.capture.read.return_value = (
+            True, np.zeros((1080, 1920, 3), dtype=np.uint8)
+        )
+        with patch.object(read_meter, "FRAME_SIZE", [1920, 1080]):
+            original_recognize = read_meter.recognize_display
+            with patch.object(
+                read_meter, "recognize_display", wraps=original_recognize
+            ) as recognize:
+                self.run_reader()
+        self.gui["namedWindow"].assert_called_once_with(
+            "Seven segment OCR", cv2.WINDOW_NORMAL
+        )
+        self.gui["resizeWindow"].assert_called_once_with("Seven segment OCR", 640, 720)
+        self.assertEqual(recognize.call_args.args[0].shape, (1080, 1920, 3))
+        self.assertEqual(self.gui["imshow"].call_args.args[1].shape, (2160, 1920, 3))
+        title = self.gui["setWindowTitle"].call_args.args[1]
+        self.assertIn("invalid", title)
+        self.assertIn("all_blank", title)
+
+    def test_quit_keys_and_window_close_stop_before_next_camera_read(self):
+        for key, visibility in [(ord("q"), 1), (27, 1), (-1, 0), (-1, -1)]:
+            with self.subTest(key=key, visibility=visibility):
+                self.capture.reset_mock()
+                self.gui["destroyAllWindows"].reset_mock()
+                self.gui["waitKey"].return_value = key
+                self.gui["getWindowProperty"].return_value = visibility
+                records = self.run_reader()
+                self.assertEqual(len(records), 1)
+                self.capture.read.assert_called_once()
+                self.capture.release.assert_called_once()
+                self.gui["destroyAllWindows"].assert_called_once()
+                title = self.gui["setWindowTitle"].call_args.args[1]
+                self.assertIn("warming_up", title)
+                self.assertIn("1.234", title)
+                self.assertIn("Q / Esc", title)
+
+    def test_receipt_times_precede_processing_and_camera_elapsed_starts_at_zero(self):
+        clock = {"seconds": 100.0}
+        epoch = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        original_prepare = read_meter.prepare_frame
+        original_recognize = read_meter.recognize_display
+
+        def acquire_frame():
+            clock["seconds"] += 0.25
+            return True, self.frame
+
+        def prepare_frame(frame):
+            clock["seconds"] += 10.0
+            return original_prepare(frame)
+
+        def recognize_display(image):
+            clock["seconds"] += 5.0
+            return original_recognize(image)
+
+        fake_datetime = Mock()
+        fake_datetime.now.side_effect = (
+            lambda zone: epoch + timedelta(seconds=clock["seconds"])
+        )
+        self.capture.read.side_effect = acquire_frame
+        self.gui["waitKey"].side_effect = [-1, ord("q")]
+        with patch.object(read_meter, "datetime", fake_datetime):
+            with patch.object(
+                read_meter.time, "monotonic", side_effect=lambda: clock["seconds"]
+            ):
+                with patch.object(read_meter, "prepare_frame", side_effect=prepare_frame):
+                    with patch.object(
+                        read_meter, "recognize_display", side_effect=recognize_display
+                    ):
+                        records = self.run_reader()
+        self.assertEqual(
+            [record["received_at"] for record in records],
+            ["2026-11-02T00:01:40.250+00:00", "2026-11-02T00:01:55.500+00:00"],
+        )
+        self.assertEqual(
+            [record["source_time_seconds"] for record in records], [0.0, 15.25]
+        )
+
+    def test_interrupt_releases_camera_and_preserves_written_rows(self):
+        self.capture.read.side_effect = [(True, self.frame), KeyboardInterrupt]
+        self.gui["waitKey"].return_value = -1
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                read_meter.main()
+        self.capture.release.assert_called_once()
+        self.gui["destroyAllWindows"].assert_called_once()
+        with (self.csv_dir / "readings_001.csv").open(
+            encoding="utf-8", newline=""
+        ) as file:
+            records = list(csv.DictReader(file))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["raw_value"], "1.234")
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
 
 
 if __name__ == "__main__":
