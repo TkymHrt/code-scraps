@@ -34,38 +34,30 @@ calibration_spec = importlib.util.spec_from_file_location(
 calibrate_meter = importlib.util.module_from_spec(calibration_spec)
 calibration_spec.loader.exec_module(calibrate_meter)
 
+# 描画用の720×200画像を直接調べるテストだけで使う枠。
+FLAT_BOXES = []
+for digit_index in range(6):
+    digit_boxes = []
+    for left, top, right, bottom in [
+        [42, 15, 78, 25],
+        [95, 41, 104, 76],
+        [95, 124, 104, 159],
+        [42, 175, 78, 185],
+        [16, 124, 25, 159],
+        [16, 41, 25, 76],
+        [42, 95, 78, 105],
+    ]:
+        offset = digit_index * 120
+        digit_boxes.append([left + offset, top, right + offset, bottom])
+    FLAT_BOXES.append(digit_boxes)
+
 
 class CalibrationTests(unittest.TestCase):
-    def sample_boxes(self):
-        # 手で選ぶ小枠。桁全体の外接枠や割合からは作らない。
-        first_digit = [
-            [42, 15, 78, 25],
-            [95, 41, 104, 76],
-            [95, 124, 104, 159],
-            [42, 175, 78, 185],
-            [16, 124, 25, 159],
-            [16, 41, 25, 76],
-            [42, 95, 78, 105],
-        ]
-        boxes = []
-        for position in range(6):
-            digit_boxes = []
-            for left, top, right, bottom in first_digit:
-                digit_boxes.append(
-                    [left + position * 120, top, right + position * 120, bottom]
-                )
-            boxes.append(digit_boxes)
-        return boxes
-
     def run_calibration(self, rois):
         frame = simulate_meter.make_frame("  1234", reflection="vertical")
         capture = Mock()
         capture.isOpened.return_value = True
         capture.read.return_value = (True, frame)
-
-        def choose_corners(window_name, callback):
-            for x, y in simulate_meter.DISPLAY_CORNERS:
-                callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
 
         output = io.StringIO()
         select_roi = Mock(side_effect=rois)
@@ -76,8 +68,7 @@ class CalibrationTests(unittest.TestCase):
                 namedWindow=Mock(),
                 resizeWindow=Mock(),
                 imshow=Mock(),
-                waitKey=Mock(side_effect=[ord(" "), 13]),
-                setMouseCallback=Mock(side_effect=choose_corners),
+                waitKey=Mock(return_value=ord(" ")),
                 selectROI=select_roi,
                 destroyWindow=Mock(),
                 destroyAllWindows=Mock(),
@@ -94,7 +85,7 @@ class CalibrationTests(unittest.TestCase):
         return settings, select_roi
 
     def test_printed_calibration_can_be_copied_into_reader(self):
-        boxes = self.sample_boxes()
+        boxes = deepcopy(read_meter.SEGMENT_BOXES)
         rois = []
         for digit_boxes in boxes:
             for left, top, right, bottom in digit_boxes:
@@ -102,14 +93,16 @@ class CalibrationTests(unittest.TestCase):
         settings, select_roi = self.run_calibration(rois)
         self.assertEqual(
             set(settings),
-            {"FRAME_SIZE", "REFLECTION", "DISPLAY_CORNERS", "SEGMENT_BOXES"},
+            {"FRAME_SIZE", "REFLECTION", "SEGMENT_BOXES"},
         )
         self.assertEqual(settings["SEGMENT_BOXES"], boxes)
+        self.assertEqual(settings["FRAME_SIZE"], [960, 360])
         self.assertEqual(select_roi.call_count, 42)
+        self.assertEqual(select_roi.call_args_list[0].args[1].shape, (360, 960, 3))
         with patch.multiple(read_meter, **settings):
             read_meter.validate_segment_boxes()
             frame = simulate_meter.make_frame("  1234", reflection="vertical")
-            image = read_meter.rectify_display(frame)
+            image = read_meter.prepare_frame(frame)
             reading, _ = read_meter.recognize_display(image)
         self.assertEqual(reading["raw_value"], "1.234")
 
@@ -120,8 +113,8 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(select_roi.call_count, 3)
 
     def test_outside_segment_selection_is_retried(self):
-        boxes = self.sample_boxes()
-        rois = [(719, 10, 10, 10)]
+        boxes = deepcopy(read_meter.SEGMENT_BOXES)
+        rois = [(959, 10, 10, 10)]
         for digit_boxes in boxes:
             for left, top, right, bottom in digit_boxes:
                 rois.append((left, top, right - left, bottom - top))
@@ -147,6 +140,7 @@ class ConfigurationTests(unittest.TestCase):
                         read_meter.validate_segment_boxes()
 
     def test_segment_boxes_require_integer_coordinates_and_nonempty_image_area(self):
+        frame_width, frame_height = read_meter.FRAME_SIZE
         bad_boxes = [
             [10, 10, 20],
             [10, 10, 20, 20, 30],
@@ -155,8 +149,8 @@ class ConfigurationTests(unittest.TestCase):
             [20, 10, 10, 20],
             [-1, 10, 20, 20],
             [10, -1, 20, 20],
-            [10, 10, 721, 20],
-            [10, 10, 20, 201],
+            [10, 10, frame_width + 1, 20],
+            [10, 10, 20, frame_height + 1],
             [10.5, 10, 20, 20],
             ["10", 10, 20, 20],
             [float("nan"), 10, 20, 20],
@@ -187,9 +181,14 @@ class ConfigurationTests(unittest.TestCase):
 
 class RecognitionTests(unittest.TestCase):
     def setUp(self):
-        reflection = patch.object(read_meter, "REFLECTION", "none")
-        reflection.start()
-        self.addCleanup(reflection.stop)
+        settings = patch.multiple(
+            read_meter,
+            REFLECTION="none",
+            FRAME_SIZE=[720, 200],
+            SEGMENT_BOXES=FLAT_BOXES,
+        )
+        settings.start()
+        self.addCleanup(settings.stop)
 
     def recognize(self, display):
         image = simulate_meter.draw_display(display)
@@ -338,12 +337,16 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(reading["display"], display)
         self.assertEqual(reading["raw_value"], "123.456")
 
-    def test_perspective_and_all_reflection_directions(self):
+
+class FrameRecognitionTests(unittest.TestCase):
+    def test_frame_pixels_and_all_reflection_directions(self):
+        unreflected_frame = simulate_meter.make_frame(" 12345", reflection="none")
         for reflection in ["none", "horizontal", "vertical", "both"]:
             with self.subTest(reflection=reflection):
                 frame = simulate_meter.make_frame(" 12345", reflection=reflection)
                 with patch.object(read_meter, "REFLECTION", reflection):
-                    image = read_meter.rectify_display(frame)
+                    image = read_meter.prepare_frame(frame)
+                self.assertTrue(np.array_equal(image, unreflected_frame))
                 reading, _ = read_meter.recognize_display(image)
                 self.assertEqual(reading["raw_value"], "12.345")
 
@@ -363,7 +366,7 @@ class RecognitionTests(unittest.TestCase):
                     display, "horizontal", brightness, blur, noise, seed=23
                 )
                 with patch.object(read_meter, "REFLECTION", "horizontal"):
-                    image = read_meter.rectify_display(frame)
+                    image = read_meter.prepare_frame(frame)
                 reading, _ = read_meter.recognize_display(image)
                 self.assertEqual(reading["raw_value"], expected)
 
@@ -371,7 +374,7 @@ class RecognitionTests(unittest.TestCase):
         frame = simulate_meter.make_frame("123456", reflection="none")
         smaller_frame = cv2.resize(frame, (480, 180))
         with self.assertRaises(ValueError):
-            read_meter.rectify_display(smaller_frame)
+            read_meter.prepare_frame(smaller_frame)
 
 
 class VideoOutputTests(unittest.TestCase):
@@ -393,30 +396,34 @@ class VideoOutputTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def run_reader(self, csv_path, video_path=None):
+    def run_reader(self, csv_dir, video_path=None):
         if video_path is None:
             video_path = self.output / "meter.avi"
         output = io.StringIO()
+        messages = io.StringIO()
         with patch.multiple(
             read_meter,
             SOURCE=video_path,
-            CSV_FILE=csv_path,
+            CSV_DIR=csv_dir,
             SHOW_PREVIEW=False,
             REFLECTION="horizontal",
         ):
-            with redirect_stdout(output):
+            with redirect_stdout(output), redirect_stderr(messages):
                 read_meter.main()
+        self.assertIn(str(csv_dir), messages.getvalue())
         return output.getvalue()
 
     def test_video_to_jsonl_and_csv_with_stability_reset(self):
-        csv_path = self.output / "readings.csv"
-        output = self.run_reader(csv_path)
+        csv_dir = self.output / "readings"
+        output = self.run_reader(csv_dir)
         records = []
         for line in output.splitlines():
             records.append(json.loads(line))
         with (self.output / "truth.csv").open(encoding="utf-8", newline="") as file:
             truth = list(csv.DictReader(file))
-        with csv_path.open(encoding="utf-8-sig", newline="") as file:
+        with (csv_dir / "readings_001.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as file:
             csv_records = list(csv.DictReader(file))
         self.assertEqual(len(records), len(truth))
         self.assertEqual(len(csv_records), len(truth))
@@ -458,20 +465,52 @@ class VideoOutputTests(unittest.TestCase):
                 self.assertEqual(csv_record["value"], accepted_value or "")
                 self.assertEqual(csv_record["raw_value"], value or "")
 
-    def test_existing_csv_is_not_overwritten(self):
-        csv_path = self.output / "existing.csv"
+    def test_repeated_runs_choose_free_numbers_and_preserve_existing_files(self):
+        csv_dir = self.output / "numbered"
+        csv_dir.mkdir()
         original = "以前の測定値\n123.456\n"
-        csv_path.write_text(original, encoding="utf-8")
-        with self.assertRaises(FileExistsError):
-            self.run_reader(csv_path)
-        self.assertEqual(csv_path.read_text(encoding="utf-8"), original)
+        for number in [1, 3]:
+            path = csv_dir / f"readings_{number:03d}.csv"
+            path.write_text(original, encoding="utf-8")
+        self.run_reader(csv_dir)
+        second_path = csv_dir / "readings_002.csv"
+        second_contents = second_path.read_bytes()
+        self.run_reader(csv_dir)
+        self.assertTrue((csv_dir / "readings_004.csv").is_file())
+        self.assertEqual(second_path.read_bytes(), second_contents)
+        for number in [1, 3]:
+            path = csv_dir / f"readings_{number:03d}.csv"
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_csv_name_collision_retries_exclusive_creation(self):
+        csv_dir = self.output / "collision"
+        original_open = Path.open
+        attempted_names = []
+        original = "別の処理が保存した測定値\n"
+
+        def open_with_collision(path, mode="r", *args, **kwargs):
+            if path.parent == csv_dir and mode == "x":
+                attempted_names.append(path.name)
+                if path.name == "readings_001.csv":
+                    with original_open(path, "x", encoding="utf-8") as file:
+                        file.write(original)
+                    raise FileExistsError("保存直前に同名のCSVが作られた")
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch.object(Path, "open", new=open_with_collision):
+            self.run_reader(csv_dir)
+        self.assertEqual(attempted_names, ["readings_001.csv", "readings_002.csv"])
+        self.assertEqual(
+            (csv_dir / "readings_001.csv").read_text(encoding="utf-8"), original
+        )
+        self.assertTrue((csv_dir / "readings_002.csv").is_file())
 
     def test_white_cores_survive_perspective_and_compressed_video(self):
         original_draw_display = simulate_meter.draw_display
 
         def draw_overexposed_display(display, brightness=230):
             image = original_draw_display(display, brightness)
-            for digit, digit_boxes in zip(display, read_meter.SEGMENT_BOXES):
+            for digit, digit_boxes in zip(display, FLAT_BOXES):
                 for name, box in zip("abcdefg", digit_boxes):
                     if name in simulate_meter.LIT_SEGMENTS[digit]:
                         left, top, right, bottom = box
@@ -495,7 +534,7 @@ class VideoOutputTests(unittest.TestCase):
                         writer.write(frame)
         finally:
             writer.release()
-        output = self.run_reader(self.output / "white_cores.csv", video_path)
+        output = self.run_reader(self.output / "white_cores", video_path)
         records = []
         for line in output.splitlines():
             records.append(json.loads(line))
@@ -526,7 +565,7 @@ class VideoOutputTests(unittest.TestCase):
                 writer.write(simulate_meter.make_frame(display, "horizontal"))
         finally:
             writer.release()
-        output = self.run_reader(self.output / "interrupted.csv", video_path=video_path)
+        output = self.run_reader(self.output / "interrupted", video_path=video_path)
         statuses = []
         values = []
         for line in output.splitlines():
@@ -553,31 +592,32 @@ class VideoOutputTests(unittest.TestCase):
         capture.get.return_value = 30.0
         frame = simulate_meter.make_frame("  1234", "horizontal")
         capture.read.side_effect = [(True, frame), (False, None)]
-        csv_path = self.output / "camera_disconnect.csv"
+        csv_dir = self.output / "camera_disconnect"
         output = io.StringIO()
         with patch.multiple(
             read_meter,
             SOURCE=0,
-            CSV_FILE=csv_path,
+            CSV_DIR=csv_dir,
             SHOW_PREVIEW=False,
             REFLECTION="horizontal",
         ):
             with patch.object(read_meter.cv2, "VideoCapture", return_value=capture):
-                with redirect_stdout(output):
+                with redirect_stdout(output), redirect_stderr(io.StringIO()):
                     with self.assertRaises(RuntimeError):
                         read_meter.main()
         capture.release.assert_called_once()
-        with csv_path.open(encoding="utf-8", newline="") as file:
+        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
             records = list(csv.DictReader(file))
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["value"], "")
 
     def test_mismatched_video_size_fails_without_a_value(self):
         output = io.StringIO()
+        csv_dir = self.output / "wrong_size"
         with patch.multiple(
             read_meter,
             SOURCE=self.output / "meter.avi",
-            CSV_FILE=self.output / "wrong_size.csv",
+            CSV_DIR=csv_dir,
             SHOW_PREVIEW=False,
             FRAME_SIZE=[1280, 720],
         ):
@@ -585,6 +625,7 @@ class VideoOutputTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     read_meter.main()
         self.assertEqual(output.getvalue(), "")
+        self.assertFalse(csv_dir.exists())
 
 
 if __name__ == "__main__":

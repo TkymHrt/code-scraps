@@ -1,16 +1,13 @@
-"""表示面と各桁7個の領域を選び、read_meter.pyへ貼る設定を表示する。"""
+"""撮影画像から各桁7個の領域を選び、read_meter.pyへ貼る設定を表示する。"""
 
 import sys
 
 import cv2
-import numpy as np
 
 # カメラは整数。録画を使う場合は下の行へ切り替える。
 SOURCE = 0
 # SOURCE = r"C:\measurement\recorded.avi"
 REFLECTION = "horizontal"  # "none", "horizontal", "vertical", "both"
-DISPLAY_WIDTH = 720
-DISPLAY_HEIGHT = 200
 
 
 def correct_reflection(frame):
@@ -23,19 +20,6 @@ def correct_reflection(frame):
     if REFLECTION == "none":
         return frame
     raise ValueError("REFLECTION の指定が不正です。")
-
-
-def validate_corners(points, width, height):
-    corners = np.float32(points)
-    if (corners[:, 0] < 0).any() or (corners[:, 0] >= width).any():
-        raise ValueError("四隅のx座標が撮影画像からはみ出しています。")
-    if (corners[:, 1] < 0).any() or (corners[:, 1] >= height).any():
-        raise ValueError("四隅のy座標が撮影画像からはみ出しています。")
-    if (
-        not cv2.isContourConvex(corners)
-        or cv2.contourArea(corners, oriented=True) < 100
-    ):
-        raise ValueError("四隅を左上→右上→右下→左下の順に選び直してください。")
 
 
 def main():
@@ -94,61 +78,8 @@ def main():
                 if not success:
                     raise RuntimeError("校正中にカメラ画像の取得に失敗しました。")
 
-        points = []
-
-        def remember_click(event, x, y, flags, parameter):
-            if event == cv2.EVENT_LBUTTONDOWN and len(points) < 4:
-                points.append([x, y])
-
-        cv2.setMouseCallback(window, remember_click)
-        while True:
-            preview = corrected.copy()
-            cv2.putText(
-                preview,
-                "Click TL, TR, BR, BL   ENTER: next   R: reset   Q: cancel",
-                (10, 28),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 255),
-                1,
-            )
-            for index, point in enumerate(points):
-                cv2.circle(preview, tuple(point), 4, (0, 255, 255), -1)
-                cv2.putText(
-                    preview,
-                    str(index + 1),
-                    tuple(point),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 255),
-                    2,
-                )
-            cv2.imshow(window, preview)
-            key = cv2.waitKey(30) & 0xFF
-            if key in (27, ord("q")):
-                return
-            if key == ord("r"):
-                points.clear()
-            if key == 13 and len(points) == 4:
-                try:
-                    validate_corners(points, frame.shape[1], frame.shape[0])
-                except ValueError as error:
-                    print(str(error) + " Rで選び直せます。", file=sys.stderr)
-                    continue
-                break
-
-        destination = np.float32(
-            [
-                [0, 0],
-                [DISPLAY_WIDTH - 1, 0],
-                [DISPLAY_WIDTH - 1, DISPLAY_HEIGHT - 1],
-                [0, DISPLAY_HEIGHT - 1],
-            ]
-        )
-        transform = cv2.getPerspectiveTransform(np.float32(points), destination)
-        image = cv2.warpPerspective(
-            corrected, transform, (DISPLAY_WIDTH, DISPLAY_HEIGHT)
-        )
+        image = corrected
+        image_height, image_width = image.shape[:2]
         cv2.destroyWindow(window)
         segment_names = [
             "top",
@@ -186,23 +117,21 @@ def main():
                 right = x + width
                 bottom = y + height
                 if not (
-                    0 <= x < right <= DISPLAY_WIDTH
-                    and 0 <= y < bottom <= DISPLAY_HEIGHT
+                    0 <= x < right <= image_width and 0 <= y < bottom <= image_height
                 ):
                     print(
-                        "セグメント枠を補正画像内に選び直してください。",
+                        "セグメント枠を撮影画像内に選び直してください。",
                         file=sys.stderr,
                     )
                     continue
                 boxes.append([x, y, right, bottom])
 
         print(
-            "以下の4行をread_meter.py先頭の同名設定へ貼り付けてください。",
+            "以下の3行をread_meter.py先頭の同名設定へ貼り付けてください。",
             file=sys.stderr,
         )
         print("FRAME_SIZE = " + repr([frame.shape[1], frame.shape[0]]))
         print("REFLECTION = " + repr(REFLECTION))
-        print("DISPLAY_CORNERS = " + repr(points))
         print("SEGMENT_BOXES = " + repr(segment_boxes))
     finally:
         capture.release()

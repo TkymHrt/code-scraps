@@ -14,69 +14,68 @@ import numpy as np
 # ここを変更して、このスクリプトをそのまま実行する。
 BASE_DIR = Path(__file__).resolve().parent
 SOURCE = BASE_DIR / "outputs/simulation/meter.avi"  # 実機ではカメラ番号の0などに変更
-CSV_FILE = BASE_DIR / "outputs/readings.csv"
+CSV_DIR = BASE_DIR / "outputs"
 SHOW_PREVIEW = True
 
-# 実機ではcalibrate_meter.pyが表示した4項目をここへ貼り付ける。
+# 実機ではcalibrate_meter.pyが表示した3項目をここへ貼り付ける。
 FRAME_SIZE = [960, 360]
 REFLECTION = "horizontal"  # horizontal / vertical / both / none
-DISPLAY_CORNERS = [[110, 92], [846, 61], [866, 289], [91, 309]]
-# 補正後の画像の絶対座標 [左, 上, 右, 下]。右・下の画素は含めない。
+# 鏡像を戻した撮影画像の絶対座標 [左, 上, 右, 下]。右・下の画素は含めない。
 # 左の桁から6組。各組は上、右上、右下、下、左下、左上、中央の順。
 SEGMENT_BOXES = [
     [
-        [42, 15, 78, 25],
-        [95, 41, 104, 76],
-        [95, 124, 104, 159],
-        [42, 175, 78, 185],
-        [16, 124, 25, 159],
-        [16, 41, 25, 76],
-        [42, 95, 78, 105],
+        [149, 105, 185, 116],
+        [198, 131, 209, 169],
+        [192, 221, 203, 261],
+        [135, 279, 173, 292],
+        [111, 224, 123, 263],
+        [119, 134, 131, 172],
+        [142, 190, 179, 202],
     ],
     [
-        [162, 15, 198, 25],
-        [215, 41, 224, 76],
-        [215, 124, 224, 159],
-        [162, 175, 198, 185],
-        [136, 124, 145, 159],
-        [136, 41, 145, 76],
-        [162, 95, 198, 105],
+        [268, 100, 304, 112],
+        [319, 126, 329, 164],
+        [315, 217, 326, 257],
+        [259, 276, 297, 288],
+        [234, 220, 245, 259],
+        [239, 129, 250, 167],
+        [263, 186, 301, 198],
     ],
     [
-        [282, 15, 318, 25],
-        [335, 41, 344, 76],
-        [335, 124, 344, 159],
-        [282, 175, 318, 185],
-        [256, 124, 265, 159],
-        [256, 41, 265, 76],
-        [282, 95, 318, 105],
+        [389, 95, 426, 107],
+        [442, 122, 452, 160],
+        [442, 213, 451, 253],
+        [385, 272, 423, 285],
+        [358, 216, 369, 256],
+        [361, 125, 371, 163],
+        [387, 182, 424, 194],
     ],
     [
-        [402, 15, 438, 25],
-        [455, 41, 464, 76],
-        [455, 124, 464, 159],
-        [402, 175, 438, 185],
-        [376, 124, 385, 159],
-        [376, 41, 385, 76],
-        [402, 95, 438, 105],
+        [512, 90, 549, 102],
+        [567, 117, 578, 155],
+        [569, 209, 580, 250],
+        [513, 269, 552, 281],
+        [485, 212, 495, 252],
+        [485, 120, 494, 158],
+        [512, 177, 551, 190],
     ],
     [
-        [522, 15, 558, 25],
-        [575, 41, 584, 76],
-        [575, 124, 584, 159],
-        [522, 175, 558, 185],
-        [496, 124, 505, 159],
-        [496, 41, 505, 76],
-        [522, 95, 558, 105],
+        [637, 84, 675, 97],
+        [694, 112, 706, 151],
+        [699, 205, 711, 246],
+        [644, 265, 684, 278],
+        [613, 208, 624, 248],
+        [611, 115, 621, 154],
+        [640, 173, 679, 185],
     ],
     [
-        [642, 15, 678, 25],
-        [695, 41, 704, 76],
-        [695, 124, 704, 159],
-        [642, 175, 678, 185],
-        [616, 124, 625, 159],
-        [616, 41, 625, 76],
-        [642, 95, 678, 105],
+        [764, 79, 804, 92],
+        [824, 107, 837, 146],
+        [831, 201, 845, 242],
+        [777, 262, 818, 274],
+        [744, 204, 756, 244],
+        [738, 110, 750, 149],
+        [770, 168, 811, 181],
     ],
 ]
 
@@ -87,9 +86,6 @@ RED_SEED_FRACTION = 0.05  # 白飛びを補う連結領域に必要な赤色の�
 OFF_FRACTION = 0.15
 ON_FRACTION = 0.65
 STABLE_FRAMES = 3
-
-DISPLAY_WIDTH = 720
-DISPLAY_HEIGHT = 200
 
 PATTERN_TO_DIGIT = {
     "1111110": "0",
@@ -106,22 +102,12 @@ PATTERN_TO_DIGIT = {
 }
 
 
-def validate_corners(points, width, height):
-    corners = np.array(points, dtype=np.float32)
-    if corners.shape != (4, 2) or not np.isfinite(corners).all():
-        raise ValueError("DISPLAY_CORNERSは4個の有限な座標にしてください。")
-    if (corners[:, 0] < 0).any() or (corners[:, 0] >= width).any():
-        raise ValueError("四隅のx座標が撮影画像からはみ出しています。")
-    if (corners[:, 1] < 0).any() or (corners[:, 1] >= height).any():
-        raise ValueError("四隅のy座標が撮影画像からはみ出しています。")
-    if (
-        not cv2.isContourConvex(corners)
-        or cv2.contourArea(corners, oriented=True) < 100
-    ):
-        raise ValueError("四隅を左上→右上→右下→左下の順に選び直してください。")
-
-
-def correct_reflection(frame):
+def prepare_frame(frame):
+    height, width = frame.shape[:2]
+    if [width, height] != FRAME_SIZE:
+        raise ValueError(
+            "撮影解像度が校正時と異なります。現在の解像度で校正し直してください。"
+        )
     if REFLECTION == "horizontal":
         return cv2.flip(frame, 1)
     if REFLECTION == "vertical":
@@ -146,23 +132,10 @@ def validate_segment_boxes():
                 if not isinstance(coordinate, int):
                     raise ValueError("セグメント枠の座標は整数にしてください。")
             left, top, right, bottom = box
-            if not (0 <= left < right <= DISPLAY_WIDTH):
-                raise ValueError("セグメント枠の横範囲を補正画像内にしてください。")
-            if not (0 <= top < bottom <= DISPLAY_HEIGHT):
-                raise ValueError("セグメント枠の縦範囲を補正画像内にしてください。")
-
-
-def rectify_display(frame):
-    height, width = frame.shape[:2]
-    if [width, height] != FRAME_SIZE:
-        raise ValueError(
-            "撮影解像度が校正時と異なります。現在の解像度で校正し直してください。"
-        )
-    corrected = correct_reflection(frame)
-    source = np.float32(DISPLAY_CORNERS)
-    destination = np.float32([[0, 0], [719, 0], [719, 199], [0, 199]])
-    transform = cv2.getPerspectiveTransform(source, destination)
-    return cv2.warpPerspective(corrected, transform, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+            if not (0 <= left < right <= FRAME_SIZE[0]):
+                raise ValueError("セグメント枠の横範囲を撮影画像内にしてください。")
+            if not (0 <= top < bottom <= FRAME_SIZE[1]):
+                raise ValueError("セグメント枠の縦範囲を撮影画像内にしてください。")
 
 
 def recognize_display(image):
@@ -255,20 +228,23 @@ def draw_preview(image, mask, reading, status):
     panel = np.vstack([annotated, mask_bgr])
     label = f"{status}: [{reading['display']}] {reading['reason']}   Q: quit"
     cv2.putText(
-        panel, label, (8, 218), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1
+        panel,
+        label,
+        (8, image.shape[0] + 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 0),
+        1,
     )
     return panel
 
 
 def main():
-    validate_corners(DISPLAY_CORNERS, FRAME_SIZE[0], FRAME_SIZE[1])
     validate_segment_boxes()
     if not (0 <= WHITE_MIN <= 255 and 0 < RED_SEED_FRACTION <= 1):
         raise ValueError("WHITE_MINは0〜255、RED_SEED_FRACTIONは0より大きく1以下です。")
     if not 0 <= OFF_FRACTION < ON_FRACTION <= 1 or STABLE_FRAMES < 1:
         raise ValueError("点灯率の大小関係とSTABLE_FRAMESを確認してください。")
-    if CSV_FILE.exists():
-        raise FileExistsError("CSVは上書きしません。先頭のCSV_FILEを変更してください。")
 
     is_camera = isinstance(SOURCE, int)
     if is_camera:
@@ -287,13 +263,23 @@ def main():
         success, frame = capture.read()
         if not success:
             raise RuntimeError("最初の画像を取得できません。")
+        image = prepare_frame(frame)
         fps = capture.get(cv2.CAP_PROP_FPS)
         if not is_camera and (not math.isfinite(fps) or fps <= 0):
             raise RuntimeError(
                 "動画のfpsを取得できません。時刻を付けられないため停止します。"
             )
-        CSV_FILE.parent.mkdir(parents=True, exist_ok=True)
-        csv_file = CSV_FILE.open("x", encoding="utf-8", newline="")
+        CSV_DIR.mkdir(parents=True, exist_ok=True)
+        csv_number = 1
+        while True:
+            csv_path = CSV_DIR / f"readings_{csv_number:03d}.csv"
+            try:
+                csv_file = csv_path.open("x", encoding="utf-8", newline="")
+            except FileExistsError:
+                csv_number += 1
+            else:
+                break
+        print("CSV: " + str(csv_path), file=sys.stderr)
         fields = [
             "frame_index",
             "captured_at",
@@ -316,7 +302,6 @@ def main():
                 source_time = time.monotonic() - start_time
             else:
                 source_time = frame_index / fps
-            image = rectify_display(frame)
             reading, mask = recognize_display(image)
             raw_value = reading["raw_value"]
             value = None
@@ -365,6 +350,7 @@ def main():
                         "カメラ画像の取得に失敗しました。収集を停止します。"
                     )
                 break
+            image = prepare_frame(frame)
             frame_index += 1
     finally:
         capture.release()
