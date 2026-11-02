@@ -148,11 +148,21 @@ class CalibrationTests(unittest.TestCase):
     def test_review_can_undo_across_digit_boundary_then_resume(self):
         rois = self.calibration_rois()
         first_selections = rois[:6] + [(10, 10, 5, 5), (20, 20, 5, 5)]
-        selections = first_selections + [(0, 0, 0, 0)] + rois[6:]
-        keys = [ord(" "), ord("b"), ord("b"), 13, 13]
+        selections = first_selections + [(0, 0, 0, 0), (0, 0, 0, 0)] + rois[6:]
+        keys = [ord(" "), ord("b"), ord("b"), 13]
         settings, select_roi = self.run_calibration(selections, keys=keys)
         self.assertEqual(settings["SEGMENT_BOXES"], read_meter.SEGMENT_BOXES)
-        self.assertEqual(select_roi.call_count, 45)
+        self.assertEqual(select_roi.call_count, 46)
+
+    def test_final_review_undo_allows_redraw_without_resume_key(self):
+        rois = self.calibration_rois() + [(772, 170, 37, 9)]
+        settings, select_roi = self.run_calibration(
+            rois, keys=[ord(" "), ord("b"), 13]
+        )
+        expected = deepcopy(read_meter.SEGMENT_BOXES)
+        expected[5][6] = [772, 170, 809, 179]
+        self.assertEqual(settings["SEGMENT_BOXES"], expected)
+        self.assertEqual(select_roi.call_count, 43)
 
     def test_final_review_can_cancel_without_printing_settings(self):
         settings, select_roi = self.run_calibration(keys=[ord(" "), ord("q")])

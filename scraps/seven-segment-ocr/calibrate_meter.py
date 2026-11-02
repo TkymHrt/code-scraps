@@ -110,7 +110,10 @@ def main():
                 action = "resume"
                 if len(selected_boxes) == 42:
                     action = "finish"
-                message = f"{len(selected_boxes)}/42  ENTER: {action}   B: undo   Q: cancel"
+                message = (
+                    f"{len(selected_boxes)}/42  ENTER: {action}   "
+                    "B: undo and redraw   Q: cancel"
+                )
                 cv2.setWindowTitle(window, message)
                 cv2.imshow(window, preview)
                 key = cv2.waitKey(30) & 0xFF
@@ -118,6 +121,7 @@ def main():
                     return
                 if key == ord("b") and selected_boxes:
                     selected_boxes.pop()
+                    reviewing = False
                 elif key in (10, 13):
                     if len(selected_boxes) == 42:
                         break
