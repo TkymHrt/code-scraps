@@ -271,15 +271,9 @@ def main():
             cv2.resizeWindow(window, round(width * scale), round(panel_height * scale))
             line_thickness = max(1, round(1 / scale))
         CSV_DIR.mkdir(parents=True, exist_ok=True)
-        csv_number = 1
-        while True:
-            csv_path = CSV_DIR / f"readings_{csv_number:03d}.csv"
-            try:
-                csv_file = csv_path.open("x", encoding="utf-8", newline="")
-            except FileExistsError:
-                csv_number += 1
-            else:
-                break
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        csv_path = CSV_DIR / f"readings_{timestamp}.csv"
+        csv_file = csv_path.open("x", encoding="utf-8", newline="")
         print("CSV: " + str(csv_path), file=sys.stderr)
         fields = [
             "frame_index",

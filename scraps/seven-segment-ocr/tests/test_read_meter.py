@@ -452,6 +452,13 @@ class FrameRecognitionTests(unittest.TestCase):
             read_meter.prepare_frame(smaller_frame)
 
 
+def only_readings_csv(directory):
+    paths = list(directory.glob("readings_*.csv"))
+    if len(paths) != 1:
+        raise AssertionError(f"測定CSVは1個必要です。現在は{len(paths)}個です。")
+    return paths[0]
+
+
 class VideoOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -496,7 +503,7 @@ class VideoOutputTests(unittest.TestCase):
             records.append(json.loads(line))
         with (self.output / "truth.csv").open(encoding="utf-8", newline="") as file:
             truth = list(csv.DictReader(file))
-        with (csv_dir / "readings_001.csv").open(
+        with only_readings_csv(csv_dir).open(
             encoding="utf-8-sig", newline=""
         ) as file:
             csv_records = list(csv.DictReader(file))
@@ -565,45 +572,66 @@ class VideoOutputTests(unittest.TestCase):
                 else:
                     self.assertEqual(csv_record["reason"], "")
 
-    def test_repeated_runs_choose_free_numbers_and_preserve_existing_files(self):
-        csv_dir = self.output / "numbered"
+    def test_repeated_runs_use_local_datetime_names_and_preserve_existing_files(self):
+        csv_dir = self.output / "timestamped"
         csv_dir.mkdir()
         original = "以前の測定値\n123.456\n"
-        for number in [1, 3]:
-            path = csv_dir / f"readings_{number:03d}.csv"
-            path.write_text(original, encoding="utf-8")
-        self.run_reader(csv_dir)
-        second_path = csv_dir / "readings_002.csv"
-        second_contents = second_path.read_bytes()
-        self.run_reader(csv_dir)
-        self.assertTrue((csv_dir / "readings_004.csv").is_file())
-        self.assertEqual(second_path.read_bytes(), second_contents)
-        for number in [1, 3]:
-            path = csv_dir / f"readings_{number:03d}.csv"
-            self.assertEqual(path.read_text(encoding="utf-8"), original)
+        original_path = csv_dir / "readings_20261103_123456_123455.csv"
+        original_path.write_text(original, encoding="utf-8")
+        local_times = iter([
+            datetime(2026, 11, 3, 12, 34, 56, 123456),
+            datetime(2026, 11, 3, 12, 34, 56, 123457),
+        ])
 
-    def test_csv_name_collision_retries_exclusive_creation(self):
-        csv_dir = self.output / "collision"
-        original_open = Path.open
-        attempted_names = []
-        original = "別の処理が保存した測定値\n"
+        def current_datetime(zone=None):
+            if zone is None:
+                return next(local_times)
+            return datetime.now(zone)
 
-        def open_with_collision(path, mode="r", *args, **kwargs):
-            if path.parent == csv_dir and mode == "x":
-                attempted_names.append(path.name)
-                if path.name == "readings_001.csv":
-                    with original_open(path, "x", encoding="utf-8") as file:
-                        file.write(original)
-                    raise FileExistsError("保存直前に同名のCSVが作られた")
-            return original_open(path, mode, *args, **kwargs)
-
-        with patch.object(Path, "open", new=open_with_collision):
+        fake_datetime = Mock()
+        fake_datetime.now.side_effect = current_datetime
+        first_path = csv_dir / "readings_20261103_123456_123456.csv"
+        second_path = csv_dir / "readings_20261103_123456_123457.csv"
+        with patch.object(read_meter, "datetime", fake_datetime):
             self.run_reader(csv_dir)
-        self.assertEqual(attempted_names, ["readings_001.csv", "readings_002.csv"])
+            first_contents = first_path.read_bytes()
+            self.run_reader(csv_dir)
+        self.assertEqual(first_path.read_bytes(), first_contents)
+        self.assertTrue(second_path.is_file())
+        self.assertEqual(original_path.read_text(encoding="utf-8"), original)
         self.assertEqual(
-            (csv_dir / "readings_001.csv").read_text(encoding="utf-8"), original
+            set(csv_dir.glob("readings_*.csv")),
+            {original_path, first_path, second_path},
         )
-        self.assertTrue((csv_dir / "readings_002.csv").is_file())
+
+    def test_datetime_name_collision_fails_without_overwriting_or_outputting_values(self):
+        csv_dir = self.output / "collision"
+        csv_dir.mkdir()
+        original = "別の処理が保存した測定値\n".encode("utf-8")
+        existing_path = csv_dir / "readings_20261103_123456_123456.csv"
+        existing_path.write_bytes(original)
+        fixed_time = datetime(2026, 11, 3, 12, 34, 56, 123456)
+        fake_datetime = Mock()
+        fake_datetime.now.side_effect = lambda zone=None: fixed_time.replace(tzinfo=zone)
+        capture = Mock()
+        capture.isOpened.return_value = True
+        capture.get.return_value = 30.0
+        frame = simulate_meter.make_frame("  1234", "horizontal")
+        capture.read.return_value = (True, frame)
+        output = io.StringIO()
+        with patch.multiple(
+            read_meter, SOURCE=0, CSV_DIR=csv_dir, SHOW_PREVIEW=False,
+            REFLECTION="horizontal", datetime=fake_datetime,
+        ):
+            with patch.object(read_meter.cv2, "VideoCapture", return_value=capture):
+                with redirect_stdout(output), redirect_stderr(io.StringIO()):
+                    with self.assertRaises(FileExistsError):
+                        read_meter.main()
+        self.assertEqual(existing_path.read_bytes(), original)
+        self.assertEqual(list(csv_dir.glob("readings_*.csv")), [existing_path])
+        self.assertEqual(output.getvalue(), "")
+        capture.read.assert_called_once()
+        capture.release.assert_called_once()
 
     def test_white_cores_survive_perspective_and_compressed_video(self):
         original_draw_display = simulate_meter.draw_display
@@ -640,7 +668,7 @@ class VideoOutputTests(unittest.TestCase):
         for line in output.splitlines():
             records.append(json.loads(line))
         self.assertEqual(len(records), 8)
-        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
+        with only_readings_csv(csv_dir).open(encoding="utf-8", newline="") as file:
             csv_records = list(csv.DictReader(file))
         expected_values = ["1.230"] * 4 + ["888.888"] * 4
         for record, expected in zip(csv_records, expected_values):
@@ -677,7 +705,7 @@ class VideoOutputTests(unittest.TestCase):
         for line in output.splitlines():
             record = json.loads(line)
             values.append(record["value"])
-        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
+        with only_readings_csv(csv_dir).open(encoding="utf-8", newline="") as file:
             for record in csv.DictReader(file):
                 statuses.append(record["status"])
         self.assertEqual(
@@ -714,7 +742,7 @@ class VideoOutputTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         read_meter.main()
         capture.release.assert_called_once()
-        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
+        with only_readings_csv(csv_dir).open(encoding="utf-8", newline="") as file:
             records = list(csv.DictReader(file))
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["value"], "")
@@ -833,10 +861,14 @@ class MeasurementOperationTests(unittest.TestCase):
             clock["seconds"] += 5.0
             return original_recognize(image)
 
+        def current_datetime(zone=None):
+            current = epoch + timedelta(seconds=clock["seconds"])
+            if zone is None:
+                return current.astimezone().replace(tzinfo=None)
+            return current.astimezone(zone)
+
         fake_datetime = Mock()
-        fake_datetime.now.side_effect = (
-            lambda zone: epoch + timedelta(seconds=clock["seconds"])
-        )
+        fake_datetime.now.side_effect = current_datetime
         self.capture.read.side_effect = acquire_frame
         self.gui["waitKey"].side_effect = [-1, ord("q")]
         with patch.object(read_meter, "datetime", fake_datetime):
@@ -865,7 +897,7 @@ class MeasurementOperationTests(unittest.TestCase):
                 read_meter.main()
         self.capture.release.assert_called_once()
         self.gui["destroyAllWindows"].assert_called_once()
-        with (self.csv_dir / "readings_001.csv").open(
+        with only_readings_csv(self.csv_dir).open(
             encoding="utf-8", newline=""
         ) as file:
             records = list(csv.DictReader(file))
