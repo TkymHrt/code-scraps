@@ -1,4 +1,4 @@
-"""赤い6桁7セグを読み、固定小数3桁の値をJSONLとCSVに出力する。"""
+"""赤い6桁7セグを読み、連携用JSONLと診断用CSVに出力する。"""
 
 import csv
 import json
@@ -330,7 +330,15 @@ def main():
             }
             writer.writerow(row)
             csv_file.flush()
-            print(json.dumps(row, ensure_ascii=True), flush=True)
+            message = {
+                "received_at": row["received_at"],
+                "source_time_seconds": row["source_time_seconds"],
+                "value": None,
+            }
+            # CSVは小数3桁を保ち、連携ではそのまま計算できる数値を渡す。
+            if value is not None:
+                message["value"] = float(value)
+            print(json.dumps(message, ensure_ascii=True), flush=True)
             if SHOW_PREVIEW:
                 cv2.setWindowTitle(
                     window,

@@ -488,7 +488,7 @@ class VideoOutputTests(unittest.TestCase):
         self.assertIn(str(csv_dir), messages.getvalue())
         return output.getvalue()
 
-    def test_video_to_jsonl_and_csv_with_stability_reset(self):
+    def test_video_to_minimal_jsonl_and_diagnostic_csv_with_stability_reset(self):
         csv_dir = self.output / "readings"
         output = self.run_reader(csv_dir)
         records = []
@@ -510,8 +510,8 @@ class VideoOutputTests(unittest.TestCase):
             with self.subTest(
                 frame_index=expected["frame_index"], scenario=expected["scenario"]
             ):
-                self.assertEqual(record["frame_index"], int(expected["frame_index"]))
-                self.assertEqual(record["raw_value"], value)
+                self.assertEqual(csv_record["frame_index"], expected["frame_index"])
+                self.assertEqual(csv_record["display"], expected["display"])
                 self.assertAlmostEqual(
                     record["source_time_seconds"],
                     float(expected["time_seconds"]),
@@ -521,15 +521,19 @@ class VideoOutputTests(unittest.TestCase):
                 self.assertEqual(received_at.utcoffset(), timedelta(0))
                 self.assertEqual(
                     set(record),
+                    {"received_at", "source_time_seconds", "value"},
+                )
+                self.assertEqual(
+                    set(csv_record),
                     {
                         "frame_index", "received_at", "source_time_seconds", "status",
                         "display", "raw_value", "value", "reason",
                     },
                 )
-                self.assertEqual(set(csv_record), set(record))
-                for field, field_value in record.items():
-                    csv_value = "" if field_value is None else str(field_value)
-                    self.assertEqual(csv_record[field], csv_value, field)
+                self.assertEqual(csv_record["received_at"], record["received_at"])
+                self.assertEqual(
+                    csv_record["source_time_seconds"], str(record["source_time_seconds"])
+                )
                 if value is None:
                     expected_status = "invalid"
                     previous_value = None
@@ -543,14 +547,23 @@ class VideoOutputTests(unittest.TestCase):
                     expected_status = "warming_up"
                     if consecutive_count >= 3:
                         expected_status = "ok"
-                self.assertEqual(record["status"], expected_status)
                 accepted_value = None
                 if expected_status == "ok":
                     accepted_value = value
-                self.assertEqual(record["value"], accepted_value)
+                    self.assertIn(type(record["value"]), (int, float))
+                    self.assertEqual(record["value"], float(accepted_value))
+                else:
+                    self.assertIsNone(record["value"])
                 self.assertEqual(csv_record["status"], expected_status)
                 self.assertEqual(csv_record["value"], accepted_value or "")
                 self.assertEqual(csv_record["raw_value"], value or "")
+                if value is None:
+                    self.assertIn(
+                        csv_record["reason"],
+                        ["all_blank", "misplaced_blank", "uncertain_segments"],
+                    )
+                else:
+                    self.assertEqual(csv_record["reason"], "")
 
     def test_repeated_runs_choose_free_numbers_and_preserve_existing_files(self):
         csv_dir = self.output / "numbered"
@@ -613,7 +626,7 @@ class VideoOutputTests(unittest.TestCase):
             with patch.object(
                 simulate_meter, "draw_display", side_effect=draw_overexposed_display
             ):
-                for display in ["  1234", "888888"]:
+                for display in ["  1230", "888888"]:
                     for frame_index in range(4):
                         frame = simulate_meter.make_frame(
                             display, "horizontal", seed=frame_index
@@ -621,16 +634,21 @@ class VideoOutputTests(unittest.TestCase):
                         writer.write(frame)
         finally:
             writer.release()
-        output = self.run_reader(self.output / "white_cores", video_path)
+        csv_dir = self.output / "white_cores"
+        output = self.run_reader(csv_dir, video_path)
         records = []
         for line in output.splitlines():
             records.append(json.loads(line))
         self.assertEqual(len(records), 8)
-        expected_values = ["1.234"] * 4 + ["888.888"] * 4
-        for record, expected in zip(records, expected_values):
+        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
+            csv_records = list(csv.DictReader(file))
+        expected_values = ["1.230"] * 4 + ["888.888"] * 4
+        for record, expected in zip(csv_records, expected_values):
             self.assertEqual(record["raw_value"], expected)
-        self.assertEqual(records[3]["value"], "1.234")
-        self.assertEqual(records[7]["value"], "888.888")
+        self.assertEqual(records[3]["value"], 1.23)
+        self.assertEqual(records[7]["value"], 888.888)
+        self.assertEqual(csv_records[3]["value"], "1.230")
+        self.assertEqual(csv_records[7]["value"], "888.888")
 
     def test_same_value_after_invalid_requires_new_stability(self):
         video_path = self.output / "interrupted.avi"
@@ -652,13 +670,16 @@ class VideoOutputTests(unittest.TestCase):
                 writer.write(simulate_meter.make_frame(display, "horizontal"))
         finally:
             writer.release()
-        output = self.run_reader(self.output / "interrupted", video_path=video_path)
+        csv_dir = self.output / "interrupted"
+        output = self.run_reader(csv_dir, video_path=video_path)
         statuses = []
         values = []
         for line in output.splitlines():
             record = json.loads(line)
-            statuses.append(record["status"])
             values.append(record["value"])
+        with (csv_dir / "readings_001.csv").open(encoding="utf-8", newline="") as file:
+            for record in csv.DictReader(file):
+                statuses.append(record["status"])
         self.assertEqual(
             statuses,
             [
@@ -671,7 +692,7 @@ class VideoOutputTests(unittest.TestCase):
                 "ok",
             ],
         )
-        self.assertEqual(values, [None, None, "1.234", None, None, None, "1.234"])
+        self.assertEqual(values, [None, None, 1.234, None, None, None, 1.234])
 
     def test_camera_disconnect_is_an_error_and_releases_camera(self):
         capture = Mock()
