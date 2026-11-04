@@ -38,7 +38,8 @@ flowchart LR
 |---|---|---|
 | 保存済みudt等 → WAVE LOGGER PRO COM → Python | 最初の数値取得検証、確定履歴 | 保存が完了してから処理する |
 | 未圧縮CSV → Python | 既存運用から始める後解析 | メタデータ・データ開始位置・文字コード・表示対象CHを実CSVで確認 |
-| COMで起動・収集 → 現在値取得 | 現在値の試験表示 | 各CHの呼出しは同時ではない。測定時刻も得られない |
+| COMで起動・収集 → PC上の波形の最新位置 | 同じサンプル位置の試験表示（`plot_logger.py`） | 最新位置を全CHでそろえる。保存切替で位置が戻ることがある |
+| COMで起動・収集 → ユニットの現在値 | 現在値の試験表示（`plot_logger_current.py`） | CHごとに順に取得するため、測定時刻が異なる場合がある |
 | COMで起動・収集 → 同じindex区間の配列取得 | 荷重OP/DR等の時系列統合 | 保存切替や繰返し収集をまたぐ欠落に注意 |
 
 ## 3. COM APIとPythonへの移し方
@@ -63,13 +64,15 @@ flowchart LR
 | `GetDataCount()` | ドキュメント | PC上のドキュメントのデータ数 |
 | `GetData(unit,ch,index)` | ドキュメント | 指定位置のSingle値。少量の動作確認向け |
 | `GetArrayData(unit,ch,index,count,array,offset)` | ドキュメント | Single配列へ書込み。戻り値は実取得点数 |
-| `GetCurrentData(unit,ch)` | ドキュメント | 現在値。ファイル読込み後には無効値になる |
+| `GetCurrentData(unit,ch)` | ドキュメント | 収集中に入力ユニットで更新される現在値。保存済み波形からは無効値が返る [A p.44] |
 | `GetArrayDataEx(...,varType)`等 | ドキュメント | Double値と型情報。特にCAN整数型で必要 |
 | `GetRepeatCount()` / `GetAutosaveCount()` | ドキュメント | リピート回数／自動保存番号。セッション識別の補助 |
 
 `Visible` は代入するプロパティです。`Initialize()`、`GetActiveFile()`、`GetState()`、`GetDataCount()` などは、Python側でメソッドと明示して呼び出します。[A p.10–13,30,41–43 / S1]
 
 機器IDはNR-600本体を、ユニット番号（1～8）は入力モジュールを指定します。CHとデータindexは0始まりです。例えばNR-HA08の電圧CH1～8は引数0～7、電流CH1～4は引数8～11です。複数CHの同じ位置を読む場合は、ユニットとCHの組み合わせごとに同じindexを`GetData()`へ渡します。[A p.8,14,43]
+
+現場の構成に合わせて、コンソール表示とグラフ表示はユニット1・2の電圧CH1～4、計8チャンネルを初期設定にしています。
 
 ### 配列・無効値・同時性
 
