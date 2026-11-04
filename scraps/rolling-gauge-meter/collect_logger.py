@@ -1,12 +1,18 @@
-from collections import deque
 import math
 import time
+from collections import deque
 
 SETTINGS_FILE = r"D:\measurement\test.ucf"
 DEVICE_ID = 0
 CHANNELS = [
-    (1, 0), (1, 1), (1, 2), (1, 3),
-    (2, 0), (2, 1), (2, 2), (2, 3),
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
 ]
 READ_INTERVAL = 0.2
 WINDOW_SECONDS = 60
@@ -21,12 +27,21 @@ def main():
     import matplotlib.pyplot as plt
 
     dispatch = pythoncom.CoCreateInstance(
-        "WaveLoggerPro2.Application", None, pythoncom.CLSCTX_SERVER, pythoncom.IID_IDispatch
+        "WaveLoggerPro2.Application",
+        None,
+        pythoncom.CLSCTX_SERVER,
+        pythoncom.IID_IDispatch,
     )
     logger = dynamic.Dispatch(dispatch)
     logger._FlagAsMethod(
-        "Initialize", "SetIdentifier", "OpenFile", "GetActiveFile",
-        "Start", "GetState", "GetErrorCode", "Stop",
+        "Initialize",
+        "SetIdentifier",
+        "OpenFile",
+        "GetActiveFile",
+        "Start",
+        "GetState",
+        "GetErrorCode",
+        "Stop",
     )
     logger.Initialize()
     logger.Visible = True
@@ -47,7 +62,7 @@ def main():
     for unit, channel in CHANNELS:
         label = f"U{unit}_CH{channel + 1}"
         channel_labels.append(label)
-        line, = axes.plot([], [], marker=".", markersize=3, label=label)
+        (line,) = axes.plot([], [], marker=".", markersize=3, label=label)
         lines.append(line)
     axes.legend(loc="upper left", bbox_to_anchor=(1, 1))
     plt.show(block=False)
@@ -92,7 +107,9 @@ def main():
                 if save_number == waveform.GetAutosaveCount():
                     samples.append((elapsed, values))
                     last_sample_key = sample_key
-                    print(elapsed, save_number, sample_index, *values, sep=",", flush=True)
+                    print(
+                        elapsed, save_number, sample_index, *values, sep=",", flush=True
+                    )
 
             window_start = elapsed - WINDOW_SECONDS
             while samples and samples[0][0] < window_start:
