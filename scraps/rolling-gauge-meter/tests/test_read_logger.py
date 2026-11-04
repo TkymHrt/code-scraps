@@ -1,4 +1,4 @@
-"""実機やpywin32を使わず、1CH読出しと停止処理を確認する。"""
+"""実機やpywin32を使わず、複数CHの読出しと停止処理を確認する。"""
 
 from contextlib import redirect_stdout
 import importlib.util
@@ -19,20 +19,18 @@ SPEC.loader.exec_module(read_logger)
 
 class ReadLoggerTests(unittest.TestCase):
     def setUp(self):
-        self.waveform = Mock(spec_set=["_FlagAsMethod", "GetDataCount", "GetData"])
+        self.waveform = Mock(spec_set=["_FlagAsMethod", "GetDataCount", "GetData", "GetAutosaveCount"])
         self.waveform.GetDataCount.return_value = 3
         self.waveform.GetData.return_value = 12.5
+        self.waveform.GetAutosaveCount.return_value = 0
         self.logger = Mock(spec_set=[
-            "_FlagAsMethod", "Initialize", "Visible", "SetIdentifier", "SetLanConfig",
-            "ConnectLan", "OpenFile", "GetActiveFile", "Start", "GetState",
-            "GetErrorCode", "Stop", "Quit",
+            "_FlagAsMethod", "Initialize", "Visible", "SetIdentifier", "OpenFile",
+            "GetActiveFile", "Start", "GetState", "GetErrorCode", "Stop", "Quit",
         ])
         self.logger.SetIdentifier.return_value = 0
-        self.logger.SetLanConfig.return_value = 0
-        self.logger.ConnectLan.return_value = 0
         self.logger.OpenFile.return_value = 0
         self.logger.Start.return_value = 0
-        self.logger.GetState.return_value = 2
+        self.logger.GetState.return_value = 5
         self.logger.GetActiveFile.return_value = self.waveform
         self.com_calls = Mock()
         self.com_calls.attach_mock(self.logger, "logger")
@@ -64,20 +62,25 @@ class ReadLoggerTests(unittest.TestCase):
         self.settings_path = Path(settings_dir.name).resolve() / "test.ucf"
         self.settings_path.touch()
         constants = patch.multiple(
-            read_logger, READ_COUNT=1, CONNECTION="USB", DEVICE_ID=0,
-            SETTINGS_FILE=str(self.settings_path),
+            read_logger, CHANNELS=[(1, 0), (2, 1)], DEVICE_ID=0,
+            SETTINGS_FILE=str(self.settings_path), READ_INTERVAL=1.0,
         )
         constants.start()
         self.addCleanup(constants.stop)
         sleeping = patch.object(read_logger.time, "sleep")
-        sleeping.start()
+        self.sleep = sleeping.start()
+        self.sleep.side_effect = KeyboardInterrupt
         self.addCleanup(sleeping.stop)
         self.output = io.StringIO()
         printing = redirect_stdout(self.output)
         printing.__enter__()
         self.addCleanup(printing.__exit__, None, None, None)
 
-    def test_prints_value_and_stops(self):
+    def test_prints_values_until_ctrl_c_and_stops(self):
+        self.waveform.GetDataCount.side_effect = [3, 4]
+        self.waveform.GetData.side_effect = [12.5, 13.5, 14.5, 15.5]
+        self.sleep.side_effect = [None, KeyboardInterrupt]
+
         read_logger.main()
 
         self.fake_pythoncom.CoCreateInstance.assert_called_once_with(
@@ -92,31 +95,36 @@ class ReadLoggerTests(unittest.TestCase):
             "GetState", "GetErrorCode", "Stop",
         ])
         self.assertIs(self.logger.Visible, True)
+        self.waveform._FlagAsMethod.assert_called_once()
+        waveform_methods = self.waveform._FlagAsMethod.call_args.args
+        self.assertCountEqual(waveform_methods, ["GetDataCount", "GetData", "GetAutosaveCount"])
         self.com_calls.assert_has_calls([
             call.logger.Initialize(),
             call.logger.SetIdentifier(4),
             call.logger.OpenFile(str(self.settings_path)),
             call.logger.GetActiveFile(),
-            call.waveform._FlagAsMethod("GetDataCount", "GetData"),
+            call.waveform._FlagAsMethod(*waveform_methods),
             call.logger.Start(),
         ])
-        self.waveform.GetData.assert_called_once_with(read_logger.UNIT, read_logger.CHANNEL, 2)
-        self.assertIn("index=2, raw=12.5", self.output.getvalue())
-        self.assertIn("数値を取得できました: 1回", self.output.getvalue())
+        self.assertEqual(self.waveform.GetData.call_args_list, [
+            call(1, 0, 2), call(2, 1, 2), call(1, 0, 3), call(2, 1, 3),
+        ])
+        self.assertIn("index=2, raw[U1/CH0]=12.5, raw[U2/CH1]=13.5", self.output.getvalue())
+        self.assertIn("index=3, raw[U1/CH0]=14.5, raw[U2/CH1]=15.5", self.output.getvalue())
+        self.assertIn("Ctrl+C", self.output.getvalue())
         self.logger.Stop.assert_called_once()
         self.logger.Quit.assert_not_called()
 
-    def test_connects_lan_before_opening_settings(self):
-        with patch.multiple(read_logger, CONNECTION="LAN", DEVICE_ID=2):
-            read_logger.main()
+    def test_identifier_rejection_reports_code_before_opening_settings(self):
+        self.logger.SetIdentifier.return_value = 261
 
-        self.logger.assert_has_calls([
-            call._FlagAsMethod("SetLanConfig", "ConnectLan"),
-            call.SetLanConfig(2, *read_logger.IP_ADDRESS, read_logger.PORT),
-            call.ConnectLan(),
-            call.OpenFile(str(self.settings_path)),
-        ])
-        self.logger.SetIdentifier.assert_called_once_with(10)
+        with patch.object(read_logger, "DEVICE_ID", 2):
+            with self.assertRaisesRegex(RuntimeError, r"SetIdentifier\(6\).*261 \(0x0105\)"):
+                read_logger.main()
+
+        self.logger.SetIdentifier.assert_called_once_with(6)
+        self.logger.OpenFile.assert_not_called()
+        self.logger.Start.assert_not_called()
 
     def test_missing_settings_file_does_not_create_com_instance(self):
         self.settings_path.unlink()
@@ -152,24 +160,49 @@ class ReadLoggerTests(unittest.TestCase):
         self.logger.Stop.assert_not_called()
         self.waveform.GetData.assert_not_called()
 
-    def test_no_data_is_failure(self):
+    def test_waits_when_no_data_is_available(self):
         self.waveform.GetDataCount.return_value = 0
 
-        with self.assertRaisesRegex(RuntimeError, "数値を取得できませんでした"):
-            read_logger.main()
+        read_logger.main()
 
         self.logger.Stop.assert_called_once()
         self.waveform.GetData.assert_not_called()
-        self.assertNotIn("数値を取得できました:", self.output.getvalue())
+        self.assertIn("データ待ち", self.output.getvalue())
 
-    def test_invalid_value_is_failure_and_stops(self):
-        self.waveform.GetData.return_value = 3.4028235e38
+    def test_invalid_value_is_displayed_as_na(self):
+        self.waveform.GetData.side_effect = [3.4028235e38, 13.5]
 
-        with self.assertRaisesRegex(RuntimeError, "無効な値"):
-            read_logger.main()
+        read_logger.main()
 
+        self.assertIn("index=2, raw[U1/CH0]=NA, raw[U2/CH1]=13.5", self.output.getvalue())
         self.logger.Stop.assert_called_once()
-        self.assertNotIn("数値を取得できました:", self.output.getvalue())
+
+    def test_drops_row_if_save_number_changes_while_reading(self):
+        self.waveform.GetAutosaveCount.side_effect = [0, 1, 1, 1]
+        self.waveform.GetDataCount.side_effect = [3, 2]
+        self.sleep.side_effect = [None, KeyboardInterrupt]
+
+        read_logger.main()
+
+        self.com_calls.assert_has_calls([
+            call.waveform.GetAutosaveCount(),
+            call.waveform.GetDataCount(),
+            call.waveform.GetData(1, 0, 2),
+            call.waveform.GetData(2, 1, 2),
+            call.waveform.GetAutosaveCount(),
+        ])
+        self.assertNotIn("index=2, raw", self.output.getvalue())
+        self.assertIn("index=1, raw[U1/CH0]=12.5, raw[U2/CH1]=12.5", self.output.getvalue())
+
+    def test_stops_when_logger_stops_after_startup(self):
+        self.logger.GetState.side_effect = [5, 1]
+        self.sleep.side_effect = [None, KeyboardInterrupt]
+
+        read_logger.main()
+
+        self.sleep.assert_called_once_with(1.0)
+        self.assertEqual(self.waveform.GetData.call_args_list, [call(1, 0, 2), call(2, 1, 2)])
+        self.logger.Stop.assert_called_once()
 
 
 if __name__ == "__main__":

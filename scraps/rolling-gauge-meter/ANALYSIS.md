@@ -12,7 +12,7 @@
 |---|---|---|
 | 保存波形から数値を取り出す | API・サンプルで確認 | WAVE LOGGER PROを介し、点数とindexを指定する |
 | 平均・フィルタ・単位換算をPythonで行う | 可能 | 取得後の通常の数値処理。既存換算設定の移植が必要 |
-| 収集中のデータを読む | APIあり、実機未検証 | PC読出し済み配列と現在値は別の意味。周期・遅延は実測 |
+| 収集中のデータを読む | USBで1チャンネルの取得に成功 | PC読出し済み配列と現在値は別の意味。周期・遅延は要実測 |
 | 手動起動した既存ソフトへ後付け接続 | 不可と明記 | COMから起動したWAVE LOGGER PROだけが対象 |
 | 別PCでモニタし、その値をCOM取得 | 本資料の方法では不可 | GUIのモニタ機能はあるが、Automationはモニタ機能に非対応 |
 | 連続収集を直接読んで無欠落保存 | 保証できない | 保存切替部の欠落が明記。確定した保存ファイルから取得する |
@@ -23,7 +23,7 @@
 
 ```mermaid
 flowchart LR
-    NR[NR-600] -->|USB / LAN| WL[COMから起動した WAVE LOGGER PRO]
+    NR[NR-600] -->|USB| WL[COMから起動した WAVE LOGGER PRO]
     WL -->|数値 / 配列| PY[Python 換算・品質判定]
     CAM[カメラ画像] --> OCR[鏡像補正・セグメント読取]
     OCR -->|撮影時刻・zero_id・有効性| PY
@@ -40,21 +40,15 @@ flowchart LR
 | 未圧縮CSV → Python | 既存運用から始める後解析 | メタデータ・データ開始位置・文字コード・表示対象CHを実CSVで確認 |
 | COMで起動・収集 → 現在値取得 | 現在値の試験表示 | 各CHの呼出しは同時ではない。測定時刻も得られない |
 | COMで起動・収集 → 同じindex区間の配列取得 | 荷重OP/DR等の時系列統合 | 保存切替や繰返し収集をまたぐ欠落に注意 |
-| NR-600のCF → FTP → 波形変換・Python | スタンドアロン保存の後解析 | FTPは保存ファイル取得であり、ライブ値取得ではない |
-| PythonからTCPソケットで本体を直接読む | 今回の資料では判断不可 | ポート番号だけでは要求・応答プロトコルは分からない |
-
-NR-600マニュアルにはLAN TOOLのファイル自動転送・CSV変換、FileViewer3のCSV変換もあります。LAN TOOLの自動転送はフルアクセス権を必要とする記載があり、Pythonの読取専用FTP利用と同一ではありません。[N 8-10～8-14,9-6]
-
-USB/LANの通信はWAVE LOGGER PROに任せる構成が、添付サンプルを最も直接利用できます。通常のLANポートは24682ですが、Modbus/TCP、SCPI等として扱える根拠はありません。[A p.17]
 
 ## 3. COM APIとPythonへの移し方
 
-アプリケーションのProgIDは`WaveLoggerPro2.Application`です。体験版は別ProgIDです。製品版では次の順序が基本になります。[A p.9,13–20,28,30]
+製品版のProgIDは`WaveLoggerPro2.Application`です。基本の呼び出し順は次のとおりです。[A p.9,13–14,20,28,30]
 
 1. WAVE LOGGER PROをインストール後、一度手動起動して終了し、COMを登録する。
 2. PythonからCOMオブジェクトを作り、`Initialize()`を呼ぶ。
 3. 保存波形の解析なら`OpenFile(path)`の戻り値0を確認する。装置指定は不要。
-4. 収集する場合はUSB/LAN・機器IDを指定し、事前作成した設定ファイルを読み込む。LAN接続ではLAN設定と`ConnectLan()`も必要。
+4. 収集する場合は`SetIdentifier(4 + DEVICE_ID)`でUSBの機器IDを指定し、事前に作成した設定ファイルを開く。
 5. `GetActiveFile()`からドキュメントを取得する。
 6. 収集する場合だけ`Start()`を呼び、状態・異常を監視する。
 7. 数値取得・換算・計算・保存を行う。
@@ -73,7 +67,9 @@ USB/LANの通信はWAVE LOGGER PROに任せる構成が、添付サンプルを�
 | `GetArrayDataEx(...,varType)`等 | ドキュメント | Double値と型情報。特にCAN整数型で必要 |
 | `GetRepeatCount()` / `GetAutosaveCount()` | ドキュメント | リピート回数／自動保存番号。セッション識別の補助 |
 
-ユニット番号は通常1～8、CHとデータindexは0始まりです。多チャンネルリンクの扱いは各メソッドの仕様を確認します。`SetIdentifier(4)`はNR-600 USB ID0、`SetIdentifier(8)`はLAN ID0で、これらはデータ取得APIのユニット番号とは別物です。[A p.8,14,42]
+`Visible` は代入するプロパティです。`Initialize()`、`GetActiveFile()`、`GetState()`、`GetDataCount()` などは、Python側でメソッドと明示して呼び出します。[A p.10–13,30,41–43 / S1]
+
+機器IDはNR-600本体を、ユニット番号（1～8）は入力モジュールを指定します。CHとデータindexは0始まりです。例えばNR-HA08の電圧CH1～8は引数0～7、電流CH1～4は引数8～11です。複数CHの同じ位置を読む場合は、ユニットとCHの組み合わせごとに同じindexを`GetData()`へ渡します。[A p.8,14,43]
 
 ### 配列・無効値・同時性
 
@@ -104,7 +100,7 @@ Automationから操作できるのは、Automationから起動したソフトだ
 - **OCRの実効更新周期**：計器表示更新・カメラ露光・フレーム取得・認識処理で決まる。
 - **画面の更新周期**：必要な見やすさと実測遅延から決める。画面を速く描いても元の情報は増えない。
 
-NR-600の仕様にある最大100kHz/収集CH数は、所定のPC条件での連続収集仕様です。Python+OCR+描画を同時に動かした性能の保証ではありません。多チャンネルリンクは最速100ms、ユニット組合せによっても同期条件が変わります。LAN収集は収集PCとNR-600だけのローカル接続が前提とされています。[N 6-17,10-2～10-3 / W2]
+NR-600の仕様にある最大100kHz/収集CH数は、所定のPC条件での連続収集仕様です。Python+OCR+描画を同時に動かした性能の保証ではありません。同期条件は入力ユニットの組み合わせでも変わります。[N 6-17,10-2～10-3 / W2]
 
 ## 5. 工学単位への換算とCSV
 
@@ -196,7 +192,7 @@ OCR完了時刻ではなく、元画像の撮影時刻・frame_id・読取有効
 | 接触ゼロ | 裸ロールか基準板か、P0、表示方向、リセット記録方法 |
 | 幅別M | 幅・荷重の異なる実厚対応データ |
 
-本調査で確認できたのは文書・コード上の実現性です。調査用PCには該当COM登録が見つからず、実機・実波形による取得性能や板厚精度の実証は行っていません。現場で収集開始・1チャンネルの最新点表示・停止だけを試す最小PoCを用意しています。実行手順と実機なしの検証結果は[README](README.md)を参照してください。
+取得性能や板厚精度の検証は未実施です。実行手順とUSBでの取得確認は[README](README.md)を参照してください。
 
 ## 8. 根拠資料
 
@@ -206,15 +202,15 @@ OCR完了時刻ではなく、元画像の撮影時刻・frame_id・読取有効
 
 | ID | 資料と主な確認箇所 |
 |---|---|
-| A | `WLPROAuto_M.pdf`（Downloads/temp）。p.7 制限・連続収集、p.8–9 CH指定・起動、p.14/17–20 接続・収集、p.23 状態、p.28–30 ファイル、p.41–50 数値/配列/無効値、p.57–58 エラー/サンプル |
-| N | `NR600_マニュアル.pdf`（Downloads/temp）。6-17（PDF193）モード、6-76～77（PDF252～253）保存/CSV、6-129（PDF305）モニタ、8-10～14（PDF352～356）転送、9-6（PDF364）変換、10-2～5（PDF370～373）仕様、11-46～47（PDF440～441）CSV例 |
+| A | `WLPROAuto_M.pdf`（Downloads/temp）。p.7 制限・連続収集、p.8–9 CH指定・起動、p.10–14 プロパティ・メソッド・機器ID、p.20 収集、p.23 状態、p.28–30 ファイル、p.41–50 数値/配列/無効値、p.57–58 エラー/サンプル |
+| N | `NR600_マニュアル.pdf`（Downloads/temp）。6-17（PDF193）モード、6-18（PDF194）起動時のID、6-76～77（PDF252～253）保存/CSV、6-129（PDF305）モニタ、10-2～5（PDF370～373）仕様、11-46～47（PDF440～441）CSV例 |
 | S1 | `Samples/Automation/VB/Sample1/frmSample1.vb` L18–26/98–100/131–135、同`frmSample1.Designer.vb` L77、`frmAdjust.vb` L50–76。VC/Sample1/`Sample1Dlg.cpp` L392/479 |
 | S2 | `Samples/Automation/VB/Sample2/frmEditWave.vb` L161–164。元データへ`SaveFile()`するため、そのまま実行しない |
 | S3 | `Samples/Automation/VB/Sample3/frmSample3.vb` L66–120。VC/Sample3/`Sample3Dlg.cpp` L375–389/531–541。配列取得・平均・無効値 |
 | S4 | `Samples/Automation/VB/Sample4/frmSample4.vb` L99–119。VC/Sample1/`waveloggerpro2.h` L94–124、同cpp L764–770。Ex系の型とシグネチャ |
 
 - W1：[KEYENCE NRシリーズ ソフトウェア](https://www.keyence.co.jp/support/user/recorder/recorder/software/)（2026-10-29確認）。NR-600用の掲載版とOS表記。NR-X用WAVE LOGGER Xとは区別する。
-- W2：[KEYENCE NR-600 仕様](https://www.keyence.co.jp/products/recorder/recorder/nr-600/models/nr-600/)。転送速度、同期、LAN構成条件。
+- W2：[KEYENCE NR-600 仕様](https://www.keyence.co.jp/products/recorder/recorder/nr-600/models/nr-600/)。転送速度、同期。
 - W3：[pywin32公式 COMクライアント入門](https://mhammond.github.io/pywin32/html/com/win32com/HTML/QuickStartClientCom.html)。PythonからのCOMオブジェクト操作。
 - W4：[pywin32公式 VARIANT](https://mhammond.github.io/pywin32/html/com/win32com/HTML/variant.html)。型付き配列・ByRef・ラッパーとの差。
 - W5：[Zhangほか, 2016, Research and application of computer control system for aluminium single-stand 4-high cold rolling mill](https://doi.org/10.1049/joe.2016.0182)。§2.2のゲージメータ式・非線形・幅依存、§2.3の先進。今回の相対ゼロ式は基礎式からの導出で、対象圧延機で未検証。

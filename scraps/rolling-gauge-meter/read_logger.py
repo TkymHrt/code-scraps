@@ -1,4 +1,4 @@
-"""NR-600から1チャンネルの数値を読み、画面で確認するPoC。"""
+"""USB接続したNR-600の複数チャンネルの最新値を表示する。"""
 
 import math
 from pathlib import Path
@@ -6,26 +6,23 @@ import time
 
 # 現場の設定に合わせて、ここを書き換える。
 SETTINGS_FILE = r"D:\measurement\test.ucf"
-CONNECTION = "USB"  # "USB" または "LAN"
-DEVICE_ID = 0      # USB: 本体ID / LAN: 接続先IPの登録枠。どちらも0～3
-UNIT = 1           # 入力ユニット番号は1始まり
-CHANNEL = 0        # CH番号は0始まり。入力ユニットのCH対応表を確認
-READ_COUNT = 10
+DEVICE_ID = 0  # NR-600本体のUSB ID（0～3）
+# (ユニット番号, APIのCH番号)。NR-HA08を2台使う場合の電圧CH1～8。
+CHANNELS = [
+    (1, 0), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7),
+    (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7),
+]
 READ_INTERVAL = 1.0  # Pythonの読出し間隔。装置の収集周期とは別
-
-# LAN接続の場合だけ使用する。
-IP_ADDRESS = (192, 168, 0, 120)
-PORT = 24682
 
 
 def main():
     import pythoncom
     from win32com.client import dynamic
 
-    if CONNECTION not in ("USB", "LAN"):
-        raise ValueError('CONNECTIONは"USB"または"LAN"にしてください。')
     if not 0 <= DEVICE_ID <= 3:
         raise ValueError("DEVICE_IDは0～3にしてください。")
+    if not CHANNELS:
+        raise ValueError("CHANNELSに読み出すユニットとCHを指定してください。")
     settings_path = Path(SETTINGS_FILE).expanduser().resolve()
     if not settings_path.is_file():
         raise FileNotFoundError(f"SETTINGS_FILEの設定ファイルが見つかりません: {settings_path}")
@@ -49,24 +46,15 @@ def main():
     logger.Initialize()
     logger.Visible = True
 
-    if CONNECTION == "USB":
-        identifier = 4 + DEVICE_ID
-    else:
-        identifier = 8 + DEVICE_ID
+    # SetIdentifierでは、NR-600のUSB ID 0～3を4～7で指定する。
+    identifier = 4 + DEVICE_ID
     result = logger.SetIdentifier(identifier)
     if result != 0:
-        raise RuntimeError(f"機器IDの設定に失敗しました: {result}")
-
-    if CONNECTION == "LAN":
-        logger._FlagAsMethod("SetLanConfig", "ConnectLan")
-        result = logger.SetLanConfig(
-            DEVICE_ID, IP_ADDRESS[0], IP_ADDRESS[1], IP_ADDRESS[2], IP_ADDRESS[3], PORT
+        raise RuntimeError(
+            f"機器ID {DEVICE_ID} の設定に失敗しました。"
+            f"SetIdentifier({identifier}) の戻り値は {result} ({result:#06x}) です。"
+            "WAVE LOGGER PROをすべて終了してから再実行してください。"
         )
-        if result != 0:
-            raise RuntimeError(f"LAN設定に失敗しました: {result}")
-        result = logger.ConnectLan()
-        if result != 0:
-            raise RuntimeError(f"LAN接続に失敗しました: {result}")
 
     result = logger.OpenFile(str(settings_path))
     if result != 0:
@@ -74,45 +62,55 @@ def main():
     waveform = logger.GetActiveFile()
     if waveform is None:
         raise RuntimeError(f"GetActiveFileで設定ファイルのオブジェクトを取得できませんでした: {settings_path}")
-    waveform._FlagAsMethod("GetDataCount", "GetData")
+    waveform._FlagAsMethod("GetDataCount", "GetData", "GetAutosaveCount")
 
     result = logger.Start()
     if result != 0:
         raise RuntimeError(f"収集を開始できませんでした: {result:#06x}")
 
-    received_count = 0
+    was_active = False
     try:
-        for i in range(READ_COUNT):
+        print("収集を開始しました。終了するにはCtrl+Cを押してください。", flush=True)
+        while True:
             state = logger.GetState()
             if state == 11:
                 error_code = logger.GetErrorCode()
                 raise RuntimeError(f"ロガーがエラー停止しました: {error_code:#06x}")
             if state < 0:
                 raise RuntimeError(f"状態の取得に失敗しました: {state}")
+            # Start直後は状態が更新されるまで「停止」が返ることがある。
+            if state == 1 and was_active:
+                print("ロガーの収集が停止しました。", flush=True)
+                break
+            if state != 1:
+                was_active = True
 
+            save_number = waveform.GetAutosaveCount()
             data_count = waveform.GetDataCount()
             if data_count < 0:
                 raise RuntimeError(f"データ数の取得に失敗しました: {data_count}")
             if data_count == 0:
-                print(f"{i + 1}/{READ_COUNT}: データ待ち")
+                print("データ待ち", flush=True)
             else:
                 sample_index = data_count - 1
-                value = waveform.GetData(UNIT, CHANNEL, sample_index)
-                # 約3.4e38は無効値。丸め差を含め、この付近の値は除外する。
-                if not math.isfinite(value) or abs(value) >= 3.3e38:
-                    raise RuntimeError(f"無効な値です: index={sample_index}, value={value}")
-                print(f"{i + 1}/{READ_COUNT}: index={sample_index}, raw={value}")
-                received_count += 1
+                fields = [f"index={sample_index}"]
+                for unit, channel in CHANNELS:
+                    value = waveform.GetData(unit, channel, sample_index)
+                    raw = str(value)
+                    # 約3.4e38はデータがない場合などに返る無効値。
+                    if not math.isfinite(value) or abs(value) >= 3.3e38:
+                        raw = "NA"
+                    fields.append(f"raw[U{unit}/CH{channel}]={raw}")
+                # 読出し中に分割保存が切り替わると、同じindexでも別の点を指す。
+                if save_number == waveform.GetAutosaveCount():
+                    print(", ".join(fields), flush=True)
             time.sleep(READ_INTERVAL)
+    except KeyboardInterrupt:
+        print("\nCtrl+Cで停止します。", flush=True)
     finally:
         # Startに成功した後は、読出しエラーやCtrl+Cでも停止を試みる。
         logger.Stop()
         print("Stopを実行しました。WAVE LOGGER PROの画面で状態を確認してください。")
-
-    if received_count == 0:
-        raise RuntimeError("数値を取得できませんでした。接続・CH・トリガ設定を確認してください。")
-    print(f"数値を取得できました: {received_count}回")
-    # Quitは呼ばず、ソフトの終了は画面で行う。
 
 
 if __name__ == "__main__":
