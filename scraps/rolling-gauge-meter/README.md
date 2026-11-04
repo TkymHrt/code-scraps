@@ -37,7 +37,9 @@ python -m pip install -r requirements.txt
 python read_logger.py
 ```
 
-`index=..., raw=...`が表示され、最後に「数値を取得できました」が出れば、最初の疎通確認は成功です。設定ファイル・接続先・CHが正しいか、表示値をWAVE LOGGER PROと照合します。エラー時はPythonのエラー表示を確認して設定を修正します。
+`index=..., raw=...`が表示され、最後に「数値を取得できました」が出れば、最初の疎通確認は成功です。設定ファイル・接続先・CHが正しいか、表示値をWAVE LOGGER PROと照合します。
+
+設定ファイルが見つからない場合は、表示されたパスと `SETTINGS_FILE` を確認します。COM起動で失敗する場合は、製品版WAVE LOGGER PROをインストールし、一度手動で起動して終了したか確認します。収集開始や収集中の異常停止で表示される `0x2013` などのコードは、Automationマニュアル p.57 の表と照合できます。
 
 ## このPoCで確認する範囲
 
@@ -49,7 +51,9 @@ python read_logger.py
 
 ## 確認状況
 
-このPCでは接続・WAVE LOGGER PRO起動・依存パッケージのインストールを行っていません。構文を確認し、偽のCOMオブジェクトによる正常取得・取得失敗時の停止等の自動検証5件が成功しました。実際のCOM起動・接続・数値取得は現場での確認が必要です。
+Automationマニュアル p.10～13・30・41～43 と付属VCサンプルで、`Visible` はプロパティ、`Initialize()`・`GetActiveFile()`・`GetState()`・`GetDataCount()` などはメソッドと確認しました。Python側でも、取説に従ってpywin32にメソッド名を明示しています。
+
+偽のCOMオブジェクトによる自動検証8件が成功しました。pywin32と模擬COMサーバーを使った検証でも、USB・LANの両方の処理でメソッド呼び出しと `Visible` への代入を確認しました。このPCではWAVE LOGGER PROのCOM登録が見つからなかったため、実際のソフト起動・接続・数値取得は現場での確認が必要です。
 
 ```powershell
 python -m unittest discover -s tests -v

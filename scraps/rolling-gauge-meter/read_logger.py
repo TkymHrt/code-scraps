@@ -1,6 +1,7 @@
 """NR-600から1チャンネルの数値を読み、画面で確認するPoC。"""
 
 import math
+from pathlib import Path
 import time
 
 # 現場の設定に合わせて、ここを書き換える。
@@ -18,22 +19,46 @@ PORT = 24682
 
 
 def main():
-    import win32com.client
+    import pythoncom
+    from win32com.client import dynamic
 
-    logger = win32com.client.DispatchEx("WaveLoggerPro2.Application")
+    if CONNECTION not in ("USB", "LAN"):
+        raise ValueError('CONNECTIONは"USB"または"LAN"にしてください。')
+    if not 0 <= DEVICE_ID <= 3:
+        raise ValueError("DEVICE_IDは0～3にしてください。")
+    settings_path = Path(SETTINGS_FILE).expanduser().resolve()
+    if not settings_path.is_file():
+        raise FileNotFoundError(f"SETTINGS_FILEの設定ファイルが見つかりません: {settings_path}")
+
+    try:
+        dispatch = pythoncom.CoCreateInstance(
+            "WaveLoggerPro2.Application", None, pythoncom.CLSCTX_SERVER, pythoncom.IID_IDispatch
+        )
+    except pythoncom.com_error as error:
+        raise RuntimeError(
+            "WaveLoggerPro2.Applicationを起動できません。製品版WAVE LOGGER PROを"
+            "手動で起動して終了してから、もう一度試してください。"
+        ) from error
+
+    logger = dynamic.Dispatch(dispatch)
+    # pywin32の動的な属性参照で、取説のメソッドをプロパティとして読まないようにする。
+    logger._FlagAsMethod(
+        "Initialize", "SetIdentifier", "OpenFile", "GetActiveFile",
+        "Start", "GetState", "GetErrorCode", "Stop",
+    )
     logger.Initialize()
     logger.Visible = True
 
     if CONNECTION == "USB":
-        result = logger.SetIdentifier(4 + DEVICE_ID)
-    elif CONNECTION == "LAN":
-        result = logger.SetIdentifier(8 + DEVICE_ID)
+        identifier = 4 + DEVICE_ID
     else:
-        raise ValueError('CONNECTIONは"USB"または"LAN"にしてください。')
+        identifier = 8 + DEVICE_ID
+    result = logger.SetIdentifier(identifier)
     if result != 0:
         raise RuntimeError(f"機器IDの設定に失敗しました: {result}")
 
     if CONNECTION == "LAN":
+        logger._FlagAsMethod("SetLanConfig", "ConnectLan")
         result = logger.SetLanConfig(
             DEVICE_ID, IP_ADDRESS[0], IP_ADDRESS[1], IP_ADDRESS[2], IP_ADDRESS[3], PORT
         )
@@ -43,14 +68,17 @@ def main():
         if result != 0:
             raise RuntimeError(f"LAN接続に失敗しました: {result}")
 
-    result = logger.OpenFile(SETTINGS_FILE)
+    result = logger.OpenFile(str(settings_path))
     if result != 0:
-        raise RuntimeError(f"設定ファイルを開けませんでした: {result}")
+        raise RuntimeError(f"設定ファイルを開けませんでした: {settings_path} (戻り値 {result})")
     waveform = logger.GetActiveFile()
+    if waveform is None:
+        raise RuntimeError(f"GetActiveFileで設定ファイルのオブジェクトを取得できませんでした: {settings_path}")
+    waveform._FlagAsMethod("GetDataCount", "GetData")
 
     result = logger.Start()
     if result != 0:
-        raise RuntimeError(f"収集を開始できませんでした: {result}")
+        raise RuntimeError(f"収集を開始できませんでした: {result:#06x}")
 
     received_count = 0
     try:
@@ -58,7 +86,7 @@ def main():
             state = logger.GetState()
             if state == 11:
                 error_code = logger.GetErrorCode()
-                raise RuntimeError(f"ロガーがエラー停止しました: {error_code}")
+                raise RuntimeError(f"ロガーがエラー停止しました: {error_code:#06x}")
             if state < 0:
                 raise RuntimeError(f"状態の取得に失敗しました: {state}")
 
