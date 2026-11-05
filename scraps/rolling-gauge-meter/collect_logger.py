@@ -9,10 +9,10 @@ CHANNELS = [
     (1, 1),
     (1, 2),
     (1, 3),
-    (2, 0),
-    (2, 1),
-    (2, 2),
-    (2, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
 ]
 READ_INTERVAL = 0.2
 WINDOW_SECONDS = 60
@@ -53,7 +53,7 @@ def main():
     if result != 0:
         raise RuntimeError(result)
     waveform = logger.GetActiveFile()
-    waveform._FlagAsMethod("GetDataCount", "GetData", "GetAutosaveCount")
+    waveform._FlagAsMethod("GetCurrentData")
 
     figure, axes = plt.subplots(figsize=(10, 5), layout="constrained")
     axes.set_axis_off()
@@ -75,41 +75,31 @@ def main():
     try:
         started_at = time.monotonic()
         samples = deque()
-        last_sample_key = None
         was_active = False
-        print("elapsed_s", "save_number", "index", *channel_labels, sep=",", flush=True)
+        print("elapsed_s", *channel_labels, sep=",", flush=True)
         while plt.fignum_exists(figure.number):
             state = logger.GetState()
             if state == 11:
                 raise RuntimeError(logger.GetErrorCode())
             if state < 0:
                 raise RuntimeError(state)
-            if state == 1 and was_active:
-                break
-            if state != 1:
-                was_active = True
+            if state == 1:
+                if was_active:
+                    break
+                plt.pause(READ_INTERVAL)
+                continue
+            was_active = True
 
-            save_number = waveform.GetAutosaveCount()
-            data_count = waveform.GetDataCount()
-            if data_count < 0:
-                raise RuntimeError(data_count)
+            values = []
+            for unit, channel in CHANNELS:
+                value = waveform.GetCurrentData(unit, channel)
+                if not math.isfinite(value) or abs(value) >= 3.3e38:
+                    value = math.nan
+                values.append(value)
+
             elapsed = time.monotonic() - started_at
-            sample_index = data_count - 1
-            sample_key = (save_number, sample_index)
-            if data_count > 0 and sample_key != last_sample_key:
-                values = []
-                for unit, channel in CHANNELS:
-                    value = waveform.GetData(unit, channel, sample_index)
-                    if not math.isfinite(value) or abs(value) >= 3.3e38:
-                        value = math.nan
-                    values.append(value)
-
-                if save_number == waveform.GetAutosaveCount():
-                    samples.append((elapsed, values))
-                    last_sample_key = sample_key
-                    print(
-                        elapsed, save_number, sample_index, *values, sep=",", flush=True
-                    )
+            samples.append((elapsed, values))
+            print(elapsed, *values, sep=",", flush=True)
 
             window_start = elapsed - WINDOW_SECONDS
             while samples and samples[0][0] < window_start:

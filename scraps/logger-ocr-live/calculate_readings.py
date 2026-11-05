@@ -11,8 +11,58 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 
-# READMEの例を使い、実際に校正したチャンネルだけを設定する。
-CHANNELS = {}
+# CHの割当は実配線に合わせ、単位と基準2点に現場の値を記入する。
+# 空の単位やNoneが残っている場合は、取得を開始しない。
+CHANNELS = {
+    "U1_CH1": {
+        "name": "rolling_speed",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH2": {
+        "name": "load_OP",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH3": {
+        "name": "load_DR",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH4": {
+        "name": "tension_in",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH5": {
+        "name": "tension_out",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH6": {
+        "name": "bender_Inc",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH7": {
+        "name": "bender_Dec",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+    "U1_CH8": {
+        "name": "exit_thickness",
+        "unit": "",
+        "low_point": (None, None),
+        "high_point": (None, None),
+    },
+}
 MAX_TIME_GAP = 0.15  # 2つのPC受領時刻の許容差（秒）。現場で調整する。
 INPUT_TIMEOUT = 1.0  # 受信が止まったと判断するまでの秒数
 
@@ -27,34 +77,27 @@ def validate_settings():
             )
 
     for channel, settings in CHANNELS.items():
+        if not settings["unit"]:
+            raise ValueError(f"{channel} のunitに換算後の単位を指定してください。")
         low_voltage, low_value = settings["low_point"]
         high_voltage, high_value = settings["high_point"]
-        valid_min, valid_max = settings["valid_voltage"]
-        for number in (
-            low_voltage,
-            low_value,
-            high_voltage,
-            high_value,
-            valid_min,
-            valid_max,
-        ):
-            if not math.isfinite(number):
+        for number in (low_voltage, low_value, high_voltage, high_value):
+            if number is None or not math.isfinite(number):
                 raise ValueError(
-                    f"{channel} の基準点と許容範囲には有限の数値を指定してください。"
+                    f"{channel} のlow_pointとhigh_pointには有限の数値を指定してください。"
                 )
-        if not low_voltage <= valid_min < valid_max <= high_voltage:
+        if not -10.0 <= low_voltage < high_voltage <= 10.0:
             raise ValueError(
-                f"{channel} の許容電圧範囲を2つの基準点の間に指定してください。"
+                f"{channel} の電圧は-10〜10V内で、low_pointよりhigh_pointを大きくしてください。"
             )
 
 
 def convert_voltage(voltage, settings):
-    valid_min, valid_max = settings["valid_voltage"]
-    if voltage is None or not valid_min <= voltage <= valid_max:
-        return None
-
     low_voltage, low_value = settings["low_point"]
     high_voltage, high_value = settings["high_point"]
+    if voltage is None or not low_voltage <= voltage <= high_voltage:
+        return None
+
     fraction = (voltage - low_voltage) / (high_voltage - low_voltage)
     return low_value + fraction * (high_value - low_value)
 
@@ -81,7 +124,9 @@ def show_readings(events):
     columns = ["received_at"]
     for channel, settings in CHANNELS.items():
         columns.extend([f"{channel}_V", f"{settings['name']}_{settings['unit']}"])
-    columns.extend(["ocr_received_at", "ocr_value", "time_gap_s", "status"])
+    columns.extend([
+        "ocr_received_at", "ocr_value", "time_gap_s", "voltage_status", "ocr_status"
+    ])
     writer.writerow(columns)
     sys.stdout.flush()
 
@@ -120,20 +165,20 @@ def show_readings(events):
 
         row = [message["received_at"]]
         voltages = message["voltages"]
-        all_voltages_valid = True
+        voltage_status = "valid"
         for channel, settings in CHANNELS.items():
             if channel not in voltages:
                 raise ValueError(f"ロガーから {channel} の電圧が届きませんでした。")
             voltage = voltages[channel]
             value = convert_voltage(voltage, settings)
             if value is None:
-                all_voltages_valid = False
+                voltage_status = "invalid"
             row.extend([voltage, value])
 
         ocr_received_at = None
         ocr_value = None
         time_gap = None
-        status = "waiting_ocr"
+        ocr_status = "waiting"
         if latest_ocr is not None:
             ocr_received_at = latest_ocr["received_at"]
             ocr_value = latest_ocr["value"]
@@ -141,14 +186,14 @@ def show_readings(events):
             ocr_time = datetime.fromisoformat(ocr_received_at)
             time_gap = abs((logger_time - ocr_time).total_seconds())
             if ocr_value is None:
-                status = "ocr_unreadable"
+                ocr_status = "unreadable"
             elif time_gap > MAX_TIME_GAP:
-                status = "time_gap"
-            elif not all_voltages_valid:
-                status = "invalid_voltage"
+                ocr_status = "time_gap"
             else:
-                status = "ready"
-        row.extend([ocr_received_at, ocr_value, time_gap, status])
+                ocr_status = "ready"
+        row.extend([
+            ocr_received_at, ocr_value, time_gap, voltage_status, ocr_status
+        ])
         writer.writerow(row)
         sys.stdout.flush()
 

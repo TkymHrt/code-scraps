@@ -26,12 +26,11 @@ def main(channel_names, managed):
         raise ValueError("U1_CH1のような形式で取得する電圧CHを指定してください。")
     channels = {}
     for name in channel_names:
-        match = re.fullmatch(r"U([1-8])_CH([1-9][0-9]*)", name)
+        match = re.fullmatch(r"U1_CH([1-8])", name)
         if match is None:
-            raise ValueError(f"電圧CHの指定が不正です（{name}）。")
-        unit = int(match.group(1))
-        api_channel = int(match.group(2)) - 1  # APIのCH番号は0始まり。
-        channels[name] = (unit, api_channel)
+            raise ValueError(f"電圧CHはU1_CH1〜U1_CH8で指定してください（{name}）。")
+        api_channel = int(match.group(1)) - 1  # APIのCH番号は0始まり。
+        channels[name] = (1, api_channel)
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
         raise ValueError("SETTINGS_FILEに既存の.ucfファイルを指定してください。")
@@ -74,7 +73,7 @@ def main(channel_names, managed):
     if result != 0:
         raise RuntimeError(f"設定ファイルを開けませんでした（{result}）。")
     waveform = logger.GetActiveFile()
-    waveform._FlagAsMethod("GetDataCount", "GetData", "GetAutosaveCount")
+    waveform._FlagAsMethod("GetCurrentData")
 
     if stop_requested.is_set():
         return
@@ -83,7 +82,6 @@ def main(channel_names, managed):
         start_result = logger.Start()
         if start_result != 0:
             raise RuntimeError(f"収集を開始できませんでした（{start_result}）。")
-        last_sample = None
         was_active = False
         while not stop_requested.is_set():
             state = logger.GetState()
@@ -94,33 +92,23 @@ def main(channel_names, managed):
             if state < 0:
                 raise RuntimeError(f"収集状態を取得できませんでした（{state}）。")
             # Startの直後は、状態が更新されるまで停止が返ることがある。
-            if state == 1 and was_active:
-                break
-            if state != 1:
-                was_active = True
+            if state == 1:
+                if was_active:
+                    break
+                stop_requested.wait(READ_INTERVAL)
+                continue
+            was_active = True
 
-            save_number = waveform.GetAutosaveCount()
-            data_count = waveform.GetDataCount()
-            if data_count < 0:
-                raise RuntimeError(f"データ数を取得できませんでした（{data_count}）。")
-            sample_index = data_count - 1
-            sample = (save_number, sample_index)
-            if data_count > 0 and sample != last_sample:
-                received_at = datetime.now(timezone.utc).isoformat(
-                    timespec="milliseconds"
-                )
-                voltages = {}
-                for name, (unit, channel) in channels.items():
-                    voltage = waveform.GetData(unit, channel, sample_index)
-                    if not math.isfinite(voltage) or abs(voltage) >= 3.3e38:
-                        voltage = None
-                    voltages[name] = voltage
+            voltages = {}
+            for name, (unit, channel) in channels.items():
+                voltage = waveform.GetCurrentData(unit, channel)
+                if not math.isfinite(voltage) or abs(voltage) >= 3.3e38:
+                    voltage = None
+                voltages[name] = voltage
 
-                # 保存切替をまたぐと、同じindexでも別のサンプルを指す。
-                if save_number == waveform.GetAutosaveCount():
-                    message = {"received_at": received_at, "voltages": voltages}
-                    print(json.dumps(message, allow_nan=False), flush=True)
-                    last_sample = sample
+            received_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            message = {"received_at": received_at, "voltages": voltages}
+            print(json.dumps(message, allow_nan=False), flush=True)
             stop_requested.wait(READ_INTERVAL)
     finally:
         # Startの応答待ちで割り込まれた場合も、収集が始まっている可能性がある。
