@@ -1,4 +1,4 @@
-"""撮影画像から各桁7個の領域を選び、read_meter.pyへ貼る設定を表示する。"""
+"""白飛びしない赤い箇所をクリックし、read_meter.pyへ貼る点の設定を表示する。"""
 
 import sys
 
@@ -8,6 +8,7 @@ import cv2
 SOURCE = 0
 # SOURCE = r"C:\measurement\recorded.avi"
 REFLECTION = "horizontal"  # "none", "horizontal", "vertical", "both"
+SAMPLE_RADIUS = 1  # 元の撮影画像上で、1は3×3画素、2は5×5画素を読む。
 
 
 def correct_reflection(frame):
@@ -31,6 +32,9 @@ def window_is_closed(window):
 
 
 def main():
+    if not isinstance(SAMPLE_RADIUS, int) or SAMPLE_RADIUS < 0:
+        raise ValueError("SAMPLE_RADIUSは0以上の整数にしてください。")
+
     is_camera = isinstance(SOURCE, int)
     if is_camera:
         source = SOURCE
@@ -85,15 +89,34 @@ def main():
             "upper-left",
             "middle",
         ]
-        selected_boxes = []
-        reviewing = False
+        selected_points = []
+
+        def select_segment(event, x, y, flags, parameter):
+            if event != cv2.EVENT_LBUTTONDOWN or len(selected_points) == 42:
+                return
+            if not (
+                SAMPLE_RADIUS <= x < image_width - SAMPLE_RADIUS
+                and SAMPLE_RADIUS <= y < image_height - SAMPLE_RADIUS
+            ):
+                print(
+                    "読み取り範囲が撮影画像からはみ出します。点を選び直してください。",
+                    file=sys.stderr,
+                )
+                return
+            selected_points.append([x, y])
+
+        cv2.setMouseCallback(window, select_segment)
         line_thickness = max(1, round(1 / scale))
         font_scale = 0.4 / scale
         label_height = round(14 / scale)
         label_offset = round(3 / scale)
         while True:
             preview = image.copy()
-            for index, (left, top, right, bottom) in enumerate(selected_boxes):
+            for index, (x, y) in enumerate(selected_points):
+                left = x - SAMPLE_RADIUS
+                top = y - SAMPLE_RADIUS
+                right = x + SAMPLE_RADIUS + 1
+                bottom = y + SAMPLE_RADIUS + 1
                 cv2.rectangle(
                     preview, (left, top), (right - 1, bottom - 1),
                     (0, 255, 255), line_thickness,
@@ -104,66 +127,36 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255),
                     line_thickness,
                 )
-            if len(selected_boxes) == 42:
-                reviewing = True
-            if reviewing:
-                action = "resume"
-                if len(selected_boxes) == 42:
-                    action = "finish"
+            if len(selected_points) == 42:
+                message = "42/42  ENTER: finish   B: undo   Q / Esc: cancel"
+            else:
+                digit_index = len(selected_points) // 7
+                segment_index = len(selected_points) % 7
                 message = (
-                    f"{len(selected_boxes)}/42  ENTER: {action}   "
-                    "B: undo and redraw   Q: cancel"
+                    f"Digit {digit_index + 1}/6 - {segment_index + 1}/7 "
+                    f"{segment_names[segment_index]}: CLICK red area   B: undo   Q / Esc: cancel"
                 )
-                cv2.setWindowTitle(window, message)
-                cv2.imshow(window, preview)
-                key = cv2.waitKey(30) & 0xFF
-                if key in (27, ord("q")) or window_is_closed(window):
-                    return
-                if key == ord("b") and selected_boxes:
-                    selected_boxes.pop()
-                    reviewing = False
-                elif key in (10, 13):
-                    if len(selected_boxes) == 42:
-                        break
-                    reviewing = False
-                continue
-
-            digit_index = len(selected_boxes) // 7
-            segment_index = len(selected_boxes) % 7
-            message = (
-                f"Digit {digit_index + 1}/6 - {segment_index + 1}/7 "
-                f"{segment_names[segment_index]}: ENTER select, C review"
-            )
             cv2.setWindowTitle(window, message)
-            x, y, width, height = cv2.selectROI(
-                window, preview, showCrosshair=True, printNotice=False
-            )
-            if window_is_closed(window):
+            cv2.imshow(window, preview)
+            key = cv2.waitKey(30) & 0xFF
+            if key in (27, ord("q")) or window_is_closed(window):
                 return
-            if width == 0 or height == 0:
-                reviewing = True
-                continue
-            right = x + width
-            bottom = y + height
-            if not (
-                0 <= x < right <= image_width and 0 <= y < bottom <= image_height
-            ):
-                print(
-                    "セグメント枠を撮影画像内に選び直してください。", file=sys.stderr
-                )
-                continue
-            selected_boxes.append([x, y, right, bottom])
+            if key == ord("b") and selected_points:
+                selected_points.pop()
+            elif key in (10, 13) and len(selected_points) == 42:
+                break
 
-        segment_boxes = []
+        segment_points = []
         for start in range(0, 42, 7):
-            segment_boxes.append(selected_boxes[start : start + 7])
+            segment_points.append(selected_points[start : start + 7])
         print(
-            "以下の3行をread_meter.py先頭の同名設定へ貼り付けてください。",
+            "以下の4行をread_meter.py先頭の同名設定へ貼り付けてください。",
             file=sys.stderr,
         )
         print("FRAME_SIZE = " + repr([frame.shape[1], frame.shape[0]]))
         print("REFLECTION = " + repr(REFLECTION))
-        print("SEGMENT_BOXES = " + repr(segment_boxes))
+        print("SAMPLE_RADIUS = " + repr(SAMPLE_RADIUS))
+        print("SEGMENT_POINTS = " + repr(segment_points))
     finally:
         capture.release()
         cv2.destroyAllWindows()

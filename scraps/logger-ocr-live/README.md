@@ -17,7 +17,7 @@ python -m pip install pywin32 'opencv-python>=4.10,<6' 'numpy>=2,<3'
 ```
 
 1. ユニット1の電圧CH1～8を有効にし、入力レンジをすべて±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`collect_logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。[NR-600の準備手順](../rolling-gauge-meter/README.md#準備)
-2. OCRを校正し、得られた `FRAME_SIZE`、`REFLECTION`、`SEGMENT_BOXES` を新しい `read_meter.py` に貼り付け、`SOURCE` にカメラ番号を指定します。入力の確認には動画ファイルも使えます。初期の枠は既存の合成動画用です。対象は `0.000`〜`999.999` の赤い6桁7セグです。[OCRの校正手順](../seven-segment-ocr/README.md#実機を校正する)
+2. OCRを校正し、得られた `FRAME_SIZE`、`REFLECTION`、`SAMPLE_RADIUS`、`SEGMENT_POINTS` をこのフォルダの `read_meter.py` に貼り付け、`SOURCE` にカメラ番号を指定します。入力の確認には動画ファイルも使えます。初期の点は既存の合成動画用です。対象は `0.000`〜`999.999` の赤い6桁7セグで、点灯時に白飛びしない赤い箇所を手動選択します。[OCRの校正手順](../seven-segment-ocr/README.md#実機を校正する)
 3. `calculate_readings.py` の `CHANNELS` にある8CH分の設定を埋めます。初期の割当は下表のとおりです。実配線に合わせて名称と対応を確認し、各CHの `unit` と、`low_point`・`high_point` の `None` を現場の値に置き換えます。未設定のままでは取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
 
 | CH | 初期の名称 | 信号 |
@@ -50,7 +50,39 @@ python -m pip install pywin32 'opencv-python>=4.10,<6' 'numpy>=2,<3'
 python calculate_readings.py
 ```
 
-`Ctrl+C` または片方の取得終了で両方の取得を停止します。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。取得スクリプトを単体で動かす場合は `python collect_logger.py U1_CH1 U1_CH2` または `python read_meter.py` を実行すると、標準出力にJSONLが出ます。
+`Ctrl+C` または片方の取得終了で両方の取得を停止します。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。
+
+## 単体で確認する
+
+ロガー取得とOCR取得はそれぞれ単体で動きます。以下は `scraps/logger-ocr-live` を開いた状態で実行します。単体起動では `--managed` を付けません。終了は `Ctrl+C` です。
+
+OCRの校正には共通の `../seven-segment-ocr/calibrate_meter.py` を使います。同ファイルの `SOURCE`、`REFLECTION`、`SAMPLE_RADIUS` を設定します。半径は元の撮影画像上の画素数で、初期値の `1` は各点の周囲3×3画素を読みます。
+
+```powershell
+python ../seven-segment-ocr/calibrate_meter.py
+```
+
+`Space` で画像を止め、各桁の上→右上→右下→下→左下→左上→中央の順に、点灯時に白飛びしない赤い箇所を左クリックします。計42クリックです。中心でなくても構いませんが、周囲の小領域も同じセグメント内に収めます。`B` で直前の点を取り消せます。最後に `Enter` で確定し、出力した4項目をこのフォルダの `read_meter.py` に貼り付けます。旧設定の `SEGMENT_BOXES` は使わないので再校正してください。[詳しい校正手順](../seven-segment-ocr/README.md#実機を校正する)
+
+読み取りは小領域内の赤い画素率で判定します。白飛びの補完は行わず、白い画素率が `OFF_FRACTION`（初期値0.15）を超えれば、そのフレームの値を `null` にして連続確定をリセットします。点灯・消灯の間の曖昧な赤色率も `null` です。
+
+OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して次を実行します。ロガーや換算の設定は不要です。
+
+```powershell
+python read_meter.py
+```
+
+標準出力に `received_at` と `value` のJSONLが出ます。未確定・読取不能は `null` です。このフォルダのOCR取得はプレビュー画面やCSVファイルを作らず、コンソールにJSONLを出力します。撮影画像や点灯判定を画面で確認するときは、同じ校正設定を貼り付けた `../seven-segment-ocr/read_meter.py` を使います。同じカメラを使う取得処理は終了してから起動してください。
+
+ロガーだけを動かす場合は、`collect_logger.py` の `SETTINGS_FILE` と `DEVICE_ID` を設定し、取得するCHを引数で指定します。
+
+```powershell
+python collect_logger.py U1_CH1 U1_CH2
+```
+
+標準出力に `received_at` と指定CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、OCRや `calculate_readings.py` の設定は不要です。8CHを読む場合は `U1_CH1`〜`U1_CH8` をすべて引数に並べます。終了後はWAVE LOGGER PROの画面で収集停止を確認します。
+
+`calculate_readings.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
 
 ## 出力と時刻の照合
 
@@ -68,6 +100,8 @@ NR-600の計測ユニット間同期は±1μs以下であり、今回の速報�
 
 ## 検証
 
+2026-11-06、点の周囲3×3画素での認識へ変更し、この題材の自動テスト21件と `seven-segment-ocr` の43件が通りました。各桁の0〜9、`0.0`、不正な消灯位置、白飛びの拒否、1画素の雑音、曖昧な色、範囲外設定の拒否、JSONLの形式と白飛び後の連続確定リセットを確認しました。共通校正の4項目を両方の読み取り側に貼り付けて使えることも確認しています。実画面の操作確認は省略し、実機の精度と遅延は未確認です。
+
 現在値の取得・換算処理は、このフォルダで次のコマンドを実行して確認できます。
 
 ```powershell
@@ -78,4 +112,4 @@ python -m unittest discover -s tests -v
 
 2026-11-06に自動テスト14件が通りました。1ユニット8CHの指定、異なる電圧範囲・単位での換算、増加・減少する出力、端点・範囲外・欠測、未設定や±10V外の基準点での起動防止を確認しました。CSVでは生電圧と各CHの換算値を確認し、OCR待ち・未確定・時刻差超過でも電圧の異常が隠れないこと、150msと151msの境界を確認しました。現場の換算値と実機動作は未確認です。
 
-取得方式を変更する前には、模擬COMと合成動画で3本の連携と片側の終了・異常時の停止を確認しています。合成動画168フレームのOCR確定値は既存の読み取り処理と一致しました。照合処理では `0.0` と `null`、150msと151msの境界、受信停止を確認しました。今回、OCRの読取処理は変更していません。
+点方式への変更前には、模擬COMと合成動画で3本の連携と片側の終了・異常時の停止を確認しています。合成動画168フレームのOCR確定値は当時の読み取り処理と一致しました。照合処理では `0.0` と `null`、150msと151msの境界、受信停止を確認しました。

@@ -13,71 +13,71 @@ import numpy as np
 
 SOURCE = None  # カメラ番号（0など）または動画のパス
 
-# 実機では既存のcalibrate_meter.pyで得た3項目を貼り付ける。
+# 実機では既存のcalibrate_meter.pyで得た4項目を貼り付ける。
 FRAME_SIZE = [960, 360]
 REFLECTION = "horizontal"
-# 各桁の上、右上、右下、下、左下、左上、中央の順に [左, 上, 右, 下]。
-SEGMENT_BOXES = [
+SAMPLE_RADIUS = 1  # 1は3×3画素、2は5×5画素を読む。
+# 各桁の上、右上、右下、下、左下、左上、中央の順に [x, y]。
+SEGMENT_POINTS = [
     [
-        [149, 105, 185, 116],
-        [198, 131, 209, 169],
-        [192, 221, 203, 261],
-        [135, 279, 173, 292],
-        [111, 224, 123, 263],
-        [119, 134, 131, 172],
-        [142, 190, 179, 202],
+        [167, 110],
+        [203, 150],
+        [197, 241],
+        [154, 285],
+        [117, 243],
+        [125, 153],
+        [160, 196],
     ],
     [
-        [268, 100, 304, 112],
-        [319, 126, 329, 164],
-        [315, 217, 326, 257],
-        [259, 276, 297, 288],
-        [234, 220, 245, 259],
-        [239, 129, 250, 167],
-        [263, 186, 301, 198],
+        [286, 106],
+        [324, 145],
+        [320, 237],
+        [278, 282],
+        [239, 239],
+        [244, 148],
+        [282, 192],
     ],
     [
-        [389, 95, 426, 107],
-        [442, 122, 452, 160],
-        [442, 213, 451, 253],
-        [385, 272, 423, 285],
-        [358, 216, 369, 256],
-        [361, 125, 371, 163],
-        [387, 182, 424, 194],
+        [407, 101],
+        [447, 141],
+        [446, 233],
+        [404, 278],
+        [363, 236],
+        [366, 144],
+        [405, 188],
     ],
     [
-        [512, 90, 549, 102],
-        [567, 117, 578, 155],
-        [569, 209, 580, 250],
-        [513, 269, 552, 281],
-        [485, 212, 495, 252],
-        [485, 120, 494, 158],
-        [512, 177, 551, 190],
+        [530, 96],
+        [572, 136],
+        [574, 229],
+        [532, 275],
+        [490, 232],
+        [489, 139],
+        [531, 183],
     ],
     [
-        [637, 84, 675, 97],
-        [694, 112, 706, 151],
-        [699, 205, 711, 246],
-        [644, 265, 684, 278],
-        [613, 208, 624, 248],
-        [611, 115, 621, 154],
-        [640, 173, 679, 185],
+        [656, 90],
+        [700, 131],
+        [705, 225],
+        [664, 271],
+        [618, 228],
+        [616, 134],
+        [659, 179],
     ],
     [
-        [764, 79, 804, 92],
-        [824, 107, 837, 146],
-        [831, 201, 845, 242],
-        [777, 262, 818, 274],
-        [744, 204, 756, 244],
-        [738, 110, 750, 149],
-        [770, 168, 811, 181],
+        [784, 85],
+        [830, 126],
+        [838, 221],
+        [797, 268],
+        [750, 224],
+        [744, 129],
+        [790, 174],
     ],
 ]
 
 RED_MIN = 70
 RED_MARGIN = 40
 WHITE_MIN = 200
-RED_SEED_FRACTION = 0.05
 OFF_FRACTION = 0.15
 ON_FRACTION = 0.65
 STABLE_FRAMES = 3
@@ -103,16 +103,27 @@ def watch_parent(stop_requested):
     stop_requested.set()
 
 
-def validate_segment_boxes():
-    if len(SEGMENT_BOXES) != 6:
-        raise ValueError("SEGMENT_BOXESには6桁分の枠を指定してください。")
+def validate_segment_points():
+    if not isinstance(SAMPLE_RADIUS, int) or SAMPLE_RADIUS < 0:
+        raise ValueError("SAMPLE_RADIUSは0以上の整数にしてください。")
+    if len(SEGMENT_POINTS) != 6:
+        raise ValueError("SEGMENT_POINTSには6桁分の点を指定してください。")
     width, height = FRAME_SIZE
-    for boxes in SEGMENT_BOXES:
-        if len(boxes) != 7:
-            raise ValueError("各桁に7個のセグメント枠を指定してください。")
-        for left, top, right, bottom in boxes:
-            if not (0 <= left < right <= width and 0 <= top < bottom <= height):
-                raise ValueError("セグメント枠を撮影画像内に指定してください。")
+    for points in SEGMENT_POINTS:
+        if len(points) != 7:
+            raise ValueError("各桁に7個の点を指定してください。")
+        for point in points:
+            if len(point) != 2:
+                raise ValueError("各点は [x, y] の2座標にしてください。")
+            for coordinate in point:
+                if not isinstance(coordinate, int):
+                    raise ValueError("点の座標は整数にしてください。")
+            x, y = point
+            if not (
+                SAMPLE_RADIUS <= x < width - SAMPLE_RADIUS
+                and SAMPLE_RADIUS <= y < height - SAMPLE_RADIUS
+            ):
+                raise ValueError("点の周囲の読み取り範囲を撮影画像内にしてください。")
 
 
 def recognize_display(image):
@@ -125,30 +136,23 @@ def recognize_display(image):
     white_pixels = (blue >= WHITE_MIN) & (green >= WHITE_MIN) & (red >= WHITE_MIN)
 
     display = ""
-    for boxes in SEGMENT_BOXES:
+    for points in SEGMENT_POINTS:
         pattern = ""
-        for left, top, right, bottom in boxes:
+        for x, y in points:
+            left = x - SAMPLE_RADIUS
+            top = y - SAMPLE_RADIUS
+            right = x + SAMPLE_RADIUS + 1
+            bottom = y + SAMPLE_RADIUS + 1
             region_red = red_pixels[top:bottom, left:right]
             region_white = white_pixels[top:bottom, left:right]
-            region_lit = region_red.copy()
-            # 同じ枠の中で十分な赤につながる白飛びだけを点灯に含める。
-            candidates = (region_red | region_white).astype(np.uint8)
-            component_count, labels = cv2.connectedComponents(
-                candidates, connectivity=8
-            )
-            minimum_red_count = math.ceil(region_red.size * RED_SEED_FRACTION)
-            for component_index in range(1, component_count):
-                component = labels == component_index
-                red_count = np.count_nonzero(region_red & component)
-                if red_count >= minimum_red_count:
-                    region_lit |= component
-
-            lit_fraction = np.count_nonzero(region_lit) / region_lit.size
-            unsupported_white = region_white & ~region_lit
-            white_fraction = np.count_nonzero(unsupported_white) / region_lit.size
-            if lit_fraction >= ON_FRACTION:
+            red_fraction = np.count_nonzero(region_red) / region_red.size
+            white_fraction = np.count_nonzero(region_white) / region_white.size
+            # 白飛びした点灯を、消灯や別の数字として扱わない。
+            if white_fraction > OFF_FRACTION:
+                return None
+            if red_fraction >= ON_FRACTION:
                 pattern += "1"
-            elif lit_fraction <= OFF_FRACTION and white_fraction <= OFF_FRACTION:
+            elif red_fraction <= OFF_FRACTION:
                 pattern += "0"
             else:
                 return None
@@ -168,7 +172,7 @@ def recognize_display(image):
 def main():
     if SOURCE is None:
         raise ValueError("SOURCEにカメラ番号か動画のパスを指定してください。")
-    validate_segment_boxes()
+    validate_segment_points()
     flip_codes = {"horizontal": 1, "vertical": 0, "both": -1}
     if REFLECTION != "none" and REFLECTION not in flip_codes:
         raise ValueError("REFLECTIONの補正方向を確認してください。")
@@ -180,8 +184,8 @@ def main():
         raise ValueError("STABLE_FRAMESは1以上の整数にしてください。")
     if not (0 <= RED_MIN <= 255 and 0 < RED_MARGIN <= 255):
         raise ValueError("RED_MINとRED_MARGINは画素値の範囲内で指定してください。")
-    if not (0 <= WHITE_MIN <= 255 and 0 < RED_SEED_FRACTION <= 1):
-        raise ValueError("WHITE_MINとRED_SEED_FRACTIONを確認してください。")
+    if not 0 <= WHITE_MIN <= 255:
+        raise ValueError("WHITE_MINは画素値の範囲内で指定してください。")
 
     stop_requested = Event()
     if "--managed" in sys.argv:

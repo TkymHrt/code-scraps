@@ -35,37 +35,35 @@ calibration_spec = importlib.util.spec_from_file_location(
 calibrate_meter = importlib.util.module_from_spec(calibration_spec)
 calibration_spec.loader.exec_module(calibrate_meter)
 
-# 描画用の720×200画像を直接調べるテストだけで使う枠。
-FLAT_BOXES = []
+# 描画用の720×200画像を直接調べるテストだけで使う点。
+FLAT_POINTS = []
 for digit_index in range(6):
-    digit_boxes = []
-    for left, top, right, bottom in [
-        [42, 15, 78, 25],
-        [95, 41, 104, 76],
-        [95, 124, 104, 159],
-        [42, 175, 78, 185],
-        [16, 124, 25, 159],
-        [16, 41, 25, 76],
-        [42, 95, 78, 105],
+    digit_points = []
+    for x, y in [
+        [60, 20],
+        [99, 58],
+        [99, 141],
+        [60, 180],
+        [21, 141],
+        [21, 58],
+        [60, 100],
     ]:
         offset = digit_index * 120
-        digit_boxes.append([left + offset, top, right + offset, bottom])
-    FLAT_BOXES.append(digit_boxes)
+        digit_points.append([x + offset, y])
+    FLAT_POINTS.append(digit_points)
 
 
 class CalibrationTests(unittest.TestCase):
-    def calibration_rois(self):
-        rois = []
-        for digit_boxes in read_meter.SEGMENT_BOXES:
-            for left, top, right, bottom in digit_boxes:
-                rois.append((left, top, right - left, bottom - top))
-        return rois
+    def calibration_points(self):
+        points = []
+        for digit_points in read_meter.SEGMENT_POINTS:
+            for x, y in digit_points:
+                points.append((x, y))
+        return points
 
-    def run_calibration(self, rois=None, keys=None, frame=None, visibility=None):
-        if rois is None:
-            rois = self.calibration_rois()
-        if keys is None:
-            keys = [ord(" "), 13]
+    def run_calibration(self, actions=None, frame=None, visibility=None):
+        if actions is None:
+            actions = [ord(" ")] + self.calibration_points() + [13]
         if frame is None:
             frame = simulate_meter.make_frame("  1234", reflection="vertical")
         capture = Mock()
@@ -73,11 +71,32 @@ class CalibrationTests(unittest.TestCase):
         capture.read.return_value = (True, frame)
 
         output = io.StringIO()
-        select_roi = Mock(side_effect=rois)
+        pending_actions = iter(actions)
+        mouse_events = []
+        preview_shapes = []
+        mouse_callback = Mock()
+
+        def wait_for_action(delay):
+            action = next(pending_actions)
+            if isinstance(action, tuple):
+                event = cv2.EVENT_LBUTTONDOWN
+                if len(action) == 3:
+                    event, x, y = action
+                else:
+                    x, y = action
+                callback = mouse_callback.call_args.args[1]
+                callback(event, x, y, 0, None)
+                mouse_events.append((event, x, y))
+                return -1
+            return action
+
+        def show_image(window, image):
+            preview_shapes.append(image.shape)
+
         named_window = Mock()
         resize_window = Mock()
         visible = Mock(return_value=1, side_effect=visibility)
-        wait_key = Mock(side_effect=keys)
+        wait_key = Mock(side_effect=wait_for_action)
         with patch.multiple(calibrate_meter, SOURCE=0, REFLECTION="vertical"):
             with patch.multiple(
                 calibrate_meter.cv2,
@@ -85,9 +104,9 @@ class CalibrationTests(unittest.TestCase):
                 namedWindow=named_window,
                 resizeWindow=resize_window,
                 setWindowTitle=Mock(),
-                imshow=Mock(),
+                imshow=show_image,
                 waitKey=wait_key,
-                selectROI=select_roi,
+                setMouseCallback=mouse_callback,
                 getWindowProperty=visible,
                 destroyAllWindows=Mock(),
             ):
@@ -100,10 +119,11 @@ class CalibrationTests(unittest.TestCase):
         resize_window.assert_called_once_with(
             "Calibration", round(width * scale), round(height * scale)
         )
-        for call in select_roi.call_args_list:
-            self.assertEqual(call.args[0], "Calibration")
-            self.assertEqual(call.args[1].shape, frame.shape)
-            self.assertFalse(call.kwargs["printNotice"])
+        for shape in preview_shapes:
+            self.assertEqual(shape, frame.shape)
+        if mouse_callback.called:
+            mouse_callback.assert_called_once()
+            self.assertEqual(mouse_callback.call_args.args[0], "Calibration")
         for call in wait_key.call_args_list:
             self.assertEqual(call.args, (30,))
 
@@ -112,70 +132,120 @@ class CalibrationTests(unittest.TestCase):
         for line in output.getvalue().splitlines():
             name, literal = line.split("=", 1)
             settings[name.strip()] = ast.literal_eval(literal.strip())
-        return settings, select_roi
+        return settings, mouse_events
 
     def test_printed_calibration_can_be_copied_into_reader(self):
-        boxes = deepcopy(read_meter.SEGMENT_BOXES)
-        settings, select_roi = self.run_calibration()
+        settings, mouse_events = self.run_calibration()
         self.assertEqual(
             set(settings),
-            {"FRAME_SIZE", "REFLECTION", "SEGMENT_BOXES"},
+            {"FRAME_SIZE", "REFLECTION", "SAMPLE_RADIUS", "SEGMENT_POINTS"},
         )
-        self.assertEqual(settings["SEGMENT_BOXES"], boxes)
         self.assertEqual(settings["FRAME_SIZE"], [960, 360])
-        self.assertEqual(select_roi.call_count, 42)
-        self.assertEqual(select_roi.call_args_list[0].args[1].shape, (360, 960, 3))
+        self.assertEqual(len(mouse_events), 42)
+        self.assertEqual(settings["SAMPLE_RADIUS"], 1)
+        self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
         with patch.multiple(read_meter, **settings):
-            read_meter.validate_segment_boxes()
-            frame = simulate_meter.make_frame("  1234", reflection="vertical")
-            image = read_meter.prepare_frame(frame)
-            reading, _ = read_meter.recognize_display(image)
-        self.assertEqual(reading["raw_value"], "1.234")
+            read_meter.validate_segment_points()
+            for display in ["  1234", "000000", "999999"]:
+                frame = simulate_meter.make_frame(display, reflection="vertical")
+                image = read_meter.prepare_frame(frame)
+                reading, _ = read_meter.recognize_display(image)
+                expected = str(int(display[:3])) + "." + display[3:]
+                self.assertEqual(reading["raw_value"], expected)
+
+    def test_printed_calibration_can_be_copied_into_logger_reader(self):
+        settings, _ = self.run_calibration()
+        spec = importlib.util.spec_from_file_location(
+            "logger_reader", TOPIC.parent / "logger-ocr-live" / "read_meter.py"
+        )
+        logger_reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(logger_reader)
+        with patch.multiple(logger_reader, **settings):
+            logger_reader.validate_segment_points()
+            for digit in "0123456789":
+                display = digit * 6
+                frame = simulate_meter.make_frame(display, reflection="none")
+                value = logger_reader.recognize_display(frame)
+                expected = float(display) / 1000
+                self.assertEqual(value, expected)
 
     def test_cancel_during_segment_selection_prints_no_partial_settings(self):
-        rois = [(42, 15, 36, 10), (95, 41, 9, 35), (0, 0, 0, 0)]
-        settings, select_roi = self.run_calibration(rois, keys=[ord(" "), ord("q")])
-        self.assertEqual(settings, {})
-        self.assertEqual(select_roi.call_count, 3)
+        for key in (ord("q"), 27):
+            with self.subTest(key=key):
+                actions = [ord(" ")] + self.calibration_points()[:2] + [key]
+                settings, mouse_events = self.run_calibration(actions)
+                self.assertEqual(settings, {})
+                self.assertEqual(len(mouse_events), 2)
 
     def test_outside_segment_selection_is_retried(self):
-        boxes = deepcopy(read_meter.SEGMENT_BOXES)
-        rois = [(959, 10, 10, 10)] + self.calibration_rois()
-        settings, select_roi = self.run_calibration(rois)
-        self.assertEqual(settings["SEGMENT_BOXES"], boxes)
-        self.assertEqual(select_roi.call_count, 43)
+        expected, _ = self.run_calibration()
+        actions = [ord(" "), (0, 0), (959, 359)] + self.calibration_points() + [13]
+        settings, mouse_events = self.run_calibration(actions)
+        self.assertEqual(settings, expected)
+        self.assertEqual(len(mouse_events), 44)
 
-    def test_review_can_undo_across_digit_boundary_then_resume(self):
-        rois = self.calibration_rois()
-        first_selections = rois[:6] + [(10, 10, 5, 5), (20, 20, 5, 5)]
-        selections = first_selections + [(0, 0, 0, 0), (0, 0, 0, 0)] + rois[6:]
-        keys = [ord(" "), ord("b"), ord("b"), 13]
-        settings, select_roi = self.run_calibration(selections, keys=keys)
-        self.assertEqual(settings["SEGMENT_BOXES"], read_meter.SEGMENT_BOXES)
-        self.assertEqual(select_roi.call_count, 46)
+    def test_undo_across_digit_boundary_needs_no_resume_key(self):
+        expected, _ = self.run_calibration()
+        points = self.calibration_points()
+        actions = [ord(" "), ord("b")] + points[:6] + [(30, 30), (50, 50)]
+        actions += [ord("b"), ord("b")] + points[6:] + [13]
+        settings, _ = self.run_calibration(actions)
+        self.assertEqual(settings, expected)
 
     def test_final_review_undo_allows_redraw_without_resume_key(self):
-        rois = self.calibration_rois() + [(772, 170, 37, 9)]
-        settings, select_roi = self.run_calibration(
-            rois, keys=[ord(" "), ord("b"), 13]
-        )
-        expected = deepcopy(read_meter.SEGMENT_BOXES)
-        expected[5][6] = [772, 170, 809, 179]
-        self.assertEqual(settings["SEGMENT_BOXES"], expected)
-        self.assertEqual(select_roi.call_count, 43)
+        actions = [ord(" ")] + self.calibration_points()
+        actions += [ord("b"), (790, 174), 13]
+        settings, mouse_events = self.run_calibration(actions)
+        self.assertEqual(settings["SEGMENT_POINTS"][5][6], [790, 174])
+        self.assertEqual(len(mouse_events), 43)
 
     def test_final_review_can_cancel_without_printing_settings(self):
-        settings, select_roi = self.run_calibration(keys=[ord(" "), ord("q")])
+        actions = [ord(" ")] + self.calibration_points() + [ord("q")]
+        settings, mouse_events = self.run_calibration(actions)
         self.assertEqual(settings, {})
-        self.assertEqual(select_roi.call_count, 42)
+        self.assertEqual(len(mouse_events), 42)
+
+    def test_only_left_clicks_add_points_and_final_review_ignores_clicks(self):
+        expected, _ = self.run_calibration()
+        actions = [ord(" "), 13, (cv2.EVENT_RBUTTONDOWN, 30, 30)]
+        actions += [(cv2.EVENT_MOUSEMOVE, 40, 40)] + self.calibration_points()
+        actions += [(50, 50), 13]
+        settings, _ = self.run_calibration(actions)
+        self.assertEqual(settings, expected)
 
     def test_resized_window_keeps_high_resolution_image_coordinates(self):
         frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
-        rois = self.calibration_rois()
-        rois[0] = (3000, 1800, 100, 50)
-        settings, _ = self.run_calibration(rois, frame=frame)
+        points = self.calibration_points()
+        points[0] = (3050, 1825)
+        actions = [ord(" ")] + points + [13]
+        settings, _ = self.run_calibration(actions, frame=frame)
         self.assertEqual(settings["FRAME_SIZE"], [3840, 2160])
-        self.assertEqual(settings["SEGMENT_BOXES"][0][0], [3000, 1800, 3100, 1850])
+        self.assertEqual(settings["SEGMENT_POINTS"][0][0], [3050, 1825])
+
+    def test_custom_radius_is_printed_and_controls_edge_selection(self):
+        actions = [ord(" "), (1, 1)] + self.calibration_points() + [13]
+        with patch.object(calibrate_meter, "SAMPLE_RADIUS", 2):
+            settings, mouse_events = self.run_calibration(actions)
+        self.assertEqual(settings["SAMPLE_RADIUS"], 2)
+        self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
+        self.assertEqual(len(mouse_events), 43)
+
+    def test_radius_zero_allows_image_corner(self):
+        points = self.calibration_points()
+        points[0] = (0, 0)
+        with patch.object(calibrate_meter, "SAMPLE_RADIUS", 0):
+            settings, _ = self.run_calibration([ord(" ")] + points + [13])
+        self.assertEqual(settings["SAMPLE_RADIUS"], 0)
+        self.assertEqual(settings["SEGMENT_POINTS"][0][0], [0, 0])
+
+    def test_invalid_radius_is_rejected_before_opening_input(self):
+        for radius in (-1, 1.5, float("nan")):
+            with self.subTest(radius=radius):
+                with patch.object(calibrate_meter, "SAMPLE_RADIUS", radius):
+                    with patch.object(calibrate_meter.cv2, "VideoCapture") as capture:
+                        with self.assertRaises(ValueError):
+                            calibrate_meter.main()
+                        capture.assert_not_called()
 
     def test_closed_window_cancels_at_preview_selection_or_review(self):
         cases = [[0], [cv2.error("window destroyed")], [1, 0], [1] * 43 + [0]]
@@ -186,44 +256,43 @@ class CalibrationTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_segment_boxes_require_six_digits_and_seven_segments(self):
-        missing_digit = deepcopy(read_meter.SEGMENT_BOXES)
+    def test_segment_points_require_six_digits_and_seven_segments(self):
+        missing_digit = deepcopy(read_meter.SEGMENT_POINTS)
         missing_digit.pop()
-        extra_digit = deepcopy(read_meter.SEGMENT_BOXES)
+        extra_digit = deepcopy(read_meter.SEGMENT_POINTS)
         extra_digit.append(deepcopy(extra_digit[0]))
-        missing_segment = deepcopy(read_meter.SEGMENT_BOXES)
+        missing_segment = deepcopy(read_meter.SEGMENT_POINTS)
         missing_segment[2].pop()
-        extra_segment = deepcopy(read_meter.SEGMENT_BOXES)
-        extra_segment[2].append([10, 10, 20, 20])
+        extra_segment = deepcopy(read_meter.SEGMENT_POINTS)
+        extra_segment[2].append([10, 10])
         for boxes in [[], missing_digit, extra_digit, missing_segment, extra_segment]:
             with self.subTest(boxes=boxes):
-                with patch.object(read_meter, "SEGMENT_BOXES", boxes):
+                with patch.object(read_meter, "SEGMENT_POINTS", boxes):
                     with self.assertRaises(ValueError):
-                        read_meter.validate_segment_boxes()
+                        read_meter.validate_segment_points()
 
-    def test_segment_boxes_require_integer_coordinates_and_nonempty_image_area(self):
+    def test_segment_points_require_integers_and_whole_sample_inside_image(self):
         frame_width, frame_height = read_meter.FRAME_SIZE
-        bad_boxes = [
+        bad_points = [
+            [10],
             [10, 10, 20],
-            [10, 10, 20, 20, 30],
-            [10, 10, 10, 20],
-            [10, 20, 20, 20],
-            [20, 10, 10, 20],
-            [-1, 10, 20, 20],
-            [10, -1, 20, 20],
-            [10, 10, frame_width + 1, 20],
-            [10, 10, 20, frame_height + 1],
-            [10.5, 10, 20, 20],
-            ["10", 10, 20, 20],
-            [float("nan"), 10, 20, 20],
+            [-1, 10],
+            [10, -1],
+            [0, 10],
+            [10, 0],
+            [frame_width - 1, 10],
+            [10, frame_height - 1],
+            [10.5, 10],
+            ["10", 10],
+            [float("nan"), 10],
         ]
-        for box in bad_boxes:
-            with self.subTest(box=box):
-                boxes = deepcopy(read_meter.SEGMENT_BOXES)
-                boxes[0][0] = box
-                with patch.object(read_meter, "SEGMENT_BOXES", boxes):
+        for point in bad_points:
+            with self.subTest(point=point):
+                points = deepcopy(read_meter.SEGMENT_POINTS)
+                points[0][0] = point
+                with patch.object(read_meter, "SEGMENT_POINTS", points):
                     with self.assertRaises(ValueError):
-                        read_meter.validate_segment_boxes()
+                        read_meter.validate_segment_points()
 
     def test_thresholds_and_stable_frame_count_are_checked_before_opening_input(self):
         invalid_settings = [
@@ -233,8 +302,8 @@ class ConfigurationTests(unittest.TestCase):
             {"RED_MARGIN": 256},
             {"WHITE_MIN": -1},
             {"WHITE_MIN": 256},
-            {"RED_SEED_FRACTION": 0},
-            {"RED_SEED_FRACTION": 1.1},
+            {"SAMPLE_RADIUS": -1},
+            {"SAMPLE_RADIUS": 1.5},
             {"OFF_FRACTION": -0.1},
             {"OFF_FRACTION": 0.7, "ON_FRACTION": 0.7},
             {"ON_FRACTION": 1.1},
@@ -257,7 +326,7 @@ class RecognitionTests(unittest.TestCase):
             read_meter,
             REFLECTION="none",
             FRAME_SIZE=[720, 200],
-            SEGMENT_BOXES=FLAT_BOXES,
+            SEGMENT_POINTS=FLAT_POINTS,
         )
         settings.start()
         self.addCleanup(settings.stop)
@@ -310,7 +379,8 @@ class RecognitionTests(unittest.TestCase):
         reading, mask = read_meter.recognize_display(image)
         self.assertIsNone(reading["raw_value"])
         self.assertTrue(reading["reason"])
-        left, top, right, bottom = read_meter.SEGMENT_BOXES[0][0]
+        x, y = read_meter.SEGMENT_POINTS[0][0]
+        left, top, right, bottom = x - 1, y - 1, x + 2, y + 2
         region_mask = mask[top:bottom, left:right]
         fraction = np.count_nonzero(region_mask) / region_mask.size
         self.assertGreater(fraction, read_meter.OFF_FRACTION)
@@ -324,39 +394,27 @@ class RecognitionTests(unittest.TestCase):
                 reading, _ = read_meter.recognize_display(image)
                 self.assertIsNone(reading["raw_value"])
 
-    def test_white_cores_with_red_edges_are_read_for_every_digit(self):
+    def test_white_cores_are_rejected_even_when_surrounded_by_red(self):
         segment_names = "abcdefg"
         for digit in "0123456789":
             display = digit * 6
             image = simulate_meter.draw_display(display)
-            for digit_boxes in read_meter.SEGMENT_BOXES:
-                for segment_index, box in enumerate(digit_boxes):
+            for digit_points in read_meter.SEGMENT_POINTS:
+                for segment_index, (x, y) in enumerate(digit_points):
                     name = segment_names[segment_index]
                     if name in simulate_meter.LIT_SEGMENTS[digit]:
-                        left, top, right, bottom = box
-                        image[top + 1 : bottom - 1, left + 1 : right - 1] = 255
+                        image[y - 1 : y + 2, x - 1 : x + 2] = 255
             with self.subTest(digit=digit):
                 reading, mask = read_meter.recognize_display(image)
-                expected = str(int(display[:3])) + "." + display[3:]
-                self.assertEqual(reading["raw_value"], expected)
-                self.assertEqual(reading["display"], display)
-                for digit_index, digit_boxes in enumerate(read_meter.SEGMENT_BOXES):
-                    for segment_index, box in enumerate(digit_boxes):
-                        name = segment_names[segment_index]
-                        if name in simulate_meter.LIT_SEGMENTS[digit]:
-                            left, top, right, bottom = box
-                            core_mask = mask[top + 1 : bottom - 1, left + 1 : right - 1]
-                            self.assertTrue(np.all(core_mask == 255))
-                            region_mask = mask[top:bottom, left:right]
-                            fraction = np.count_nonzero(region_mask) / region_mask.size
-                            self.assertGreaterEqual(fraction, read_meter.ON_FRACTION)
+                self.assertIsNone(reading["raw_value"])
+                self.assertEqual(reading["reason"], "uncertain_segments")
 
     def test_fully_white_segment_is_uncertain_instead_of_becoming_another_digit(self):
-        for digit_index, digit_boxes in enumerate(read_meter.SEGMENT_BOXES):
-            for segment_index, box in enumerate(digit_boxes):
+        for digit_index, digit_points in enumerate(read_meter.SEGMENT_POINTS):
+            for segment_index, (x, y) in enumerate(digit_points):
                 with self.subTest(digit=digit_index, segment=segment_index):
                     image = simulate_meter.draw_display("888888")
-                    left, top, right, bottom = box
+                    left, top, right, bottom = x - 1, y - 1, x + 2, y + 2
                     image[top:bottom, left:right] = 255
                     reading, mask = read_meter.recognize_display(image)
                     self.assertIsNone(reading["raw_value"])
@@ -366,21 +424,27 @@ class RecognitionTests(unittest.TestCase):
                     )
                     self.assertEqual(cv2.countNonZero(mask[top:bottom, left:right]), 0)
 
-    def test_disconnected_white_blob_does_not_use_nearby_red_as_a_seed(self):
+    def test_red_point_away_from_white_center_remains_readable(self):
         image = simulate_meter.draw_display("888888")
-        left, top, right, bottom = read_meter.SEGMENT_BOXES[0][0]
-        region = image[top:bottom, left:right]
-        region[:] = 8
-        region[:, :3] = (12, 17, 230)
-        region[:, 6:] = 255
-        reading, mask = read_meter.recognize_display(image)
+        points = deepcopy(read_meter.SEGMENT_POINTS)
+        for digit_points in points:
+            for segment_index, point in enumerate(digit_points):
+                x, y = point
+                image[y - 2 : y + 3, x - 2 : x + 3] = 255
+                if segment_index in (0, 3, 6):
+                    point[0] += 15
+                else:
+                    point[1] += 15
+        reading, _ = read_meter.recognize_display(image)
         self.assertIsNone(reading["raw_value"])
-        self.assertEqual(reading["patterns"][0][0], "?")
-        self.assertEqual(cv2.countNonZero(mask[top:bottom, left + 6 : right]), 0)
+        with patch.object(read_meter, "SEGMENT_POINTS", points):
+            reading, _ = read_meter.recognize_display(image)
+        self.assertEqual(reading["raw_value"], "888.888")
 
-    def test_one_red_noise_pixel_does_not_seed_a_broad_white_reflection(self):
+    def test_one_red_noise_pixel_does_not_make_white_sample_readable(self):
         image = simulate_meter.draw_display("888888")
-        left, top, right, bottom = read_meter.SEGMENT_BOXES[0][0]
+        x, y = read_meter.SEGMENT_POINTS[0][0]
+        left, top, right, bottom = x - 1, y - 1, x + 2, y + 2
         region = image[top:bottom, left:right]
         region[:] = 255
         region[0, 0] = (12, 17, 230)
@@ -390,24 +454,54 @@ class RecognitionTests(unittest.TestCase):
         accepted_pixels = cv2.countNonZero(mask[top:bottom, left:right])
         self.assertLessEqual(accepted_pixels, 1)
 
-    def test_each_digit_uses_its_individually_selected_absolute_boxes(self):
+    def test_excess_white_is_rejected_even_when_red_fraction_is_high(self):
+        image = simulate_meter.draw_display("888888")
+        x, y = read_meter.SEGMENT_POINTS[0][0]
+        image[y - 1, x - 1 : x + 1] = 255
+        reading, _ = read_meter.recognize_display(image)
+        self.assertIsNone(reading["raw_value"])
+        self.assertEqual(reading["patterns"][0][0], "?")
+
+    def test_one_noise_pixel_does_not_change_lit_or_unlit_sample(self):
+        image = simulate_meter.draw_display("123456")
+        for digit, points in zip("123456", read_meter.SEGMENT_POINTS):
+            for name, (x, y) in zip("abcdefg", points):
+                if name in simulate_meter.LIT_SEGMENTS[digit]:
+                    image[y, x] = 8
+                else:
+                    image[y, x] = (12, 17, 230)
+        reading, _ = read_meter.recognize_display(image)
+        self.assertEqual(reading["raw_value"], "123.456")
+
+    def test_larger_radius_reads_the_whole_neighborhood(self):
+        image = simulate_meter.draw_display("888888")
+        x, y = read_meter.SEGMENT_POINTS[0][0]
+        image[y - 2 : y + 3, x - 2 : x + 3] = 8
+        image[y - 1 : y + 2, x - 1 : x + 2] = (12, 17, 230)
+        reading, _ = read_meter.recognize_display(image)
+        self.assertEqual(reading["raw_value"], "888.888")
+        with patch.object(read_meter, "SAMPLE_RADIUS", 2):
+            reading, _ = read_meter.recognize_display(image)
+        self.assertIsNone(reading["raw_value"])
+
+    def test_each_digit_uses_its_individually_selected_absolute_points(self):
         image = np.full((200, 720, 3), 8, dtype=np.uint8)
         display = "123456"
-        boxes = []
+        points = []
         segment_names = "abcdefg"
         for digit_index, digit in enumerate(display):
-            digit_boxes = []
+            digit_points = []
             for segment_index, name in enumerate(segment_names):
                 left = digit_index * 120 + 5 + segment_index * 13
                 top = 10 + digit_index * 7 + segment_index * 15
-                right = left + 8 + digit_index
-                bottom = top + 6 + segment_index
-                digit_boxes.append([left, top, right, bottom])
+                right = left + 3
+                bottom = top + 3
+                digit_points.append([left + 1, top + 1])
                 if name in simulate_meter.LIT_SEGMENTS[digit]:
                     image[top:bottom, left:right] = (12, 17, 230)
-            boxes.append(digit_boxes)
-        with patch.object(read_meter, "SEGMENT_BOXES", boxes):
-            read_meter.validate_segment_boxes()
+            points.append(digit_points)
+        with patch.object(read_meter, "SEGMENT_POINTS", points):
+            read_meter.validate_segment_points()
             reading, _ = read_meter.recognize_display(image)
         self.assertEqual(reading["display"], display)
         self.assertEqual(reading["raw_value"], "123.456")
@@ -633,50 +727,38 @@ class VideoOutputTests(unittest.TestCase):
         capture.read.assert_called_once()
         capture.release.assert_called_once()
 
-    def test_white_cores_survive_perspective_and_compressed_video(self):
-        original_draw_display = simulate_meter.draw_display
-
-        def draw_overexposed_display(display, brightness=230):
-            image = original_draw_display(display, brightness)
-            for digit, digit_boxes in zip(display, FLAT_BOXES):
-                for name, box in zip("abcdefg", digit_boxes):
-                    if name in simulate_meter.LIT_SEGMENTS[digit]:
-                        left, top, right, bottom = box
-                        image[top + 1 : bottom - 1, left + 1 : right - 1] = 255
-            return image
-
-        video_path = self.output / "white_cores.avi"
+    def test_white_sample_in_compressed_video_invalidates_and_resets_stability(self):
+        video_path = self.output / "white_sample.avi"
         writer = cv2.VideoWriter(
             str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (960, 360)
         )
         self.assertTrue(writer.isOpened())
         try:
-            with patch.object(
-                simulate_meter, "draw_display", side_effect=draw_overexposed_display
-            ):
-                for display in ["  1230", "888888"]:
-                    for frame_index in range(4):
-                        frame = simulate_meter.make_frame(
-                            display, "horizontal", seed=frame_index
-                        )
-                        writer.write(frame)
+            for frame_index in range(9):
+                frame = simulate_meter.make_frame("888888", "none", seed=frame_index)
+                if 3 <= frame_index < 6:
+                    x, y = read_meter.SEGMENT_POINTS[0][6]
+                    frame[y - 5 : y + 6, x - 5 : x + 6] = 255
+                writer.write(cv2.flip(frame, 1))
         finally:
             writer.release()
-        csv_dir = self.output / "white_cores"
+        csv_dir = self.output / "white_sample"
         output = self.run_reader(csv_dir, video_path)
         records = []
         for line in output.splitlines():
             records.append(json.loads(line))
-        self.assertEqual(len(records), 8)
+        self.assertEqual(len(records), 9)
         with only_readings_csv(csv_dir).open(encoding="utf-8", newline="") as file:
             csv_records = list(csv.DictReader(file))
-        expected_values = ["1.230"] * 4 + ["888.888"] * 4
+        expected_values = ["888.888"] * 3 + [""] * 3 + ["888.888"] * 3
         for record, expected in zip(csv_records, expected_values):
             self.assertEqual(record["raw_value"], expected)
-        self.assertEqual(records[3]["value"], 1.23)
-        self.assertEqual(records[7]["value"], 888.888)
-        self.assertEqual(csv_records[3]["value"], "1.230")
-        self.assertEqual(csv_records[7]["value"], "888.888")
+        values = []
+        for record in records:
+            values.append(record["value"])
+        self.assertEqual(values, [None, None, 888.888, None, None, None, None, None, 888.888])
+        for record in csv_records[3:6]:
+            self.assertEqual(record["reason"], "uncertain_segments")
 
     def test_same_value_after_invalid_requires_new_stability(self):
         video_path = self.output / "interrupted.avi"
