@@ -1,6 +1,6 @@
 """実機を使わず、8CHの換算とOCRから独立した状態表示を確認する。"""
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import csv
 import importlib.util
 import io
@@ -50,10 +50,120 @@ class CalculateReadingsTests(unittest.TestCase):
             events.put((source, json.dumps(message), 1.0))
         events.put(("logger", None, 1.0))
         output = io.StringIO()
+        diagnostics = io.StringIO()
         with patch.object(readings.time, "monotonic", return_value=1.0):
-            with redirect_stdout(output):
+            with redirect_stdout(output), redirect_stderr(diagnostics):
                 self.assertEqual(readings.show_readings(events), "logger")
+        self.diagnostics = diagnostics.getvalue()
         return list(csv.DictReader(io.StringIO(output.getvalue())))
+
+    def test_gauge_trial_prints_zero_corrected_thickness_without_changing_csv(self):
+        self.channels["U1_CH2"]["high_point"] = (3.0, 1000.0)
+        self.channels["U1_CH3"]["high_point"] = (5.0, 1000.0)
+        rows = self.read_rows([
+            ("ocr", {"received_at": self.timestamp, "value": 0.8}),
+            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+        ])
+        self.assertIn(f"[gauge test] {self.timestamp} h_test_mm=0.880000", self.diagnostics)
+        self.assertEqual(len(rows[0]), 22)
+        self.assertNotIn("h_test_mm", rows[0])
+
+    def test_gauge_trial_uses_reference_gap_display_direction_and_both_stiffnesses(self):
+        self.channels["U1_CH2"]["high_point"] = (3.0, 1000.0)
+        self.channels["U1_CH3"]["high_point"] = (5.0, 1000.0)
+        with patch.multiple(
+            readings, GAUGE_BASE_THICKNESS_MM=1.0, GAUGE_ZERO_READING=2.0,
+            GAUGE_DISPLAY_TO_MM=-1.0, GAUGE_MILL_STIFFNESS=5000.0,
+        ):
+            self.read_rows([
+                ("ocr", {"received_at": self.timestamp, "value": 2.2}),
+                ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+            ])
+        self.assertIn("h_test_mm=0.980000", self.diagnostics)
+
+    def test_gauge_trial_accepts_zero_loads_and_zero_ocr(self):
+        self.voltages["U1_CH2"] = 1.0
+        self.voltages["U1_CH3"] = 0.0
+        with patch.object(readings, "GAUGE_ZERO_LOAD", 0.0):
+            self.read_rows([
+                ("ocr", {"received_at": self.timestamp, "value": 0.0}),
+                ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+            ])
+        self.assertIn("h_test_mm=0.000000", self.diagnostics)
+
+    def test_gauge_trial_is_missing_when_either_load_is_invalid(self):
+        for channel, voltage in (
+            ("U1_CH2", None), ("U1_CH3", None),
+            ("U1_CH2", 0.5), ("U1_CH3", 5.1),
+        ):
+            with self.subTest(channel=channel, voltage=voltage):
+                voltages = self.voltages.copy()
+                voltages[channel] = voltage
+                self.read_rows([
+                    ("ocr", {"received_at": self.timestamp, "value": 0.8}),
+                    ("logger", {"received_at": self.timestamp, "voltages": voltages}),
+                ])
+                self.assertIn("h_test_mm=missing", self.diagnostics)
+
+    def test_gauge_trial_uses_only_required_load_channels(self):
+        self.voltages["U1_CH1"] = None
+        row = self.read_rows([
+            ("ocr", {"received_at": self.timestamp, "value": 0.8}),
+            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+        ])[0]
+        self.assertEqual(row["voltage_status"], "invalid")
+        self.assertIn("h_test_mm=0.790000", self.diagnostics)
+
+    def test_gauge_trial_requires_ready_ocr_and_accepts_150ms_boundary(self):
+        cases = [
+            (None, "missing"),
+            ({"received_at": self.timestamp, "value": None}, "missing"),
+            ({"received_at": "2026-11-05T23:59:59.999+00:00", "value": 0.9}, "missing"),
+            ({"received_at": "2026-11-06T00:00:00.000+00:00", "value": 0.9}, "0.890000"),
+        ]
+        for ocr, expected in cases:
+            with self.subTest(ocr=ocr):
+                messages = []
+                if ocr is not None:
+                    messages.append(("ocr", ocr))
+                messages.append(("logger", {
+                    "received_at": self.timestamp, "voltages": self.voltages,
+                }))
+                self.read_rows(messages)
+                self.assertIn(f"h_test_mm={expected}", self.diagnostics)
+
+    def test_gauge_trial_does_not_reuse_last_thickness_after_ocr_becomes_invalid(self):
+        self.read_rows([
+            ("ocr", {"received_at": self.timestamp, "value": 0.8}),
+            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+            ("ocr", {"received_at": self.timestamp, "value": None}),
+            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+        ])
+        lines = self.diagnostics.splitlines()
+        self.assertIn("h_test_mm=0.790000", lines[0])
+        self.assertIn("h_test_mm=missing", lines[-1])
+
+    def test_invalid_gauge_coefficients_prevent_starting_child_processes(self):
+        cases = [
+            {"GAUGE_BASE_THICKNESS_MM": None},
+            {"GAUGE_ZERO_READING": float("nan")},
+            {"GAUGE_DISPLAY_TO_MM": float("inf")},
+            {"GAUGE_ZERO_LOAD": None},
+            {"GAUGE_MILL_STIFFNESS": 0.0},
+            {"GAUGE_ZERO_STIFFNESS": -1.0},
+        ]
+        for settings in cases:
+            with self.subTest(settings=settings):
+                with patch.multiple(readings, **settings):
+                    with patch.object(readings.subprocess, "Popen") as start_process:
+                        with self.assertRaises(ValueError):
+                            readings.main()
+                        start_process.assert_not_called()
+
+    def test_gauge_trial_requires_matching_load_units(self):
+        self.channels["U1_CH3"]["unit"] = "kN"
+        with self.assertRaisesRegex(ValueError, "荷重単位"):
+            readings.validate_settings()
 
     def test_converts_eight_independent_ranges_and_units_to_csv(self):
         readings.validate_settings()
