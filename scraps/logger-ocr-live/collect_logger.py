@@ -13,6 +13,17 @@ from threading import Event, Thread
 SETTINGS_FILE = None  # 例は r"D:\measurement\test.ucf"
 DEVICE_ID = 0
 READ_INTERVAL = 0.2
+# 引数なしで単体起動したときに取得するCH。実機で有効にしたCHに合わせる。
+CHANNEL_NAMES = [
+    "U1_CH1",
+    "U1_CH2",
+    "U1_CH3",
+    "U1_CH4",
+    "U1_CH5",
+    "U1_CH6",
+    "U1_CH7",
+    "U1_CH8",
+]
 
 
 def watch_parent(stop_requested):
@@ -22,6 +33,9 @@ def watch_parent(stop_requested):
 
 
 def main(channel_names, managed):
+    # 連携時は、計算側が渡したCHをそのまま使う。
+    if not channel_names and not managed:
+        channel_names = CHANNEL_NAMES
     if not channel_names:
         raise ValueError("U1_CH1のような形式で取得する電圧CHを指定してください。")
     channels = {}

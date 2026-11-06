@@ -68,6 +68,58 @@ class CollectLoggerTests(unittest.TestCase):
         ])
         self.logger.Stop.assert_called_once()
 
+    def test_standalone_without_arguments_reads_default_eight_channels(self):
+        with patch.object(collect_logger, "Thread") as parent_watcher:
+            collect_logger.main([], managed=False)
+        parent_watcher.assert_not_called()
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(list(message["voltages"]), [
+            "U1_CH1", "U1_CH2", "U1_CH3", "U1_CH4",
+            "U1_CH5", "U1_CH6", "U1_CH7", "U1_CH8",
+        ])
+        self.assertEqual(self.waveform.GetCurrentData.call_args_list, [
+            call(1, 0), call(1, 1), call(1, 2), call(1, 3),
+            call(1, 4), call(1, 5), call(1, 6), call(1, 7),
+        ])
+        self.logger.Stop.assert_called_once()
+
+    def test_standalone_uses_channels_configured_at_top_of_script(self):
+        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH3", "U1_CH5"]):
+            collect_logger.main([], managed=False)
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U1_CH3": 1.25, "U1_CH5": 1.25})
+        self.assertEqual(self.waveform.GetCurrentData.call_args_list, [call(1, 2), call(1, 4)])
+
+    def test_explicit_channels_override_standalone_defaults(self):
+        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH1"]):
+            collect_logger.main(["U1_CH8"], managed=False)
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U1_CH8": 1.25})
+        self.waveform.GetCurrentData.assert_called_once_with(1, 7)
+
+    def test_empty_standalone_configuration_is_rejected(self):
+        with patch.object(collect_logger, "CHANNEL_NAMES", []):
+            with self.assertRaisesRegex(ValueError, "取得する電圧CH"):
+                collect_logger.main([], managed=False)
+        self.logger.Start.assert_not_called()
+
+    def test_managed_run_requires_channels_from_parent(self):
+        with self.assertRaisesRegex(ValueError, "取得する電圧CH"):
+            collect_logger.main([], managed=True)
+        self.logger.Start.assert_not_called()
+
+    def test_managed_run_keeps_parent_watcher_and_explicit_channels(self):
+        with patch.object(collect_logger, "Thread") as parent_watcher:
+            collect_logger.main(["U1_CH2"], managed=True)
+        parent_watcher.assert_called_once_with(
+            target=collect_logger.watch_parent, args=(self.stop_requested,), daemon=True,
+        )
+        parent_watcher.return_value.start.assert_called_once()
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U1_CH2": 1.25})
+        self.waveform.GetCurrentData.assert_called_once_with(1, 1)
+        self.logger.Stop.assert_called_once()
+
     def test_rejects_channels_outside_the_single_eight_channel_unit(self):
         for channel in ("U2_CH1", "U1_CH0", "U1_CH9"):
             with self.subTest(channel=channel):
