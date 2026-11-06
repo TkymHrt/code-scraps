@@ -1,4 +1,4 @@
-"""電圧の換算・OCRとの照合を行い、テスト用のゲージメータ板厚を表示する。"""
+"""ロガーの電圧を換算し、時刻の近いOCR値と並べて表示する。"""
 
 import csv
 import json
@@ -66,14 +66,6 @@ CHANNELS = {
 MAX_TIME_GAP = 0.15  # 2つのPC受領時刻の許容差（秒）。現場で調整する。
 INPUT_TIMEOUT = 1.0  # 受信が止まったと判断するまでの秒数
 
-# 板厚の出力テスト用の仮値。荷重はCH2(OP)・CH3(DR)の換算値を合計する。
-GAUGE_BASE_THICKNESS_MM = 0.0  # h0: ゼロ合わせ時の基準板厚・ギャップ
-GAUGE_ZERO_READING = 0.0  # r0: ゼロ合わせ時のOCR表示
-GAUGE_DISPLAY_TO_MM = 1.0  # a: 表示差をmmへ換算する係数。開く方向が正。
-GAUGE_ZERO_LOAD = 200.0  # P0: OP・DRの換算後と同じ荷重単位
-GAUGE_MILL_STIFFNESS = 10000.0  # Mw: 圧延時の剛性。荷重単位/mm。
-GAUGE_ZERO_STIFFNESS = 10000.0  # M0: ゼロ合わせ時の剛性。荷重単位/mm。
-
 
 def validate_settings():
     if not CHANNELS:
@@ -98,18 +90,6 @@ def validate_settings():
             raise ValueError(
                 f"{channel} の電圧は-10〜10V内で、low_pointよりhigh_pointを大きくしてください。"
             )
-
-    if "U1_CH2" in CHANNELS and "U1_CH3" in CHANNELS:
-        if CHANNELS["U1_CH2"]["unit"] != CHANNELS["U1_CH3"]["unit"]:
-            raise ValueError("板厚の試算ではU1_CH2とU1_CH3の荷重単位を揃えてください。")
-    for number in (
-        GAUGE_BASE_THICKNESS_MM, GAUGE_ZERO_READING, GAUGE_DISPLAY_TO_MM,
-        GAUGE_ZERO_LOAD, GAUGE_MILL_STIFFNESS, GAUGE_ZERO_STIFFNESS,
-    ):
-        if number is None or not math.isfinite(number):
-            raise ValueError("GAUGE_で始まる試算用の係数には有限の数値を指定してください。")
-    if GAUGE_MILL_STIFFNESS <= 0 or GAUGE_ZERO_STIFFNESS <= 0:
-        raise ValueError("試算用のミル剛性は0より大きくしてください。")
 
 
 def convert_voltage(voltage, settings):
@@ -185,14 +165,12 @@ def show_readings(events):
 
         row = [message["received_at"]]
         voltages = message["voltages"]
-        converted_values = {}
         voltage_status = "valid"
         for channel, settings in CHANNELS.items():
             if channel not in voltages:
                 raise ValueError(f"ロガーから {channel} の電圧が届きませんでした。")
             voltage = voltages[channel]
             value = convert_voltage(voltage, settings)
-            converted_values[channel] = value
             if value is None:
                 voltage_status = "invalid"
             row.extend([voltage, value])
@@ -218,25 +196,6 @@ def show_readings(events):
         ])
         writer.writerow(row)
         sys.stdout.flush()
-
-        load_op = converted_values.get("U1_CH2")
-        load_dr = converted_values.get("U1_CH3")
-        gauge_test_text = "missing"
-        if load_op is not None and load_dr is not None and ocr_status == "ready":
-            total_load = load_op + load_dr
-            gap_change_mm = GAUGE_DISPLAY_TO_MM * (ocr_value - GAUGE_ZERO_READING)
-            mill_stretch_mm = total_load / GAUGE_MILL_STIFFNESS
-            zero_stretch_mm = GAUGE_ZERO_LOAD / GAUGE_ZERO_STIFFNESS
-            test_thickness_mm = (
-                GAUGE_BASE_THICKNESS_MM + gap_change_mm
-                + mill_stretch_mm - zero_stretch_mm
-            )
-            gauge_test_text = f"{test_thickness_mm:.6f}"
-        # CSVへ混ざらないよう、試算のprintは標準エラー出力へ出す。
-        print(
-            f"[gauge test] {message['received_at']} h_test_mm={gauge_test_text}",
-            file=sys.stderr, flush=True,
-        )
 
 
 def main():
