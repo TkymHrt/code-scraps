@@ -1,19 +1,17 @@
-"""NR-600から指定チャンネルの最新電圧を取得し、JSONLで出力する。"""
-
 import json
 import math
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 
-# 実機の設定に合わせる。
-SETTINGS_FILE = None  # 例は r"D:\measurement\test.ucf"
+from win32com.client import DispatchEx, dynamic
+
+SETTINGS_FILE = None
 DEVICE_ID = 0
 READ_INTERVAL = 0.2
-# 引数なしで単体起動したときに取得するCH。実機で有効にしたCHに合わせる。
 CHANNEL_NAMES = [
     "U1_CH1",
     "U1_CH2",
@@ -27,46 +25,40 @@ CHANNEL_NAMES = [
 
 
 def watch_parent(stop_requested):
-    # 計算側が標準入力のパイプを閉じると、次の読出し前に終了できる。
     os.read(sys.stdin.fileno(), 1)
     stop_requested.set()
 
 
+def check_com_result(result, error_message):
+    if result != 0:
+        raise RuntimeError(f"{error_message}（{result}）")
+
+
 def main(channel_names, managed):
-    # 連携時は、計算側が渡したCHをそのまま使う。
     if not channel_names and not managed:
         channel_names = CHANNEL_NAMES
     if not channel_names:
-        raise ValueError("U1_CH1のような形式で取得する電圧CHを指定してください。")
+        raise ValueError("取得する電圧CHを指定（例 U1_CH1）")
     channels = {}
     for name in channel_names:
         match = re.fullmatch(r"U1_CH([1-8])", name)
         if match is None:
-            raise ValueError(f"電圧CHはU1_CH1〜U1_CH8で指定してください（{name}）。")
-        api_channel = int(match.group(1)) - 1  # APIのCH番号は0始まり。
+            raise ValueError(f"電圧CHはU1_CH1〜U1_CH8（指定値 {name}）")
+        api_channel = int(match.group(1)) - 1
         channels[name] = (1, api_channel)
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
-        raise ValueError("SETTINGS_FILEに既存の.ucfファイルを指定してください。")
+        raise ValueError("SETTINGS_FILEに既存の .ucf を指定")
     if not 0 <= DEVICE_ID <= 3:
-        raise ValueError("DEVICE_IDは0〜3にしてください。")
+        raise ValueError("DEVICE_IDは0〜3")
     if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
-        raise ValueError("READ_INTERVALには正の秒数を指定してください。")
-
-    import pythoncom
-    from win32com.client import dynamic
+        raise ValueError("READ_INTERVALは正の秒数")
 
     stop_requested = Event()
     if managed:
         Thread(target=watch_parent, args=(stop_requested,), daemon=True).start()
 
-    dispatch = pythoncom.CoCreateInstance(
-        "WaveLoggerPro2.Application",
-        None,
-        pythoncom.CLSCTX_SERVER,
-        pythoncom.IID_IDispatch,
-    )
-    logger = dynamic.Dispatch(dispatch)
+    logger = dynamic.Dispatch(DispatchEx("WaveLoggerPro2.Application"))
     logger._FlagAsMethod(
         "Initialize",
         "SetIdentifier",
@@ -81,11 +73,9 @@ def main(channel_names, managed):
     logger.Visible = True
 
     result = logger.SetIdentifier(4 + DEVICE_ID)
-    if result != 0:
-        raise RuntimeError(f"機器IDの設定に失敗しました（{result}）。")
+    check_com_result(result, "機器ID設定失敗")
     result = logger.OpenFile(str(Path(SETTINGS_FILE).resolve()))
-    if result != 0:
-        raise RuntimeError(f"設定ファイルを開けませんでした（{result}）。")
+    check_com_result(result, "設定ファイル読込失敗")
     waveform = logger.GetActiveFile()
     waveform._FlagAsMethod("GetCurrentData")
 
@@ -94,18 +84,14 @@ def main(channel_names, managed):
     start_result = None
     try:
         start_result = logger.Start()
-        if start_result != 0:
-            raise RuntimeError(f"収集を開始できませんでした（{start_result}）。")
+        check_com_result(start_result, "収集開始失敗")
         was_active = False
         while not stop_requested.is_set():
             state = logger.GetState()
             if state == 11:
-                raise RuntimeError(
-                    f"ロガーがエラー停止しました（{logger.GetErrorCode()}）。"
-                )
+                raise RuntimeError(f"収集異常停止（{logger.GetErrorCode()}）")
             if state < 0:
-                raise RuntimeError(f"収集状態を取得できませんでした（{state}）。")
-            # Startの直後は、状態が更新されるまで停止が返ることがある。
+                raise RuntimeError(f"収集状態取得失敗（{state}）")
             if state == 1:
                 if was_active:
                     break
@@ -120,12 +106,11 @@ def main(channel_names, managed):
                     voltage = None
                 voltages[name] = voltage
 
-            received_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            received_at = datetime.now(UTC).isoformat(timespec="milliseconds")
             message = {"received_at": received_at, "voltages": voltages}
             print(json.dumps(message, allow_nan=False), flush=True)
             stop_requested.wait(READ_INTERVAL)
     finally:
-        # Startの応答待ちで割り込まれた場合も、収集が始まっている可能性がある。
         if start_result is None or start_result == 0:
             logger.Stop()
 
@@ -138,4 +123,4 @@ if __name__ == "__main__":
     try:
         main(arguments, managed)
     except KeyboardInterrupt:
-        print("ロガー取得を終了しました。", file=sys.stderr)
+        print("ロガー取得終了", file=sys.stderr)

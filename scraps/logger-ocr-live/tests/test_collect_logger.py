@@ -1,17 +1,14 @@
 """実機を使わず、現在値のJSONL出力と収集停止を確認する。"""
 
-from contextlib import ExitStack, redirect_stdout
-from datetime import datetime
 import importlib.util
 import io
 import json
-from pathlib import Path
-import sys
 import tempfile
-import types
 import unittest
+from contextlib import ExitStack, redirect_stdout
+from datetime import datetime
+from pathlib import Path
 from unittest.mock import Mock, call, patch
-
 
 SCRIPT = Path(__file__).resolve().parents[1] / "collect_logger.py"
 SPEC = importlib.util.spec_from_file_location("live_collect_logger", SCRIPT)
@@ -32,23 +29,23 @@ class CollectLoggerTests(unittest.TestCase):
         self.logger.GetActiveFile.return_value = self.waveform
         self.logger.GetState.side_effect = [5, 1]
 
-        pythoncom = types.SimpleNamespace(
-            CoCreateInstance=Mock(), CLSCTX_SERVER=21, IID_IDispatch=object()
+        self.dispatch_ex = self.contexts.enter_context(
+            patch.object(collect_logger, "DispatchEx")
         )
-        dynamic = types.SimpleNamespace(Dispatch=Mock(return_value=self.logger))
-        modules = {
-            "pythoncom": pythoncom,
-            "win32com": types.SimpleNamespace(),
-            "win32com.client": types.SimpleNamespace(dynamic=dynamic),
-        }
-        self.contexts.enter_context(patch.dict(sys.modules, modules))
+        self.dynamic_dispatch = self.contexts.enter_context(
+            patch.object(collect_logger.dynamic, "Dispatch", return_value=self.logger)
+        )
         folder = self.contexts.enter_context(tempfile.TemporaryDirectory())
         settings_file = Path(folder) / "test.ucf"
         settings_file.touch()
-        self.contexts.enter_context(patch.object(collect_logger, "SETTINGS_FILE", settings_file))
+        self.contexts.enter_context(
+            patch.object(collect_logger, "SETTINGS_FILE", settings_file)
+        )
         self.stop_requested = Mock()
         self.stop_requested.is_set.return_value = False
-        self.contexts.enter_context(patch.object(collect_logger, "Event", return_value=self.stop_requested))
+        self.contexts.enter_context(
+            patch.object(collect_logger, "Event", return_value=self.stop_requested)
+        )
         self.output = io.StringIO()
         self.contexts.enter_context(redirect_stdout(self.output))
 
@@ -58,14 +55,26 @@ class CollectLoggerTests(unittest.TestCase):
 
         collect_logger.main(["U1_CH8", "U1_CH1"], managed=False)
 
+        self.dispatch_ex.assert_called_once_with("WaveLoggerPro2.Application")
+        self.dynamic_dispatch.assert_called_once_with(self.dispatch_ex.return_value)
+        self.logger.Initialize.assert_called_once_with()
+        self.assertIs(self.logger.Visible, True)
+        self.waveform._FlagAsMethod.assert_called_once_with("GetCurrentData")
+
         messages = [json.loads(line) for line in self.output.getvalue().splitlines()]
         self.assertEqual(len(messages), 2)
         for message in messages:
             self.assertEqual(message["voltages"], {"U1_CH8": 0.0, "U1_CH1": 1.25})
             self.assertIsNotNone(datetime.fromisoformat(message["received_at"]).tzinfo)
-        self.assertEqual(self.waveform.GetCurrentData.call_args_list, [
-            call(1, 7), call(1, 0), call(1, 7), call(1, 0),
-        ])
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list,
+            [
+                call(1, 7),
+                call(1, 0),
+                call(1, 7),
+                call(1, 0),
+            ],
+        )
         self.logger.Stop.assert_called_once()
 
     def test_standalone_without_arguments_reads_default_eight_channels(self):
@@ -73,14 +82,32 @@ class CollectLoggerTests(unittest.TestCase):
             collect_logger.main([], managed=False)
         parent_watcher.assert_not_called()
         message = json.loads(self.output.getvalue())
-        self.assertEqual(list(message["voltages"]), [
-            "U1_CH1", "U1_CH2", "U1_CH3", "U1_CH4",
-            "U1_CH5", "U1_CH6", "U1_CH7", "U1_CH8",
-        ])
-        self.assertEqual(self.waveform.GetCurrentData.call_args_list, [
-            call(1, 0), call(1, 1), call(1, 2), call(1, 3),
-            call(1, 4), call(1, 5), call(1, 6), call(1, 7),
-        ])
+        self.assertEqual(
+            list(message["voltages"]),
+            [
+                "U1_CH1",
+                "U1_CH2",
+                "U1_CH3",
+                "U1_CH4",
+                "U1_CH5",
+                "U1_CH6",
+                "U1_CH7",
+                "U1_CH8",
+            ],
+        )
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list,
+            [
+                call(1, 0),
+                call(1, 1),
+                call(1, 2),
+                call(1, 3),
+                call(1, 4),
+                call(1, 5),
+                call(1, 6),
+                call(1, 7),
+            ],
+        )
         self.logger.Stop.assert_called_once()
 
     def test_standalone_uses_channels_configured_at_top_of_script(self):
@@ -88,7 +115,9 @@ class CollectLoggerTests(unittest.TestCase):
             collect_logger.main([], managed=False)
         message = json.loads(self.output.getvalue())
         self.assertEqual(message["voltages"], {"U1_CH3": 1.25, "U1_CH5": 1.25})
-        self.assertEqual(self.waveform.GetCurrentData.call_args_list, [call(1, 2), call(1, 4)])
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list, [call(1, 2), call(1, 4)]
+        )
 
     def test_explicit_channels_override_standalone_defaults(self):
         with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH1"]):
@@ -112,7 +141,9 @@ class CollectLoggerTests(unittest.TestCase):
         with patch.object(collect_logger, "Thread") as parent_watcher:
             collect_logger.main(["U1_CH2"], managed=True)
         parent_watcher.assert_called_once_with(
-            target=collect_logger.watch_parent, args=(self.stop_requested,), daemon=True,
+            target=collect_logger.watch_parent,
+            args=(self.stop_requested,),
+            daemon=True,
         )
         parent_watcher.return_value.start.assert_called_once()
         message = json.loads(self.output.getvalue())
@@ -129,10 +160,16 @@ class CollectLoggerTests(unittest.TestCase):
 
     def test_invalid_values_are_json_null(self):
         self.waveform.GetCurrentData.side_effect = [
-            3.4028235e38, -3.4028235e38, float("nan"), float("inf"), -float("inf"),
+            3.4028235e38,
+            -3.4028235e38,
+            float("nan"),
+            float("inf"),
+            -float("inf"),
         ]
 
-        collect_logger.main(["U1_CH1", "U1_CH2", "U1_CH3", "U1_CH4", "U1_CH5"], managed=False)
+        collect_logger.main(
+            ["U1_CH1", "U1_CH2", "U1_CH3", "U1_CH4", "U1_CH5"], managed=False
+        )
 
         message = json.loads(self.output.getvalue())
         self.assertEqual(list(message["voltages"].values()), [None] * 5)
@@ -147,6 +184,22 @@ class CollectLoggerTests(unittest.TestCase):
         self.waveform.GetCurrentData.assert_called_once_with(1, 0)
         self.assertEqual(self.stop_requested.wait.call_count, 2)
         self.assertEqual(len(self.output.getvalue().splitlines()), 1)
+
+    def test_com_setup_and_start_errors_report_the_operation_and_code(self):
+        cases = (
+            ("SetIdentifier", "機器ID設定失敗"),
+            ("OpenFile", "設定ファイル読込失敗"),
+            ("Start", "収集開始失敗"),
+        )
+        for operation, error_message in cases:
+            with self.subTest(operation=operation):
+                with patch.object(self.logger, operation, return_value=123):
+                    with self.assertRaisesRegex(RuntimeError, f"{error_message}（123）"):
+                        collect_logger.main(["U1_CH1"], managed=False)
+
+        self.logger.GetState.assert_not_called()
+        self.logger.Stop.assert_not_called()
+        self.assertEqual(self.output.getvalue(), "")
 
     def test_read_failure_still_stops_collection(self):
         self.waveform.GetCurrentData.side_effect = RuntimeError("read failed")

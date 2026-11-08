@@ -6,6 +6,7 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 import cv2
@@ -26,6 +27,35 @@ calibration_spec.loader.exec_module(calibrate_meter)
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_png_with_japanese_path_is_read_once_for_calibration(self):
+        image = np.zeros((20, 40, 3), dtype=np.uint8)
+        image[:, :10] = (10, 20, 230)
+        encoded, data = cv2.imencode(".png", image)
+        self.assertTrue(encoded)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "校正画像.png"
+            path.write_bytes(data.tobytes())
+            with (
+                patch.multiple(calibrate_meter, SOURCE=path, REFLECTION="horizontal"),
+                patch.multiple(
+                    cv2,
+                    namedWindow=Mock(),
+                    resizeWindow=Mock(),
+                    setWindowTitle=Mock(),
+                    waitKey=Mock(side_effect=[ord("n"), ord("q")]),
+                    getWindowProperty=Mock(return_value=1),
+                    destroyAllWindows=Mock(),
+                ),
+                patch.object(cv2, "VideoCapture") as capture,
+                patch.object(cv2, "flip", wraps=cv2.flip) as flip,
+                patch.object(cv2, "imshow") as show,
+            ):
+                calibrate_meter.main()
+        capture.assert_not_called()
+        flip.assert_called_once()
+        self.assertEqual(show.call_count, 2)
+        np.testing.assert_array_equal(show.call_args.args[1], image[:, ::-1])
+
     def calibration_points(self):
         points = []
         for digit_points in read_meter.SEGMENT_POINTS:
@@ -99,7 +129,6 @@ class CalibrationTests(unittest.TestCase):
         for call in wait_key.call_args_list:
             self.assertEqual(call.args, (30,))
 
-        # 表示された代入文は実行せず、右辺のリテラルだけを読む。
         settings = {}
         for line in output.getvalue().splitlines():
             name, literal = line.split("=", 1)
@@ -110,10 +139,17 @@ class CalibrationTests(unittest.TestCase):
         settings, mouse_events = self.run_calibration()
         self.assertEqual(
             set(settings),
-            {"FRAME_SIZE", "REFLECTION", "SAMPLE_RADIUS", "SEGMENT_POINTS"},
+            {
+                "FRAME_SIZE",
+                "REFLECTION",
+                "SAMPLE_RADIUS",
+                "SAMPLE_LENGTH_RADIUS",
+                "SEGMENT_POINTS",
+            },
         )
         self.assertEqual(settings["FRAME_SIZE"], [960, 360])
         self.assertEqual(settings["SAMPLE_RADIUS"], 1)
+        self.assertIsNone(settings["SAMPLE_LENGTH_RADIUS"])
         self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
         self.assertEqual(len(mouse_events), 42)
         image = np.zeros((360, 960, 3), dtype=np.uint8)
@@ -121,8 +157,8 @@ class CalibrationTests(unittest.TestCase):
             for x, y in points:
                 image[y - 1 : y + 2, x - 1 : x + 2] = (12, 17, 230)
         with patch.multiple(read_meter, **settings):
-            read_meter.validate_segment_points()
-            value = read_meter.recognize_display(image)
+            sample_coordinates = read_meter.prepare_samples("none")
+            value = read_meter.recognize_display(image, sample_coordinates)
         self.assertEqual(value, 888.888)
 
     def test_cancel_during_segment_selection_prints_no_partial_settings(self):
@@ -171,6 +207,15 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(settings["SAMPLE_RADIUS"], 2)
         self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
         self.assertEqual(len(mouse_events), 43)
+
+    def test_long_radius_checks_bounds_along_horizontal_and_vertical_segments(self):
+        points = self.calibration_points()
+        actions = [ord(" "), (1, 45), points[0], (400, 1)] + points[1:] + [13]
+        with patch.object(calibrate_meter, "SAMPLE_LENGTH_RADIUS", 4):
+            settings, mouse_events = self.run_calibration(actions)
+        self.assertEqual(settings["SAMPLE_LENGTH_RADIUS"], 4)
+        self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
+        self.assertEqual(len(mouse_events), 44)
 
     def test_invalid_radius_is_rejected_before_opening_input(self):
         for radius in (-1, 1.5, float("nan")):

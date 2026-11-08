@@ -161,11 +161,11 @@ class CalibrationTests(unittest.TestCase):
         logger_reader = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(logger_reader)
         with patch.multiple(logger_reader, **settings):
-            logger_reader.validate_segment_points()
+            sample_coordinates = logger_reader.prepare_samples("none")
             for digit in "0123456789":
                 display = digit * 6
                 frame = simulate_meter.make_frame(display, reflection="none")
-                value = logger_reader.recognize_display(frame)
+                value = logger_reader.recognize_display(frame, sample_coordinates)
                 expected = float(display) / 1000
                 self.assertEqual(value, expected)
 

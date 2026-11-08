@@ -11,8 +11,11 @@
 このフォルダで依存パッケージをインストールします。
 
 ```powershell
-python -m pip install -r requirements.txt
+uv venv --python 3.13
+uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 ```
+
+この題材専用の `.venv` を使います。以下のコマンドもこのフォルダで実行します。仮想環境の有効化は不要です。
 
 ## 設定と実行
 
@@ -31,7 +34,7 @@ python -m pip install -r requirements.txt
 WAVE LOGGER PROを手動で開き直さず、次を実行します。
 
 ```powershell
-python collect_logger.py
+.venv/Scripts/python.exe collect_logger.py
 ```
 
 ## 取得と表示
@@ -52,10 +55,12 @@ NR-600の計測ユニット間同期は±1μs以下であり、このPoCは現�
 
 ## 旧版と検証
 
+2026-11-06にWindows上のuv 0.13.5、Python 3.13.18で `.venv` を作成しました。依存パッケージの整合性、pywin32・Matplotlib・Tkinterの読み込み、現在版5件と旧コンソール版10件の自動テストを確認しました。NR-600を使った取得とグラフ表示はこの環境では未確認です。
+
 現在値の取得PoCの自動テストは、このフォルダで次のコマンドを実行します。
 
 ```powershell
-python -m unittest discover -s tests -v
+.venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
 2026-11-05に模擬COMの自動テスト5件が通りました。指定CHの現在値、同値が続くときのCSV出力、無効値によるグラフの欠測、時間幅より古い点の除外、開始待ちと読出し失敗時の停止を確認しました。現在値を使う取得PoCの実機動作は未確認です。
@@ -65,7 +70,7 @@ python -m unittest discover -s tests -v
 [コンソール版](archive/read_logger.py)、[波形のグラフ版](archive/plot_logger.py)、[現在値のグラフ版](archive/plot_logger_current.py)は `archive/` に保管しています。旧コンソール版の自動テストは次のコマンドで実行できます。
 
 ```powershell
-python -m unittest discover -s archive/tests -v
+.venv/Scripts/python.exe -m unittest discover -s archive/tests -v
 ```
 
 旧版の自動テスト10件は過去に通りました。現場では旧版によるUSB接続の1チャンネル取得に成功しています。APIの根拠と板厚計算の検討は [分析文書](ANALYSIS.md) を参照してください。

@@ -1,14 +1,13 @@
-"""白飛びしない赤い箇所をクリックし、read_meter.pyへ貼る点の設定を表示する。"""
-
 import sys
+from pathlib import Path
 
 import cv2
+import numpy as np
 
-# カメラは整数。録画を使う場合は下の行へ切り替える。
-SOURCE = 0
-# SOURCE = r"C:\measurement\recorded.avi"
-REFLECTION = "horizontal"  # "none", "horizontal", "vertical", "both"
-SAMPLE_RADIUS = 1  # 元の撮影画像上で、1は3×3画素、2は5×5画素を読む。
+SOURCE = 0  # カメラ番号、動画パス、または保存したPNG画像のパス。
+REFLECTION = "horizontal"
+SAMPLE_RADIUS = 1
+SAMPLE_LENGTH_RADIUS = None  # 細長く読む場合は長手方向の半径を指定する。
 
 
 def correct_reflection(frame):
@@ -27,26 +26,53 @@ def window_is_closed(window):
     try:
         return cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1
     except cv2.error:
-        # 閉じた直後は、ウィンドウ自体が既に存在しない場合もある。
         return True
+
+
+def sample_radii(segment_index):
+    if SAMPLE_LENGTH_RADIUS is None:
+        return SAMPLE_RADIUS, SAMPLE_RADIUS
+    if segment_index in (0, 3, 6):  # 上、下、中央の横線
+        return SAMPLE_LENGTH_RADIUS, SAMPLE_RADIUS
+    return SAMPLE_RADIUS, SAMPLE_LENGTH_RADIUS
 
 
 def main():
     if not isinstance(SAMPLE_RADIUS, int) or SAMPLE_RADIUS < 0:
         raise ValueError("SAMPLE_RADIUSは0以上の整数にしてください。")
+    if SAMPLE_LENGTH_RADIUS is not None and (
+        not isinstance(SAMPLE_LENGTH_RADIUS, int)
+        or SAMPLE_LENGTH_RADIUS < SAMPLE_RADIUS
+    ):
+        raise ValueError(
+            "SAMPLE_LENGTH_RADIUSはNoneか、SAMPLE_RADIUS以上の整数にしてください。"
+        )
 
     is_camera = isinstance(SOURCE, int)
     if is_camera:
         source = SOURCE
     else:
         source = str(SOURCE)
-    capture = cv2.VideoCapture(source)
+    is_snapshot = not is_camera and source.lower().endswith(".png")
+    capture = None
     try:
-        if not capture.isOpened():
-            raise RuntimeError("カメラまたは動画を開けません: " + str(source))
-        success, frame = capture.read()
-        if not success:
-            raise RuntimeError("最初の画像を取得できません。")
+        if is_snapshot:
+            # Windowsでも日本語を含むパスを開けるように、PythonでPNGを読む。
+            png_data = Path(source).read_bytes()
+            if not png_data:
+                raise RuntimeError("校正用PNGが空です: " + source)
+            encoded = np.frombuffer(png_data, dtype=np.uint8)
+            frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            if frame is None:
+                raise RuntimeError("校正用PNGを読み込めません: " + source)
+        else:
+            capture = cv2.VideoCapture(source)
+            if not capture.isOpened():
+                raise RuntimeError("カメラまたは動画を開けません: " + str(source))
+            success, frame = capture.read()
+            if not success:
+                raise RuntimeError("最初の画像を取得できません。")
+        image = correct_reflection(frame)
 
         window = "Calibration"
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
@@ -55,30 +81,34 @@ def main():
         cv2.resizeWindow(
             window, round(frame_width * scale), round(frame_height * scale)
         )
-        cv2.setWindowTitle(window, "SPACE: freeze   N: next video frame   Q: cancel")
+        if is_camera or is_snapshot:
+            cv2.setWindowTitle(window, "SPACE: select points   Q: cancel")
+        else:
+            cv2.setWindowTitle(
+                window, "SPACE: select points   N: next video frame   Q: cancel"
+            )
         while True:
-            corrected = correct_reflection(frame)
-            cv2.imshow(window, corrected)
+            cv2.imshow(window, image)
             key = cv2.waitKey(30) & 0xFF
             if key in (27, ord("q")) or window_is_closed(window):
                 return
             if key == ord(" "):
                 break
-            if not is_camera and key == ord("n"):
+            if not is_camera and not is_snapshot and key == ord("n"):
                 success, next_frame = capture.read()
                 if success:
-                    frame = next_frame
+                    image = correct_reflection(next_frame)
                 else:
                     print(
-                        "動画の最後です。現在の画像で校正するかQで終了してください。",
+                        "次の画像がありません。現在の画像で校正するかQで終了してください。",
                         file=sys.stderr,
                     )
             if is_camera:
                 success, frame = capture.read()
                 if not success:
                     raise RuntimeError("校正中にカメラ画像の取得に失敗しました。")
+                image = correct_reflection(frame)
 
-        image = corrected
         image_height, image_width = image.shape[:2]
         segment_names = [
             "top",
@@ -94,9 +124,10 @@ def main():
         def select_segment(event, x, y, flags, parameter):
             if event != cv2.EVENT_LBUTTONDOWN or len(selected_points) == 42:
                 return
+            x_radius, y_radius = sample_radii(len(selected_points) % 7)
             if not (
-                SAMPLE_RADIUS <= x < image_width - SAMPLE_RADIUS
-                and SAMPLE_RADIUS <= y < image_height - SAMPLE_RADIUS
+                x_radius <= x < image_width - x_radius
+                and y_radius <= y < image_height - y_radius
             ):
                 print(
                     "読み取り範囲が撮影画像からはみ出します。点を選び直してください。",
@@ -113,18 +144,25 @@ def main():
         while True:
             preview = image.copy()
             for index, (x, y) in enumerate(selected_points):
-                left = x - SAMPLE_RADIUS
-                top = y - SAMPLE_RADIUS
-                right = x + SAMPLE_RADIUS + 1
-                bottom = y + SAMPLE_RADIUS + 1
+                x_radius, y_radius = sample_radii(index % 7)
+                left = x - x_radius
+                top = y - y_radius
+                right = x + x_radius
+                bottom = y + y_radius
                 cv2.rectangle(
-                    preview, (left, top), (right - 1, bottom - 1),
-                    (0, 255, 255), line_thickness,
+                    preview,
+                    (left, top),
+                    (right, bottom),
+                    (0, 255, 255),
+                    line_thickness,
                 )
                 cv2.putText(
-                    preview, f"{index // 7 + 1}.{index % 7 + 1}",
+                    preview,
+                    f"{index // 7 + 1}.{index % 7 + 1}",
                     (left, max(label_height, top - label_offset)),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale,
+                    (0, 255, 255),
                     line_thickness,
                 )
             if len(selected_points) == 42:
@@ -150,15 +188,17 @@ def main():
         for start in range(0, 42, 7):
             segment_points.append(selected_points[start : start + 7])
         print(
-            "以下の4行をread_meter.py先頭の同名設定へ貼り付けてください。",
+            "以下の5行をread_meter.py先頭の同名設定へ貼り付けてください。",
             file=sys.stderr,
         )
         print("FRAME_SIZE = " + repr([frame.shape[1], frame.shape[0]]))
         print("REFLECTION = " + repr(REFLECTION))
         print("SAMPLE_RADIUS = " + repr(SAMPLE_RADIUS))
+        print("SAMPLE_LENGTH_RADIUS = " + repr(SAMPLE_LENGTH_RADIUS))
         print("SEGMENT_POINTS = " + repr(segment_points))
     finally:
-        capture.release()
+        if capture is not None:
+            capture.release()
         cv2.destroyAllWindows()
 
 

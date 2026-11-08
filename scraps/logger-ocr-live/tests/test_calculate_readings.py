@@ -1,15 +1,14 @@
 """実機を使わず、8CHの換算とOCRから独立した状態表示を確認する。"""
 
-from contextlib import redirect_stdout
 import csv
 import importlib.util
 import io
 import json
+import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from queue import Queue
-import unittest
 from unittest.mock import patch
-
 
 SCRIPT = Path(__file__).resolve().parents[1] / "calculate_readings.py"
 SPEC = importlib.util.spec_from_file_location("calculate_readings_under_test", SCRIPT)
@@ -19,7 +18,6 @@ SPEC.loader.exec_module(readings)
 
 class CalculateReadingsTests(unittest.TestCase):
     def setUp(self):
-        # 現場の値ではなく、異なる範囲・単位を試すための換算値。
         signals = [
             ("rolling_speed", "mpm", (0.0, 0.0), (8.0, 80.0)),
             ("load_OP", "ton", (1.0, 0.0), (3.0, 100.0)),
@@ -41,33 +39,41 @@ class CalculateReadingsTests(unittest.TestCase):
         settings_patch = patch.object(readings, "CHANNELS", self.channels)
         settings_patch.start()
         self.addCleanup(settings_patch.stop)
-        self.voltages = dict(zip(self.channels, [4.0, 2.0, 2.5, 4.0, 2.0, 4.0, 2.0, 0.0]))
+        voltages = [4.0, 2.0, 2.5, 4.0, 2.0, 4.0, 2.0, 0.0]
+        self.voltages = dict(zip(self.channels, voltages, strict=True))
         self.timestamp = "2026-11-06T00:00:00.150+00:00"
 
     def read_rows(self, messages):
-        events = Queue()
+        received_lines = Queue()
         for source, message in messages:
-            events.put((source, json.dumps(message), 1.0))
-        events.put(("logger", None, 1.0))
+            received_lines.put((source, json.dumps(message), 1.0))
+        received_lines.put(("logger", "", 1.0))
         output = io.StringIO()
         with patch.object(readings.time, "monotonic", return_value=1.0):
             with redirect_stdout(output):
-                self.assertEqual(readings.show_readings(events), "logger")
+                self.assertEqual(readings.write_readings_csv(received_lines), "logger")
         return list(csv.DictReader(io.StringIO(output.getvalue())))
 
     def test_converts_eight_independent_ranges_and_units_to_csv(self):
-        readings.validate_settings()
-        rows = self.read_rows([
-            ("ocr", {"received_at": self.timestamp, "value": 0.0}),
-            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
-        ])
+        rows = self.read_rows(
+            [
+                ("ocr", {"received_at": self.timestamp, "value": 0.0}),
+                ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+            ]
+        )
 
         self.assertEqual(len(rows), 1)
         row = rows[0]
         expected_values = [40.0, 50.0, 50.0, 500.0, 100.0, 400.0, 100.0, 5.0]
-        for (channel, settings), expected in zip(self.channels.items(), expected_values):
+        for (channel, settings), expected in zip(
+            self.channels.items(),
+            expected_values,
+            strict=True,
+        ):
             self.assertEqual(float(row[f"{channel}_V"]), self.voltages[channel])
-            self.assertEqual(float(row[f"{settings['name']}_{settings['unit']}"]), expected)
+            self.assertEqual(
+                float(row[f"{settings['name']}_{settings['unit']}"]), expected
+            )
         self.assertEqual(row["ocr_value"], "0.0")
         self.assertEqual(row["voltage_status"], "valid")
         self.assertEqual(row["ocr_status"], "ready")
@@ -77,20 +83,34 @@ class CalculateReadingsTests(unittest.TestCase):
             low_voltage, low_value = settings["low_point"]
             high_voltage, high_value = settings["high_point"]
             cases = [
-                (low_voltage, low_value), (high_voltage, high_value),
-                (low_voltage - 0.001, None), (high_voltage + 0.001, None),
-                (None, None), (float("nan"), None), (float("inf"), None),
+                (low_voltage, low_value),
+                (high_voltage, high_value),
+                (low_voltage - 0.001, None),
+                (high_voltage + 0.001, None),
+                (None, None),
+                (float("nan"), None),
+                (float("inf"), None),
             ]
             for voltage, expected in cases:
                 with self.subTest(channel=channel, voltage=voltage):
-                    self.assertEqual(readings.convert_voltage(voltage, settings), expected)
+                    voltages = self.voltages.copy()
+                    voltages[channel] = voltage
+                    message = {"received_at": self.timestamp, "voltages": voltages}
+                    row = self.read_rows([("logger", message)])[0]
+                    column = f"{settings['name']}_{settings['unit']}"
+                    if expected is None:
+                        self.assertEqual(row[column], "")
+                    else:
+                        self.assertEqual(float(row[column]), expected)
 
     def test_invalid_voltage_remains_visible_while_waiting_for_ocr(self):
         self.voltages["U1_CH2"] = 0.5
         self.voltages["U1_CH3"] = None
-        row = self.read_rows([
-            ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
-        ])[0]
+        row = self.read_rows(
+            [
+                ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
+            ]
+        )[0]
 
         self.assertEqual(row["U1_CH2_V"], "0.5")
         self.assertEqual(row["load_OP_ton"], "")
@@ -109,24 +129,29 @@ class CalculateReadingsTests(unittest.TestCase):
         ]
         for value, timestamp, expected in cases:
             with self.subTest(ocr_status=expected):
-                row = self.read_rows([
-                    ("ocr", {"received_at": timestamp, "value": value}),
-                    ("logger", {"received_at": self.timestamp, "voltages": self.voltages}),
-                ])[0]
+                row = self.read_rows(
+                    [
+                        ("ocr", {"received_at": timestamp, "value": value}),
+                        (
+                            "logger",
+                            {"received_at": self.timestamp, "voltages": self.voltages},
+                        ),
+                    ]
+                )[0]
                 self.assertEqual(row["voltage_status"], "invalid")
                 self.assertEqual(row["ocr_status"], expected)
 
     def test_unconfigured_points_prevent_starting_child_processes(self):
         self.channels["U1_CH1"]["low_point"] = (None, None)
-        with patch.object(readings.subprocess, "Popen") as start_process:
+        with patch.object(readings.subprocess, "Popen", side_effect=AssertionError):
             with self.assertRaisesRegex(ValueError, "U1_CH1.*有限"):
                 readings.main()
-        start_process.assert_not_called()
 
     def test_empty_unit_is_rejected(self):
         self.channels["U1_CH1"]["unit"] = ""
-        with self.assertRaisesRegex(ValueError, "U1_CH1.*unit"):
-            readings.validate_settings()
+        with patch.object(readings.subprocess, "Popen", side_effect=AssertionError):
+            with self.assertRaisesRegex(ValueError, "U1_CH1.*unit"):
+                readings.main()
 
     def test_invalid_calibration_is_rejected(self):
         cases = [
@@ -137,18 +162,34 @@ class CalculateReadingsTests(unittest.TestCase):
             ((float("nan"), 0.0), (8.0, 80.0)),
             ((0.0, 0.0), (8.0, float("inf"))),
         ]
-        for low_point, high_point in cases:
-            with self.subTest(low_point=low_point, high_point=high_point):
-                self.channels["U1_CH1"].update(low_point=low_point, high_point=high_point)
-                with self.assertRaises(ValueError):
-                    readings.validate_settings()
+        with patch.object(readings.subprocess, "Popen", side_effect=AssertionError):
+            for low_point, high_point in cases:
+                with self.subTest(low_point=low_point, high_point=high_point):
+                    self.channels["U1_CH1"].update(
+                        low_point=low_point, high_point=high_point
+                    )
+                    with self.assertRaises(ValueError):
+                        readings.main()
 
     def test_full_logger_range_is_allowed(self):
         settings = self.channels["U1_CH1"]
         settings.update(low_point=(-10.0, -100.0), high_point=(10.0, 100.0))
-        readings.validate_settings()
-        self.assertEqual(readings.convert_voltage(-10.0, settings), -100.0)
-        self.assertEqual(readings.convert_voltage(10.0, settings), 100.0)
+        with patch.object(
+            readings.subprocess, "Popen", side_effect=OSError("模擬起動")
+        ):
+            with self.assertRaisesRegex(OSError, "模擬起動"):
+                readings.main()
+
+        messages = []
+        for voltage in (-10.0, 10.0):
+            voltages = self.voltages.copy()
+            voltages["U1_CH1"] = voltage
+            messages.append(
+                ("logger", {"received_at": self.timestamp, "voltages": voltages})
+            )
+        rows = self.read_rows(messages)
+        self.assertEqual(float(rows[0]["rolling_speed_mpm"]), -100.0)
+        self.assertEqual(float(rows[1]["rolling_speed_mpm"]), 100.0)
 
 
 if __name__ == "__main__":
