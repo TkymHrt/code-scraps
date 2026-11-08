@@ -64,23 +64,7 @@ INPUT_TIMEOUT = 1.0
 
 
 def main():
-    if not CHANNELS:
-        raise ValueError("CHANNELSにCHと換算設定を指定")
-    if not math.isfinite(MAX_TIME_GAP) or MAX_TIME_GAP <= 0:
-        raise ValueError("MAX_TIME_GAPは正の秒数")
-    if not math.isfinite(INPUT_TIMEOUT) or INPUT_TIMEOUT <= 0:
-        raise ValueError("INPUT_TIMEOUTは正の秒数")
-
-    for channel, settings in CHANNELS.items():
-        if not settings["unit"]:
-            raise ValueError(f"{channel} のunitに換算後の単位を指定")
-        low_voltage, low_value = settings["low_point"]
-        high_voltage, high_value = settings["high_point"]
-        for number in (low_voltage, low_value, high_voltage, high_value):
-            if number is None or not math.isfinite(number):
-                raise ValueError(f"{channel} のlow_pointとhigh_pointに有限の数値を指定")
-        if not -10.0 <= low_voltage < high_voltage <= 10.0:
-            raise ValueError(f"{channel} の基準電圧は-10〜10Vで low_point < high_point")
+    validate_settings()
 
     folder = Path(__file__).resolve().parent
     logger_command = [sys.executable, str(folder / "collect_logger.py"), "--managed"]
@@ -129,12 +113,32 @@ def main():
     print(f"{finished_source} 取得終了", file=sys.stderr)
 
 
+def validate_settings():
+    if not CHANNELS:
+        raise ValueError("CHANNELSにCHと換算設定を指定")
+    if not math.isfinite(MAX_TIME_GAP) or MAX_TIME_GAP <= 0:
+        raise ValueError("MAX_TIME_GAPは正の秒数")
+    if not math.isfinite(INPUT_TIMEOUT) or INPUT_TIMEOUT <= 0:
+        raise ValueError("INPUT_TIMEOUTは正の秒数")
+
+    for channel, settings in CHANNELS.items():
+        if not settings["unit"]:
+            raise ValueError(f"{channel} のunitに換算後の単位を指定")
+        low_voltage, low_value = settings["low_point"]
+        high_voltage, high_value = settings["high_point"]
+        for number in (low_voltage, low_value, high_voltage, high_value):
+            if number is None or not math.isfinite(number):
+                raise ValueError(f"{channel} のlow_pointとhigh_pointに有限の数値を指定")
+        if not -10.0 <= low_voltage < high_voltage <= 10.0:
+            raise ValueError(f"{channel} の基準電圧は-10〜10Vで low_point < high_point")
+
+
 def read_child_output(source, stream, received_lines, stop_requested):
     with stream:
         while True:
             line = stream.readline()
-            arrived_at = time.monotonic()
-            line_info = (source, line, arrived_at)
+            line_read_at = time.monotonic()
+            line_info = (source, line, line_read_at)
             while not stop_requested.is_set():
                 try:
                     received_lines.put(line_info, timeout=0.1)
@@ -158,7 +162,7 @@ def write_readings_csv(received_lines):
 
     latest_ocr = None
     started_at = time.monotonic()
-    last_arrival_by_source = {"logger": started_at, "ocr": started_at}
+    last_read_at_by_source = {"logger": started_at, "ocr": started_at}
     while True:
         try:
             line_info = received_lines.get(timeout=0.1)
@@ -166,23 +170,23 @@ def write_readings_csv(received_lines):
             line_info = None
 
         now = time.monotonic()
-        for name, last_arrival in last_arrival_by_source.items():
-            if last_arrival is not None and now - last_arrival > INPUT_TIMEOUT:
-                print(f"{name} 受信停止（照合は欠測）", file=sys.stderr)
-                last_arrival_by_source[name] = None
-                if name == "ocr":
+        for input_source, last_read_at in last_read_at_by_source.items():
+            if last_read_at is not None and now - last_read_at > INPUT_TIMEOUT:
+                print(f"{input_source} 受信停止（照合は欠測）", file=sys.stderr)
+                last_read_at_by_source[input_source] = None
+                if input_source == "ocr":
                     latest_ocr = None
 
         if line_info is None:
             continue
-        source, line, arrived_at = line_info
+        source, line, line_read_at = line_info
         if line == "":
             return source
-        if now - arrived_at > INPUT_TIMEOUT:
+        if now - line_read_at > INPUT_TIMEOUT:
             continue
 
         message = json.loads(line)
-        last_arrival_by_source[source] = arrived_at
+        last_read_at_by_source[source] = line_read_at
         if source == "ocr":
             had_ocr_value = latest_ocr is not None and latest_ocr["value"] is not None
             if had_ocr_value and message["value"] is None:
@@ -190,47 +194,52 @@ def write_readings_csv(received_lines):
             latest_ocr = message
             continue
 
-        logger_received_at = message["received_at"]
-        row = [logger_received_at]
-        voltages = message["voltages"]
-        voltage_status = "valid"
-        for channel, settings in CHANNELS.items():
-            if channel not in voltages:
-                raise ValueError(f"ロガーの電圧欠落（{channel}）")
-            voltage = voltages[channel]
-            low_voltage, low_value = settings["low_point"]
-            high_voltage, high_value = settings["high_point"]
-
-            converted_value = None
-            if voltage is not None and low_voltage <= voltage <= high_voltage:
-                voltage_span = high_voltage - low_voltage
-                value_change = high_value - low_value
-                fraction = (voltage - low_voltage) / voltage_span
-                converted_value = low_value + fraction * value_change
-            else:
-                voltage_status = "invalid"
-            row.extend([voltage, converted_value])
-
-        ocr_received_at = None
-        ocr_value = None
-        time_gap = None
-        ocr_status = "waiting"
-        if latest_ocr is not None:
-            ocr_received_at = latest_ocr["received_at"]
-            ocr_value = latest_ocr["value"]
-            logger_time = datetime.fromisoformat(logger_received_at)
-            ocr_time = datetime.fromisoformat(ocr_received_at)
-            time_difference = logger_time - ocr_time
-            time_gap = abs(time_difference.total_seconds())
-            if ocr_value is None:
-                ocr_status = "unreadable"
-            elif time_gap > MAX_TIME_GAP:
-                ocr_status = "time_gap"
-            else:
-                ocr_status = "ready"
-        row.extend([ocr_received_at, ocr_value, time_gap, voltage_status, ocr_status])
+        row = build_csv_row(message, latest_ocr, CHANNELS, MAX_TIME_GAP)
         writer.writerow(row)
         sys.stdout.flush()
+
+
+def build_csv_row(logger_message, latest_ocr, channels, max_time_gap):
+    logger_received_at = logger_message["received_at"]
+    row = [logger_received_at]
+    voltages = logger_message["voltages"]
+    voltage_status = "valid"
+    for channel, settings in channels.items():
+        if channel not in voltages:
+            raise ValueError(f"ロガーの電圧欠落（{channel}）")
+        voltage = voltages[channel]
+        low_voltage, low_value = settings["low_point"]
+        high_voltage, high_value = settings["high_point"]
+
+        converted_value = None
+        if voltage is not None and low_voltage <= voltage <= high_voltage:
+            voltage_span = high_voltage - low_voltage
+            value_change = high_value - low_value
+            fraction = (voltage - low_voltage) / voltage_span
+            converted_value = low_value + fraction * value_change
+        else:
+            voltage_status = "invalid"
+        row.extend([voltage, converted_value])
+
+    ocr_received_at = None
+    ocr_value = None
+    time_gap = None
+    ocr_status = "waiting"
+    if latest_ocr is not None:
+        ocr_received_at = latest_ocr["received_at"]
+        ocr_value = latest_ocr["value"]
+        logger_time = datetime.fromisoformat(logger_received_at)
+        ocr_time = datetime.fromisoformat(ocr_received_at)
+        time_difference = logger_time - ocr_time
+        time_gap = abs(time_difference.total_seconds())
+        if ocr_value is None:
+            ocr_status = "unreadable"
+        elif time_gap > max_time_gap:
+            ocr_status = "time_gap"
+        else:
+            ocr_status = "ready"
+    row.extend([ocr_received_at, ocr_value, time_gap, voltage_status, ocr_status])
+    return row
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import importlib.util
 import io
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from queue import Queue
 from unittest.mock import patch
@@ -140,6 +140,47 @@ class CalculateReadingsTests(unittest.TestCase):
                 )[0]
                 self.assertEqual(row["voltage_status"], "invalid")
                 self.assertEqual(row["ocr_status"], expected)
+
+    def test_ocr_timeout_discards_stale_lines_and_recovers(self):
+        ocr_message = {"received_at": self.timestamp, "value": 0.0}
+        logger_message = {"received_at": self.timestamp, "voltages": self.voltages}
+        resumed_at = "2026-11-06T00:00:01.550+00:00"
+        resumed_ocr = {"received_at": resumed_at, "value": 1.234}
+        resumed_logger = {"received_at": resumed_at, "voltages": self.voltages}
+        events = [
+            (10.0, 10.0, "ocr", ocr_message),
+            (11.0, 11.0, "logger", logger_message),
+            (11.1, 11.1, "logger", logger_message),
+            (11.2, 10.1, "ocr", ocr_message),
+            (11.3, 11.3, "logger", logger_message),
+            (11.4, 11.4, "ocr", resumed_ocr),
+            (11.5, 11.5, "logger", resumed_logger),
+        ]
+        received_lines = Queue()
+        clock_times = [10.0]
+        for processed_at, line_read_at, source, message in events:
+            received_lines.put((source, json.dumps(message), line_read_at))
+            clock_times.append(processed_at)
+        received_lines.put(("ocr", "", 11.6))
+        clock_times.append(11.6)
+
+        output = io.StringIO()
+        notices = io.StringIO()
+        with (
+            patch.object(readings, "INPUT_TIMEOUT", 1.0),
+            patch.object(readings.time, "monotonic", side_effect=clock_times),
+            redirect_stdout(output),
+            redirect_stderr(notices),
+        ):
+            self.assertEqual(readings.write_readings_csv(received_lines), "ocr")
+
+        rows = csv.DictReader(io.StringIO(output.getvalue()))
+        ocr_results = [(row["ocr_status"], row["ocr_value"]) for row in rows]
+        self.assertEqual(
+            ocr_results,
+            [("ready", "0.0"), ("waiting", ""), ("waiting", ""), ("ready", "1.234")],
+        )
+        self.assertEqual(notices.getvalue(), "ocr 受信停止（照合は欠測）\n")
 
     def test_unconfigured_points_prevent_starting_child_processes(self):
         self.channels["U1_CH1"]["low_point"] = (None, None)
