@@ -180,7 +180,7 @@ class CalculateReadingsTests(unittest.TestCase):
             ocr_results,
             [("ready", "0.0"), ("waiting", ""), ("waiting", ""), ("ready", "1.234")],
         )
-        self.assertEqual(notices.getvalue(), "ocr 受信停止（照合は欠測）\n")
+        self.assertEqual(notices.getvalue(), "ocr 受信タイムアウト\n")
 
     def test_unconfigured_points_prevent_starting_child_processes(self):
         self.channels["U1_CH1"]["low_point"] = (None, None)

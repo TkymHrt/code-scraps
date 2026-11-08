@@ -64,7 +64,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ### OCRの入力を切り替える
 
-`read_meter.py` 先頭の `SOURCE = None` をコメントにして、使う行を1行だけ有効にします。
+`read_meter.py` 先頭の `SOURCE = None` を、使う入力に対応する下表の設定例に置き換えます。
 
 | 入力 | 設定例 | 実行環境 |
 | --- | --- | --- |

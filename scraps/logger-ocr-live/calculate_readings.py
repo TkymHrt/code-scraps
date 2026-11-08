@@ -66,168 +66,183 @@ INPUT_TIMEOUT = 1.0
 def main():
     validate_settings()
 
-    folder = Path(__file__).resolve().parent
-    logger_command = [sys.executable, str(folder / "collect_logger.py"), "--managed"]
+    script_folder = Path(__file__).resolve().parent
+    logger_script = script_folder / "collect_logger.py"
+    ocr_script = script_folder / "read_meter.py"
+    logger_command = [sys.executable, str(logger_script), "--managed"]
     logger_command.extend(CHANNELS.keys())
-    ocr_command = [sys.executable, str(folder / "read_meter.py"), "--managed"]
-    commands = {"logger": logger_command, "ocr": ocr_command}
+    ocr_command = [sys.executable, str(ocr_script), "--managed"]
+    commands_by_source = {"logger": logger_command, "ocr": ocr_command}
 
-    received_lines = Queue(maxsize=64)
-    stop_requested = Event()
-    processes = {}
+    output_queue = Queue(maxsize=64)
+    stop_readers = Event()
+    processes_by_source = {}
     try:
-        for source, command in commands.items():
+        for source, command in commands_by_source.items():
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 encoding="utf-8",
             )
-            processes[source] = process
+            processes_by_source[source] = process
 
-            reader = Thread(
+            stdout_reader = Thread(
                 target=read_child_output,
-                args=(source, process.stdout, received_lines, stop_requested),
+                args=(source, process.stdout, output_queue, stop_readers),
                 daemon=True,
             )
-            reader.start()
+            stdout_reader.start()
 
-        finished_source = write_readings_csv(received_lines)
+        finished_source = write_readings_csv(output_queue)
     finally:
-        stop_requested.set()
-        for process in processes.values():
+        stop_readers.set()
+        for process in processes_by_source.values():
             process.stdin.close()
-        for source, process in processes.items():
+        for source, process in processes_by_source.items():
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print(f"{source} を強制終了（停止待ちタイムアウト）", file=sys.stderr)
+                print(f"{source} 強制終了（停止タイムアウト）", file=sys.stderr)
                 process.kill()
                 process.wait()
 
-    for source, process in processes.items():
+    for source, process in processes_by_source.items():
         if process.returncode != 0:
-            raise RuntimeError(
-                f"{source} 取得異常終了（終了コード {process.returncode}）"
-            )
+            raise RuntimeError(f"{source} 異常終了（コード {process.returncode}）")
     print(f"{finished_source} 取得終了", file=sys.stderr)
 
 
 def validate_settings():
     if not CHANNELS:
-        raise ValueError("CHANNELSにCHと換算設定を指定")
+        raise ValueError("CHANNELS未設定")
     if not math.isfinite(MAX_TIME_GAP) or MAX_TIME_GAP <= 0:
         raise ValueError("MAX_TIME_GAPは正の秒数")
     if not math.isfinite(INPUT_TIMEOUT) or INPUT_TIMEOUT <= 0:
         raise ValueError("INPUT_TIMEOUTは正の秒数")
 
-    for channel, settings in CHANNELS.items():
-        if not settings["unit"]:
-            raise ValueError(f"{channel} のunitに換算後の単位を指定")
-        low_voltage, low_value = settings["low_point"]
-        high_voltage, high_value = settings["high_point"]
+    for channel_name, channel_settings in CHANNELS.items():
+        if not channel_settings["unit"]:
+            raise ValueError(f"{channel_name} のunit未設定")
+        low_voltage, low_value = channel_settings["low_point"]
+        high_voltage, high_value = channel_settings["high_point"]
         for number in (low_voltage, low_value, high_voltage, high_value):
             if number is None or not math.isfinite(number):
-                raise ValueError(f"{channel} のlow_pointとhigh_pointに有限の数値を指定")
+                raise ValueError(f"{channel_name} のlow_point・high_pointは有限の数値")
         if not -10.0 <= low_voltage < high_voltage <= 10.0:
-            raise ValueError(f"{channel} の基準電圧は-10〜10Vで low_point < high_point")
+            raise ValueError(
+                f"{channel_name} の基準電圧は-10〜10Vで low_point < high_point"
+            )
 
 
-def read_child_output(source, stream, received_lines, stop_requested):
-    with stream:
+def read_child_output(source, child_stdout, output_queue, stop_readers):
+    with child_stdout:
         while True:
-            line = stream.readline()
+            line = child_stdout.readline()
             line_read_at = time.monotonic()
-            line_info = (source, line, line_read_at)
-            while not stop_requested.is_set():
+            queued_output = (source, line, line_read_at)
+            while not stop_readers.is_set():
                 try:
-                    received_lines.put(line_info, timeout=0.1)
-                    break
+                    output_queue.put(queued_output, timeout=0.1)
                 except Full:
                     continue
-            if line == "":
                 break
+            if line == "":
+                return
 
 
-def write_readings_csv(received_lines):
+def write_readings_csv(output_queue):
     writer = csv.writer(sys.stdout, lineterminator="\n")
     columns = ["received_at"]
-    for channel, settings in CHANNELS.items():
-        columns.extend([f"{channel}_V", f"{settings['name']}_{settings['unit']}"])
+    for channel_name, channel_settings in CHANNELS.items():
+        signal_name = channel_settings["name"]
+        unit = channel_settings["unit"]
+        columns.extend([f"{channel_name}_V", f"{signal_name}_{unit}"])
     columns.extend(
         ["ocr_received_at", "ocr_value", "time_gap_s", "voltage_status", "ocr_status"]
     )
     writer.writerow(columns)
     sys.stdout.flush()
 
-    latest_ocr = None
-    started_at = time.monotonic()
-    last_read_at_by_source = {"logger": started_at, "ocr": started_at}
+    latest_ocr_message = None
+    waiting_since = time.monotonic()
+    last_read_at_by_source = {"logger": waiting_since, "ocr": waiting_since}
     while True:
         try:
-            line_info = received_lines.get(timeout=0.1)
+            queued_output = output_queue.get(timeout=0.1)
         except Empty:
-            line_info = None
+            queued_output = None
 
-        now = time.monotonic()
-        for input_source, last_read_at in last_read_at_by_source.items():
-            if last_read_at is not None and now - last_read_at > INPUT_TIMEOUT:
-                print(f"{input_source} 受信停止（照合は欠測）", file=sys.stderr)
-                last_read_at_by_source[input_source] = None
-                if input_source == "ocr":
-                    latest_ocr = None
+        processing_started_at = time.monotonic()
+        for monitored_source, last_read_at in last_read_at_by_source.items():
+            if last_read_at is None:
+                continue
+            seconds_since_last_read = processing_started_at - last_read_at
+            if seconds_since_last_read > INPUT_TIMEOUT:
+                print(f"{monitored_source} 受信タイムアウト", file=sys.stderr)
+                last_read_at_by_source[monitored_source] = None
+                if monitored_source == "ocr":
+                    latest_ocr_message = None
 
-        if line_info is None:
+        if queued_output is None:
             continue
-        source, line, line_read_at = line_info
+        source, line, line_read_at = queued_output
         if line == "":
             return source
-        if now - line_read_at > INPUT_TIMEOUT:
+        line_age_seconds = processing_started_at - line_read_at
+        if line_age_seconds > INPUT_TIMEOUT:
             continue
 
         message = json.loads(line)
         last_read_at_by_source[source] = line_read_at
         if source == "ocr":
-            had_ocr_value = latest_ocr is not None and latest_ocr["value"] is not None
-            if had_ocr_value and message["value"] is None:
-                print("OCR値未確定（照合は欠測）", file=sys.stderr)
-            latest_ocr = message
+            previous_value_confirmed = (
+                latest_ocr_message is not None
+                and latest_ocr_message["value"] is not None
+            )
+            if previous_value_confirmed and message["value"] is None:
+                print("OCR値未確定", file=sys.stderr)
+            latest_ocr_message = message
             continue
 
-        row = build_csv_row(message, latest_ocr, CHANNELS, MAX_TIME_GAP)
+        row = build_csv_row(message, latest_ocr_message, CHANNELS, MAX_TIME_GAP)
         writer.writerow(row)
         sys.stdout.flush()
 
 
-def build_csv_row(logger_message, latest_ocr, channels, max_time_gap):
+def build_csv_row(logger_message, latest_ocr_message, channels, max_time_gap):
     logger_received_at = logger_message["received_at"]
     row = [logger_received_at]
-    voltages = logger_message["voltages"]
+    voltages_by_channel = logger_message["voltages"]
     voltage_status = "valid"
-    for channel, settings in channels.items():
-        if channel not in voltages:
-            raise ValueError(f"ロガーの電圧欠落（{channel}）")
-        voltage = voltages[channel]
-        low_voltage, low_value = settings["low_point"]
-        high_voltage, high_value = settings["high_point"]
+    for channel_name, channel_settings in channels.items():
+        if channel_name not in voltages_by_channel:
+            raise ValueError(f"ロガーの電圧欠落（{channel_name}）")
+        measured_voltage = voltages_by_channel[channel_name]
+        low_voltage, low_value = channel_settings["low_point"]
+        high_voltage, high_value = channel_settings["high_point"]
 
         converted_value = None
-        if voltage is not None and low_voltage <= voltage <= high_voltage:
+        if (
+            measured_voltage is not None
+            and low_voltage <= measured_voltage <= high_voltage
+        ):
             voltage_span = high_voltage - low_voltage
+            voltage_above_low = measured_voltage - low_voltage
+            fraction_of_range = voltage_above_low / voltage_span
             value_change = high_value - low_value
-            fraction = (voltage - low_voltage) / voltage_span
-            converted_value = low_value + fraction * value_change
+            converted_value = low_value + fraction_of_range * value_change
         else:
             voltage_status = "invalid"
-        row.extend([voltage, converted_value])
+        row.extend([measured_voltage, converted_value])
 
     ocr_received_at = None
     ocr_value = None
     time_gap = None
     ocr_status = "waiting"
-    if latest_ocr is not None:
-        ocr_received_at = latest_ocr["received_at"]
-        ocr_value = latest_ocr["value"]
+    if latest_ocr_message is not None:
+        ocr_received_at = latest_ocr_message["received_at"]
+        ocr_value = latest_ocr_message["value"]
         logger_time = datetime.fromisoformat(logger_received_at)
         ocr_time = datetime.fromisoformat(ocr_received_at)
         time_difference = logger_time - ocr_time

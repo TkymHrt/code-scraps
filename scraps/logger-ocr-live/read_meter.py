@@ -11,9 +11,6 @@ import cv2
 import numpy as np
 
 SOURCE = None
-# SOURCE = 0  # Webカメラの番号
-# SOURCE = r"C:\measurement\recorded.avi"  # 動画ファイル
-# SOURCE = ("teli", 0)  # TeliCamSDKで検出した東芝テリー製カメラの番号
 
 FRAME_SIZE = [960, 360]
 REFLECTION = "horizontal"
@@ -99,135 +96,28 @@ PATTERN_TO_DIGIT = {
 }
 
 
-def watch_parent(stop_requested):
-    os.read(sys.stdin.fileno(), 1)
-    stop_requested.set()
-
-
-def prepare_samples(reflection):
-    if reflection not in ("none", "horizontal", "vertical", "both"):
-        raise ValueError(f"REFLECTION: {reflection!r}")
-    reverse_x = reflection in ("horizontal", "both")
-    reverse_y = reflection in ("vertical", "both")
-    if SAMPLE_RADIUS < 0:
-        raise ValueError("SAMPLE_RADIUSが負です。")
-    if SAMPLE_LENGTH_RADIUS is not None and SAMPLE_LENGTH_RADIUS < SAMPLE_RADIUS:
-        raise ValueError("SAMPLE_LENGTH_RADIUSがSAMPLE_RADIUSより小さいです。")
-    if len(SEGMENT_POINTS) != 6:
-        raise ValueError("SEGMENT_POINTSは6桁分必要です。")
-    width, height = FRAME_SIZE
-    rows = []
-    columns = []
-    for points in SEGMENT_POINTS:
-        if len(points) != 7:
-            raise ValueError("各桁に7点必要です。")
-        for segment_index, (x, y) in enumerate(points):
-            x_radius = SAMPLE_RADIUS
-            y_radius = SAMPLE_RADIUS
-            if SAMPLE_LENGTH_RADIUS is not None:
-                if segment_index in (0, 3, 6):  # 上、下、中央の横線
-                    x_radius = SAMPLE_LENGTH_RADIUS
-                else:
-                    y_radius = SAMPLE_LENGTH_RADIUS
-            if not (
-                x_radius <= x < width - x_radius and y_radius <= y < height - y_radius
-            ):
-                raise ValueError(f"読み取り範囲が画像外です。座標 {(x, y)}")
-
-            # 元画像の座標に戻し、毎フレームの画像反転を省く。
-            if reverse_x:
-                x = width - 1 - x
-            if reverse_y:
-                y = height - 1 - y
-            segment_rows = []
-            segment_columns = []
-            for row in range(y - y_radius, y + y_radius + 1):
-                for column in range(x - x_radius, x + x_radius + 1):
-                    segment_rows.append(row)
-                    segment_columns.append(column)
-            rows.append(segment_rows)
-            columns.append(segment_columns)
-    return np.array(rows), np.array(columns)
-
-
-def recognize_display(image, sample_coordinates, *, show_segment_scores=False):
-    rows, columns = sample_coordinates
-    # uint8のまま引くと負の差が回り込む。
-    pixels = image[rows, columns].astype(np.int16)
-    blue = pixels[:, :, 0]
-    green = pixels[:, :, 1]
-    red = pixels[:, :, 2]
-    red_excess = red - np.maximum(blue, green)
-    white_pixels = (blue >= WHITE_MIN) & (green >= WHITE_MIN) & (red >= WHITE_MIN)
-    white_fractions = np.mean(white_pixels, axis=1)
-    white_segments = white_fractions > OFF_FRACTION
-
-    if RED_EXCESS_LIMITS is not None or show_segment_scores:
-        red_excess_medians = np.median(red_excess, axis=1)
-    if show_segment_scores:
-        blocked_segments = np.flatnonzero(white_segments) + 1
-        print(
-            f"red_excess={red_excess_medians.tolist()} "
-            f"white_segments={blocked_segments.tolist()}",
-            file=sys.stderr,
-        )
-    if np.any(white_segments):
-        return None
-
-    if RED_EXCESS_LIMITS is None:
-        red_pixels = (red >= RED_MIN) & (red_excess >= RED_MARGIN)
-        segment_scores = np.mean(red_pixels, axis=1)
-        off_limit = OFF_FRACTION
-        on_limit = ON_FRACTION
-    else:
-        segment_scores = red_excess_medians
-        off_limit, on_limit = RED_EXCESS_LIMITS
-
-    display = ""
-    for digit_scores in segment_scores.reshape(6, 7):
-        pattern = ""
-        for score in digit_scores:
-            if score >= on_limit:
-                pattern += "1"
-            elif score <= off_limit:
-                pattern += "0"
-            else:
-                return None
-
-        digit = PATTERN_TO_DIGIT.get(pattern)
-        if digit is None:
-            return None
-        display += digit
-
-    integer_part = display[:3].lstrip(" ")
-    fraction_part = display[3:]
-    if not integer_part.isdigit() or not fraction_part.isdigit():
-        return None
-    return float(f"{integer_part}.{fraction_part}")
-
-
 def main():
     if SOURCE is None:
-        raise ValueError("SOURCEが未設定です。")
-    is_teli = isinstance(SOURCE, tuple)
-    if is_teli:
+        raise ValueError("SOURCE未設定")
+    source_is_teli = isinstance(SOURCE, tuple)
+    if source_is_teli:
         camera_kind, camera_index = SOURCE
         if camera_kind != "teli":
-            raise ValueError(f"SOURCE: {SOURCE!r}")
+            raise ValueError(f"SOURCEのカメラ種別は 'teli'（{camera_kind!r}）")
     if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
-        raise ValueError(
-            "点灯率のしきい値は0 <= OFF_FRACTION < ON_FRACTION <= 1にしてください。"
-        )
+        raise ValueError("点灯率は 0 <= OFF_FRACTION < ON_FRACTION <= 1")
     if not isinstance(STABLE_FRAMES, int) or STABLE_FRAMES < 1:
-        raise ValueError("STABLE_FRAMESは1以上の整数にしてください。")
+        raise ValueError("STABLE_FRAMESは1以上の整数")
     if not (0 <= RED_MIN <= 255 and 0 < RED_MARGIN <= 255):
-        raise ValueError("RED_MINとRED_MARGINは画素値の範囲内で指定してください。")
+        raise ValueError("RED_MINは0〜255、RED_MARGINは0より大きく255以下")
     if not 0 <= WHITE_MIN <= 255:
-        raise ValueError("WHITE_MINは画素値の範囲内で指定してください。")
+        raise ValueError("WHITE_MINは0〜255")
     if RED_EXCESS_LIMITS is not None:
         off_limit, on_limit = RED_EXCESS_LIMITS
         if not -255 <= off_limit < on_limit <= 255:
-            raise ValueError(f"RED_EXCESS_LIMITS: {RED_EXCESS_LIMITS!r}")
+            raise ValueError(
+                f"RED_EXCESS_LIMITSは−255〜255で消灯上限 < 点灯下限（{RED_EXCESS_LIMITS!r}）"
+            )
     sample_coordinates = prepare_samples(REFLECTION)
 
     stop_requested = Event()
@@ -235,77 +125,233 @@ def main():
         Thread(target=watch_parent, args=(stop_requested,), daemon=True).start()
     show_segment_scores = "--segment-scores" in sys.argv
 
-    frame_interval = None
-    with ExitStack() as resources:
-        if is_teli:
+    video_frame_interval = None
+    with ExitStack() as capture_resources:
+        if source_is_teli:
             from teli_camera import open_teli_camera
 
-            read_frame = resources.enter_context(
+            read_frame = capture_resources.enter_context(
                 open_teli_camera(camera_index, stop_requested)
             )
         else:
-            is_webcam = isinstance(SOURCE, int)
-            source = SOURCE if is_webcam else str(SOURCE)
-            capture = cv2.VideoCapture(source)
-            resources.callback(capture.release)
+            source_is_webcam = isinstance(SOURCE, int)
+            if source_is_webcam:
+                capture_source = SOURCE
+            else:
+                capture_source = str(SOURCE)
+            capture = cv2.VideoCapture(capture_source)
+            capture_resources.callback(capture.release)
             if not capture.isOpened():
-                raise RuntimeError(f"カメラまたは動画を開けませんでした（{source}）。")
-            if is_webcam:
-                capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_SIZE[0])
-                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_SIZE[1])
+                raise RuntimeError(f"入力を開けない（{capture_source}）")
+            if source_is_webcam:
+                calibrated_width, calibrated_height = FRAME_SIZE
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, calibrated_width)
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, calibrated_height)
             else:
                 fps = capture.get(cv2.CAP_PROP_FPS)
                 if not math.isfinite(fps) or fps <= 0:
-                    raise RuntimeError("動画のfpsを取得できませんでした。")
-                frame_interval = 1 / fps
+                    raise RuntimeError(f"動画FPS不正（{fps}）")
+                video_frame_interval = 1 / fps
 
-            def read_frame():
-                success, frame = capture.read()
-                return nullcontext(frame if success else None)
+            def read_opencv_frame():
+                frame_read, frame = capture.read()
+                if not frame_read:
+                    frame = None
+                return nullcontext(frame)
 
-        previous_value = None
-        consecutive_count = 0
-        has_frame = False
-        while not stop_requested.is_set():
-            if frame_interval is not None:
-                frame_started_at = time.monotonic()
-            with read_frame() as frame:
-                if frame is None:
-                    if stop_requested.is_set() or (
-                        frame_interval is not None and has_frame
-                    ):
-                        break
-                    raise RuntimeError("画像を取得できませんでした。")
-                received_at = datetime.now(UTC).isoformat(timespec="milliseconds")
-                has_frame = True
-                height, width = frame.shape[:2]
-                if [width, height] != FRAME_SIZE:
-                    raise ValueError(
-                        f"撮影解像度 {width}×{height} が校正時の "
-                        f"{FRAME_SIZE[0]}×{FRAME_SIZE[1]} と異なります。"
-                    )
-                if frame.shape != (height, width, 3) or frame.dtype != np.uint8:
-                    raise ValueError("赤色判定には8ビットBGRのカラー画像が必要です。")
-                reading = recognize_display(
-                    frame, sample_coordinates, show_segment_scores=show_segment_scores
+            read_frame = read_opencv_frame
+
+        read_and_report_frames(
+            read_frame,
+            sample_coordinates,
+            stop_requested,
+            video_frame_interval=video_frame_interval,
+            show_segment_scores=show_segment_scores,
+        )
+
+
+def prepare_samples(reflection):
+    if reflection not in ("none", "horizontal", "vertical", "both"):
+        raise ValueError(f"REFLECTION不正（{reflection!r}）")
+    if SAMPLE_RADIUS < 0:
+        raise ValueError("SAMPLE_RADIUSは0以上")
+    length_radius = SAMPLE_LENGTH_RADIUS
+    if length_radius is None:
+        length_radius = SAMPLE_RADIUS
+    if length_radius < SAMPLE_RADIUS:
+        raise ValueError("SAMPLE_LENGTH_RADIUSはSAMPLE_RADIUS以上")
+    if len(SEGMENT_POINTS) != 6:
+        raise ValueError("SEGMENT_POINTSは6桁分")
+
+    frame_width, frame_height = FRAME_SIZE
+    reverse_x = reflection in ("horizontal", "both")
+    reverse_y = reflection in ("vertical", "both")
+    sample_rows = []
+    sample_columns = []
+    for digit_points in SEGMENT_POINTS:
+        if len(digit_points) != 7:
+            raise ValueError("SEGMENT_POINTSは各桁7点")
+        for segment_index, (calibrated_x, calibrated_y) in enumerate(digit_points):
+            x_radius = SAMPLE_RADIUS
+            y_radius = SAMPLE_RADIUS
+            segment_is_horizontal = segment_index in (0, 3, 6)
+            if segment_is_horizontal:
+                x_radius = length_radius
+            else:
+                y_radius = length_radius
+
+            x_fits = x_radius <= calibrated_x < frame_width - x_radius
+            y_fits = y_radius <= calibrated_y < frame_height - y_radius
+            if not x_fits or not y_fits:
+                raise ValueError(
+                    f"読み取り範囲が画像外（座標 {(calibrated_x, calibrated_y)}）"
                 )
 
-            if reading is None:
-                consecutive_count = 0
-            elif reading == previous_value:
-                consecutive_count += 1
-            else:
-                consecutive_count = 1
-            previous_value = reading
+            center_x = calibrated_x
+            center_y = calibrated_y
+            if reverse_x:
+                center_x = frame_width - 1 - calibrated_x
+            if reverse_y:
+                center_y = frame_height - 1 - calibrated_y
 
-            value = None
-            if consecutive_count >= STABLE_FRAMES:
-                value = reading
-            message = {"received_at": received_at, "value": value}
-            print(json.dumps(message, allow_nan=False), flush=True)
-            if frame_interval is not None:
-                processing_time = time.monotonic() - frame_started_at
-                stop_requested.wait(max(0, frame_interval - processing_time))
+            first_row = center_y - y_radius
+            last_row = center_y + y_radius
+            first_column = center_x - x_radius
+            last_column = center_x + x_radius
+            segment_rows = []
+            segment_columns = []
+            for row in range(first_row, last_row + 1):
+                for column in range(first_column, last_column + 1):
+                    segment_rows.append(row)
+                    segment_columns.append(column)
+            sample_rows.append(segment_rows)
+            sample_columns.append(segment_columns)
+
+    return np.array(sample_rows), np.array(sample_columns)
+
+
+def watch_parent(stop_requested):
+    os.read(sys.stdin.fileno(), 1)
+    stop_requested.set()
+
+
+def read_and_report_frames(
+    read_frame,
+    sample_coordinates,
+    stop_requested,
+    *,
+    video_frame_interval,
+    show_segment_scores,
+):
+    calibrated_width, calibrated_height = FRAME_SIZE
+    playing_video = video_frame_interval is not None
+    previous_reading = None
+    matching_frame_count = 0
+    has_read_a_frame = False
+    while not stop_requested.is_set():
+        if playing_video:
+            frame_started_at = time.monotonic()
+
+        with read_frame() as frame:
+            if frame is None:
+                reached_video_end = playing_video and has_read_a_frame
+                if stop_requested.is_set() or reached_video_end:
+                    break
+                raise RuntimeError("画像取得失敗")
+
+            received_at = datetime.now(UTC).isoformat(timespec="milliseconds")
+            has_read_a_frame = True
+            frame_height, frame_width = frame.shape[:2]
+            if [frame_width, frame_height] != FRAME_SIZE:
+                raise ValueError(
+                    f"解像度不一致（撮影 {frame_width}×{frame_height}、"
+                    f"校正 {calibrated_width}×{calibrated_height}）"
+                )
+            bgr_shape = (frame_height, frame_width, 3)
+            if frame.shape != bgr_shape or frame.dtype != np.uint8:
+                raise ValueError("赤色判定には8ビットBGR画像が必要")
+            reading = recognize_display(
+                frame, sample_coordinates, show_segment_scores=show_segment_scores
+            )
+
+        if reading is None:
+            matching_frame_count = 0
+        elif reading == previous_reading:
+            matching_frame_count += 1
+        else:
+            matching_frame_count = 1
+        previous_reading = reading
+
+        confirmed_value = None
+        if matching_frame_count >= STABLE_FRAMES:
+            confirmed_value = reading
+        message = {"received_at": received_at, "value": confirmed_value}
+        print(json.dumps(message, allow_nan=False), flush=True)
+
+        if playing_video:
+            elapsed_seconds = time.monotonic() - frame_started_at
+            remaining_seconds = video_frame_interval - elapsed_seconds
+            stop_requested.wait(max(0, remaining_seconds))
+
+
+def recognize_display(image, sample_coordinates, *, show_segment_scores=False):
+    sample_rows, sample_columns = sample_coordinates
+    sampled_pixels = image[sample_rows, sample_columns]
+    signed_pixels = sampled_pixels.astype(np.int16)
+    blue = signed_pixels[:, :, 0]
+    green = signed_pixels[:, :, 1]
+    red = signed_pixels[:, :, 2]
+    strongest_other_color = np.maximum(blue, green)
+    red_excess = red - strongest_other_color
+    white_pixels = (blue >= WHITE_MIN) & (green >= WHITE_MIN) & (red >= WHITE_MIN)
+    white_fraction_by_segment = np.mean(white_pixels, axis=1)
+    segments_with_excess_white = white_fraction_by_segment > OFF_FRACTION
+
+    use_median = RED_EXCESS_LIMITS is not None
+    if use_median or show_segment_scores:
+        median_red_excess_by_segment = np.median(red_excess, axis=1)
+    if show_segment_scores:
+        white_segment_numbers = np.flatnonzero(segments_with_excess_white) + 1
+        print(
+            f"red_excess={median_red_excess_by_segment.tolist()} "
+            f"white_segments={white_segment_numbers.tolist()}",
+            file=sys.stderr,
+        )
+    if np.any(segments_with_excess_white):
+        return None
+
+    if use_median:
+        segment_scores = median_red_excess_by_segment
+        off_limit, on_limit = RED_EXCESS_LIMITS
+    else:
+        red_pixels = (red >= RED_MIN) & (red_excess >= RED_MARGIN)
+        segment_scores = np.mean(red_pixels, axis=1)
+        off_limit = OFF_FRACTION
+        on_limit = ON_FRACTION
+
+    scores_by_digit = segment_scores.reshape(6, 7)
+    display_text = ""
+    for digit_scores in scores_by_digit:
+        segment_pattern = ""
+        for score in digit_scores:
+            if score >= on_limit:
+                segment_pattern += "1"
+            elif score <= off_limit:
+                segment_pattern += "0"
+            else:
+                return None
+
+        digit = PATTERN_TO_DIGIT.get(segment_pattern)
+        if digit is None:
+            return None
+        display_text += digit
+
+    integer_part = display_text[:3].lstrip(" ")
+    fraction_part = display_text[3:]
+    if not integer_part.isdigit() or not fraction_part.isdigit():
+        return None
+    decimal_text = f"{integer_part}.{fraction_part}"
+    return float(decimal_text)
 
 
 if __name__ == "__main__":
