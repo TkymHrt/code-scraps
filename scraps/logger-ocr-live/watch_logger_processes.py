@@ -19,20 +19,10 @@ from pathlib import Path
 PROCESS_KEYWORDS = ("wave", "logger", "ウェーブ", "ロガー")
 
 
-def read_processes():
-    if os.name != "nt":
-        raise RuntimeError("Windows専用です")
-    completed = subprocess.run(
-        ["tasklist", "/v", "/fo", "csv", "/nh"],
-        capture_output=True,
-        text=True,
-        encoding=locale.getpreferredencoding(False),
-        errors="replace",
-        timeout=8,
-        check=True,
-    )
+def parse_tasklist(content):
+    """tasklist /v /fo csv /nh の結果から対象プロセスを抜き出す。"""
     results = []
-    for row in csv.reader(io.StringIO(completed.stdout)):
+    for row in csv.reader(io.StringIO(content)):
         if len(row) < 9:
             continue
         image_name, pid_text = row[0], row[1]
@@ -50,6 +40,21 @@ def read_processes():
             }
         )
     return sorted(results, key=lambda process: process["pid"])
+
+
+def read_processes():
+    if os.name != "nt":
+        raise RuntimeError("Windows専用です")
+    completed = subprocess.run(
+        ["tasklist", "/v", "/fo", "csv", "/nh"],
+        capture_output=True,
+        text=True,
+        encoding=locale.getpreferredencoding(False),
+        errors="replace",
+        timeout=8,
+        check=True,
+    )
+    return parse_tasklist(completed.stdout)
 
 
 def monitor(seconds, interval, output):
