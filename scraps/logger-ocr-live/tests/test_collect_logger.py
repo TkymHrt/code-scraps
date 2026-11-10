@@ -36,6 +36,7 @@ class CollectLoggerTests(unittest.TestCase):
             patch.object(collect_logger.dynamic, "Dispatch", return_value=self.logger)
         )
         folder = self.contexts.enter_context(tempfile.TemporaryDirectory())
+        self.diagnostic_folder = Path(folder)
         settings_file = Path(folder) / "test.ucf"
         settings_file.touch()
         self.contexts.enter_context(
@@ -200,6 +201,79 @@ class CollectLoggerTests(unittest.TestCase):
         self.assertTrue(stop_state["requested"])
         self.logger.Stop.assert_called_once()
         self.assertEqual(handlers[-1], original_handler)
+
+    def test_diagnostic_log_records_stop_result_and_confirmed_state(self):
+        self.logger.GetState.side_effect = [5, 1, 1]
+        self.logger.Stop.return_value = 0
+        with patch.object(
+            collect_logger.Path, "cwd", return_value=self.diagnostic_folder
+        ):
+            collect_logger.main(["U1_CH1"], managed=False, diagnose=True)
+        logs = list(self.diagnostic_folder.glob("collect_logger_diag_*.jsonl"))
+        self.assertEqual(len(logs), 1)
+        events = [json.loads(line) for line in logs[0].read_text().splitlines()]
+        named = {event["event"]: event for event in events}
+        self.assertEqual(named["stop_result"]["result"], "0")
+        self.assertTrue(named["get_state_after_stop"]["expected_stopped"])
+        self.assertIn("releasing_com_references", named)
+        self.assertIn("trace_close", named)
+
+    def test_diagnostic_reports_failed_stop_and_running_state(self):
+        self.logger.GetState.side_effect = [5, 1, 5]
+        self.logger.Stop.return_value = 123
+        with (
+            patch.object(collect_logger.Path, "cwd", return_value=self.diagnostic_folder),
+            patch.object(collect_logger, "DIAG_VERIFY_STOP_SECONDS", 0.0),
+        ):
+            collect_logger.main(["U1_CH1"], managed=False, diagnose=True)
+
+        logs = list(self.diagnostic_folder.glob("collect_logger_diag_*.jsonl"))
+        events = [json.loads(line) for line in logs[0].read_text().splitlines()]
+        named = {event["event"]: event for event in events}
+        self.assertFalse(named["stop_result"]["expected_success"])
+        self.assertEqual(named["get_state_after_stop"]["state"], 5)
+        self.assertFalse(named["get_state_after_stop"]["expected_stopped"])
+
+    def test_diagnostic_skip_stop_requires_opt_in(self):
+        self.logger.GetState.side_effect = [5, 1, 1]
+        with (
+            patch.object(collect_logger.Path, "cwd", return_value=self.diagnostic_folder),
+            patch.object(collect_logger, "DIAG_SKIP_STOP", True),
+        ):
+            collect_logger.main(["U1_CH1"], managed=False, diagnose=True)
+        self.logger.Stop.assert_not_called()
+        logs = list(self.diagnostic_folder.glob("collect_logger_diag_*.jsonl"))
+        self.assertIn("stop_skipped_by_experiment", logs[0].read_text())
+
+    def test_diagnostic_attached_mode_can_skip_setup_operations(self):
+        self.logger.GetState.side_effect = [5, 1, 1]
+        with (
+            patch.object(collect_logger.Path, "cwd", return_value=self.diagnostic_folder),
+            patch.object(collect_logger, "GetActiveObject"),
+            patch.object(collect_logger, "DIAG_SKIP_INITIALIZE_ON_ATTACH", True),
+            patch.object(collect_logger, "DIAG_SKIP_IDENTIFIER_ON_ATTACH", True),
+            patch.object(collect_logger, "DIAG_SKIP_OPEN_FILE_ON_ATTACH", True),
+        ):
+            collect_logger.main(["U1_CH1"], managed=False, attach=True, diagnose=True)
+        self.logger.Initialize.assert_not_called()
+        self.logger.SetIdentifier.assert_not_called()
+        self.logger.OpenFile.assert_not_called()
+        self.logger.Stop.assert_called_once()
+
+    def test_diagnostic_hold_keeps_com_alive_after_stop(self):
+        self.logger.GetState.side_effect = [5, 1, 1]
+        with (
+            patch.object(collect_logger.Path, "cwd", return_value=self.diagnostic_folder),
+            patch.object(collect_logger, "DIAG_HOLD_COM_SECONDS", 3.0),
+            patch.object(collect_logger.time, "sleep") as sleep,
+        ):
+            collect_logger.main(["U1_CH1"], managed=False, diagnose=True)
+        self.logger.Stop.assert_called_once()
+        sleep.assert_called_once_with(3.0)
+        logs = list(self.diagnostic_folder.glob("collect_logger_diag_*.jsonl"))
+        content = logs[0].read_text()
+        self.assertIn("hold_com_begin", content)
+        self.assertIn("hold_com_end", content)
 
     def test_rejects_channels_outside_the_single_eight_channel_unit(self):
         for channel in ("U2_CH1", "U1_CH0", "U1_CH9"):
