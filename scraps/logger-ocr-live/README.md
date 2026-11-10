@@ -146,6 +146,84 @@ Ctrl+Cを受けると直ちにPythonの処理を中断する代わりに停止�
 
 `calculate_readings.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
 
+## Ctrl+CでWAVE LOGGER PROが消える場合の切り分け
+
+WAVE LOGGER PROのウィンドウが消えても、NR-600本体の収集が続いている場合があります。**GUIの存続・Pythonプロセスの存続・COM上の収集状態・装置本体の収集状態は別々に確認**してください。ログで確認できるのはCOM戻り値・状態とWindowsプロセスの有無までであり、本体の収集停止は実機で必ず確認します。誤った停止でデータを失わないよう、試験前に記録先と保存状況も確認してください。
+
+### 1. 別ターミナルでGUIのプロセスを監視
+
+コンソールを2つ開き、**先に**監視側で次を実行します。監視はCOMや装置に接続せず、Windowsの `tasklist /v` を約0.5秒ごとに記録します。Python側の取得プロセスが終了しても別ターミナルでは監視が続きます。
+
+```powershell
+.venv/Scripts/python.exe watch_logger_processes.py --seconds 90
+```
+
+`logger_process_watch_<日付>_<PID>.jsonl` が作られます。検出対象は `watch_logger_processes.py` の `PROCESS_KEYWORDS` にあり、起動中のWAVE LOGGER PROがログに現れなければ実際のexe名・ウィンドウタイトルに合わせて変更してください。プロセスが見えないことだけで装置の停止を判断しないでください。
+
+### 2. Ctrl+Cを使わずにQキーで終了
+
+もう一つのターミナルで実行します。`SETTINGS_FILE` と `DEVICE_ID` は正しい実機設定にします。
+
+```powershell
+.venv/Scripts/python.exe collect_logger.py --diagnose --stop-on-key
+```
+
+**Qキー**を押すと停止要求が入り、`Stop()`、停止後の`GetState()`、Python終了の各段階を記録します。エンターキーは不要です。`--stop-on-key` はWindowsコンソールでの単体起動専用です。起動済みのアプリに接続して比較する場合は、事前にWAVE LOGGER PROを手動起動し、`--attach` を追加してください。
+
+```powershell
+.venv/Scripts/python.exe collect_logger.py --attach --diagnose --stop-on-key
+```
+
+次に同じ条件で `--stop-on-key` を外して起動し、**Ctrl+C**で終了します（`--diagnose` は残します）。WAVE LOGGER PROのウィンドウが消えるタイミング、収集状態とプロセスのログを比較してください。
+
+`collect_logger_diag_<日付>_<PID>.jsonl` は実行したターミナルのカレントディレクトリに保存され、取得値のJSONL（標準出力）に混ざりません。特に次のイベントを見ます。
+
+| イベント | 判断のポイント |
+| --- | --- |
+| `configuration`, `com_connected` | 新規起動か既存インスタンスへの接続か |
+| `start_result` | `Start()` の戻り値（0は成功） |
+| `cleanup_begin` | 終了処理まで到達したか、Ctrl+CをPythonが認識したか |
+| `stop_begin`, `stop_result`, `stop_exception` | `Stop()` を呼べたか、戻り値はどうか（0が成功） |
+| `get_state_after_stop` | `GetState() == 1`（収集停止）になったか |
+| `hold_com_begin`, `hold_com_end` | COM参照を保持している期間 |
+| `releasing_com_references`, `trace_close` | Python側の処理が終了に向かったか |
+
+`stop_result` がなく `stop_begin` もなければ、収集停止前に処理が中断されたか、別の経路で終了した可能性があります。`stop_result` が0でも `get_state_after_stop` が1にならない場合は、収集停止完了を確認できていません。`GetState() == 1` でも装置本体の収集継続を否定する証拠にはなりません。
+
+### 3. コメントを切り替えて原因を絞る
+
+`collect_logger.py` 冒頭に診断実験用の定数と、コメントアウトした切り替え例を置いています。**1回の試行につき1項目だけ変更**し、実行した条件とログファイル名を記録してください。`--diagnose` を付けた場合だけ有効です。
+
+| 変更箇所 | 分かること |
+| --- | --- |
+| `--attach` の有無 | 新規COMサーバの終了なのか、起動済みGUIにも影響するのか |
+| `DIAG_HOLD_COM_SECONDS = 15.0` | `Stop()` 後、PythonがCOM参照を保持している間はGUIが残るか。残るならCOM参照の寿命との関連が強い |
+| `DIAG_SKIP_INITIALIZE_ON_ATTACH = True` | 既存アプリへの `Initialize()` が影響するか |
+| `DIAG_SKIP_IDENTIFIER_ON_ATTACH = True` | 既存アプリへの `SetIdentifier()` が影響するか |
+| `DIAG_SKIP_OPEN_FILE_ON_ATTACH = True` | 既存アプリへの `OpenFile()` が影響するか |
+| `DIAG_SKIP_STOP = True` | `Stop()` 呼出しそのものがGUI終了に関係するか（**危険な最終確認用**） |
+
+`Initialize`・`SetIdentifier`・`OpenFile` の省略は `--attach` 時だけです。省略する試験は、GUI側で接続・設定ファイルの読込を先に済ませた場合に限ります。省略時に起動できないことはGUI終了の原因の証明にはなりません。
+
+**`DIAG_SKIP_STOP = True` は装置の収集が続いたままスクリプトが終了することがあります。** 通常運転では使用せず、必ず実機側から手動停止できることを確認した監視下でのみ試します。まずはQキー・Ctrl+C・COM保持の比較を優先してください。
+
+### 4. `calculate_readings.py` を使う場合
+
+こちらはPythonが2つの子プロセス（ロガー・OCR）を起動するため、親のCtrl+Cや停止待ちタイムアウトによる強制終了も区別します。親側でもQキー停止を試せます。
+
+```powershell
+.venv/Scripts/python.exe calculate_readings.py --stop-on-key
+```
+
+同ファイル冒頭の `LOGGER_DIAGNOSE` を `True` にするとロガー子プロセスへ `--diagnose` を渡します。既存GUIに接続する場合は `LOGGER_ATTACH = True` にします。必要な場合だけ `CHILD_STOP_TIMEOUT` を5秒から20秒に上げて、親プロセスによる `kill()` と区別してください。まず単体の `collect_logger.py` で原因を切り分けることを推奨します。
+
+### 結果の読み方
+
+- **Qキーでは消えずCtrl+Cだけで消える:** WindowsコンソールのCtrl+CイベントがPython以外のプロセスにも影響している可能性があります。
+- **Stop後のCOM保持中は消えず、Python終了と同時に消える:** COMサーバへの参照がなくなるとGUIが終了する構造の可能性があります。
+- **Stop直後に消える:** `Stop()` 自体、COM側の状態遷移、アプリ内の例外が疑われます。
+- **COM状態は停止、装置は収集継続:** 別の測定インスタンス・機器状態を確認してください。Windowsプロセスの有無だけでは収集の継続を証明できません。
+
 ## 出力と時刻の照合
 
 - ロガーは `received_at` と、CH名ごとの `voltages` を出力します。ロガーの無効値は `null` です。
