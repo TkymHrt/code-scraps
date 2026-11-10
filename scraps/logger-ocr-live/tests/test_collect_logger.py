@@ -253,11 +253,13 @@ class CollectLoggerTests(unittest.TestCase):
             patch.object(collect_logger, "DIAG_SKIP_INITIALIZE_ON_ATTACH", True),
             patch.object(collect_logger, "DIAG_SKIP_IDENTIFIER_ON_ATTACH", True),
             patch.object(collect_logger, "DIAG_SKIP_OPEN_FILE_ON_ATTACH", True),
+            patch.object(collect_logger, "DIAG_SKIP_VISIBLE_ON_ATTACH", True),
         ):
             collect_logger.main(["U1_CH1"], managed=False, attach=True, diagnose=True)
         self.logger.Initialize.assert_not_called()
         self.logger.SetIdentifier.assert_not_called()
         self.logger.OpenFile.assert_not_called()
+        self.assertIsNot(self.logger.Visible, True)
         self.logger.Stop.assert_called_once()
 
     def test_diagnostic_hold_keeps_com_alive_after_stop(self):
