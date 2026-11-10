@@ -151,6 +151,56 @@ class CollectLoggerTests(unittest.TestCase):
         self.waveform.GetCurrentData.assert_called_once_with(1, 1)
         self.logger.Stop.assert_called_once()
 
+    def test_attach_reuses_running_app_without_spawning_one(self):
+        with patch.object(collect_logger, "GetActiveObject") as active_app:
+            collect_logger.main(["U1_CH1"], managed=False, attach=True)
+
+        active_app.assert_called_once_with("WaveLoggerPro2.Application")
+        self.dispatch_ex.assert_not_called()
+        self.dynamic_dispatch.assert_called_once_with(active_app.return_value)
+        self.logger.Stop.assert_called_once()
+
+    def test_attach_fails_instead_of_starting_another_app(self):
+        with patch.object(
+            collect_logger, "GetActiveObject", side_effect=OSError("not registered")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "起動済みのWAVE LOGGER PRO"):
+                collect_logger.main(["U1_CH1"], managed=False, attach=True)
+
+        self.dispatch_ex.assert_not_called()
+        self.logger.Start.assert_not_called()
+
+    def test_ctrl_c_requests_stop_and_restores_signal_handler(self):
+        stop_state = {"requested": False}
+        self.stop_requested.is_set.side_effect = lambda: stop_state["requested"]
+        self.stop_requested.set.side_effect = lambda: stop_state.__setitem__(
+            "requested", True
+        )
+        handlers = []
+        original_handler = object()
+
+        def register_handler(_signal_number, handler):
+            handlers.append(handler)
+
+        def get_state():
+            handlers[0](2, None)
+            return 5
+
+        self.logger.GetState.side_effect = get_state
+        with (
+            patch.object(
+                collect_logger.signal, "getsignal", return_value=original_handler
+            ),
+            patch.object(
+                collect_logger.signal, "signal", side_effect=register_handler
+            ),
+        ):
+            collect_logger.main(["U1_CH1"], managed=False)
+
+        self.assertTrue(stop_state["requested"])
+        self.logger.Stop.assert_called_once()
+        self.assertEqual(handlers[-1], original_handler)
+
     def test_rejects_channels_outside_the_single_eight_channel_unit(self):
         for channel in ("U2_CH1", "U1_CH0", "U1_CH9"):
             with self.subTest(channel=channel):
