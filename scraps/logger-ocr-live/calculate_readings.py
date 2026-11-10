@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -62,14 +63,38 @@ CHANNELS = {
 MAX_TIME_GAP = 0.15
 INPUT_TIMEOUT = 1.0
 
+# 連携起動の診断実験。単体での --stop-on-key と条件を分けて試す。
+LOGGER_ATTACH = False
+LOGGER_DIAGNOSE = False
+CHILD_STOP_TIMEOUT = 5.0
+# LOGGER_ATTACH = True
+# LOGGER_DIAGNOSE = True
+# CHILD_STOP_TIMEOUT = 20.0  # Stop()検証に時間がかかる場合のみ
 
-def main():
+
+def keyboard_stop_requested():
+    """Windows端末でQキーが押されたら、Ctrl+Cを送らずに終了する。"""
+    import msvcrt
+
+    while msvcrt.kbhit():
+        if msvcrt.getwch().lower() == "q":
+            return True
+    return False
+
+
+def main(stop_on_key=False):
     validate_settings()
+    if stop_on_key and (os.name != "nt" or not sys.stdin.isatty()):
+        raise ValueError("--stop-on-keyはWindowsコンソールで指定")
 
     script_folder = Path(__file__).resolve().parent
     logger_script = script_folder / "collect_logger.py"
     ocr_script = script_folder / "read_meter.py"
     logger_command = [sys.executable, str(logger_script), "--managed"]
+    if LOGGER_ATTACH:
+        logger_command.append("--attach")
+    if LOGGER_DIAGNOSE:
+        logger_command.append("--diagnose")
     logger_command.extend(CHANNELS.keys())
     ocr_command = [sys.executable, str(ocr_script), "--managed"]
     commands_by_source = {"logger": logger_command, "ocr": ocr_command}
@@ -94,14 +119,14 @@ def main():
             )
             stdout_reader.start()
 
-        finished_source = write_readings_csv(output_queue)
+        finished_source = write_readings_csv(output_queue, stop_on_key=stop_on_key)
     finally:
         stop_readers.set()
         for process in processes_by_source.values():
             process.stdin.close()
         for source, process in processes_by_source.items():
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=CHILD_STOP_TIMEOUT)
             except subprocess.TimeoutExpired:
                 print(f"{source} 強制終了（停止タイムアウト）", file=sys.stderr)
                 process.kill()
@@ -151,7 +176,7 @@ def read_child_output(source, child_stdout, output_queue, stop_readers):
                 return
 
 
-def write_readings_csv(output_queue):
+def write_readings_csv(output_queue, stop_on_key=False):
     writer = csv.writer(sys.stdout, lineterminator="\n")
     columns = ["received_at"]
     for channel_name, channel_settings in CHANNELS.items():
@@ -168,6 +193,8 @@ def write_readings_csv(output_queue):
     waiting_since = time.monotonic()
     last_read_at_by_source = {"logger": waiting_since, "ocr": waiting_since}
     while True:
+        if stop_on_key and keyboard_stop_requested():
+            return "キーボード"
         try:
             queued_output = output_queue.get(timeout=0.1)
         except Empty:
@@ -259,6 +286,6 @@ def build_csv_row(logger_message, latest_ocr_message, channels, max_time_gap):
 
 if __name__ == "__main__":
     try:
-        main()
+        main(stop_on_key="--stop-on-key" in sys.argv)
     except KeyboardInterrupt:
         print("照合終了", file=sys.stderr)
