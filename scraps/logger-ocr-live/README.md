@@ -201,9 +201,10 @@ WAVE LOGGER PROのウィンドウが消えても、NR-600本体の収集が続�
 | `DIAG_SKIP_INITIALIZE_ON_ATTACH = True` | 既存アプリへの `Initialize()` が影響するか |
 | `DIAG_SKIP_IDENTIFIER_ON_ATTACH = True` | 既存アプリへの `SetIdentifier()` が影響するか |
 | `DIAG_SKIP_OPEN_FILE_ON_ATTACH = True` | 既存アプリへの `OpenFile()` が影響するか |
+| `DIAG_SKIP_VISIBLE_ON_ATTACH = True` | 既存アプリへの `Visible = True` が影響するか |
 | `DIAG_SKIP_STOP = True` | `Stop()` 呼出しそのものがGUI終了に関係するか（**危険な最終確認用**） |
 
-`Initialize`・`SetIdentifier`・`OpenFile` の省略は `--attach` 時だけです。省略する試験は、GUI側で接続・設定ファイルの読込を先に済ませた場合に限ります。省略時に起動できないことはGUI終了の原因の証明にはなりません。
+`Initialize`・`SetIdentifier`・`OpenFile`・`Visible` の省略は `--attach` 時だけです。省略する試験は、GUI側で接続・設定ファイルの読込を先に済ませた場合に限ります。省略時に起動できないことはGUI終了の原因の証明にはなりません。
 
 **`DIAG_SKIP_STOP = True` は装置の収集が続いたままスクリプトが終了することがあります。** 通常運転では使用せず、必ず実機側から手動停止できることを確認した監視下でのみ試します。まずはQキー・Ctrl+C・COM保持の比較を優先してください。
 
