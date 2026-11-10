@@ -182,6 +182,14 @@ class CalculateReadingsTests(unittest.TestCase):
         )
         self.assertEqual(notices.getvalue(), "ocr 受信タイムアウト\n")
 
+    def test_key_stop_returns_without_ctrl_c(self):
+        with (
+            patch.object(readings, "keyboard_stop_requested", return_value=True),
+            redirect_stdout(io.StringIO()),
+        ):
+            result = readings.write_readings_csv(Queue(), stop_on_key=True)
+        self.assertEqual(result, "キーボード")
+
     def test_unconfigured_points_prevent_starting_child_processes(self):
         self.channels["U1_CH1"]["low_point"] = (None, None)
         with patch.object(readings.subprocess, "Popen", side_effect=AssertionError):
