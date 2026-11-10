@@ -3,6 +3,7 @@ import math
 import os
 import re
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -22,10 +23,6 @@ CHANNEL_NAMES = [
     "U1_CH7",
     "U1_CH8",
 ]
-
-COLLECTION_STOPPED = 1
-COLLECTION_ERROR_STOPPED = 11
-INVALID_VOLTAGE_THRESHOLD = 3.3e38
 
 
 def main(channel_names, managed):
@@ -67,12 +64,12 @@ def main(channel_names, managed):
         has_started_reading = False
         while not stop_requested.is_set():
             collection_state = logger.GetState()
-            if collection_state == COLLECTION_ERROR_STOPPED:
+            if collection_state == 11:
                 error_code = logger.GetErrorCode()
                 raise RuntimeError(f"収集異常停止（{error_code}）")
             if collection_state < 0:
                 raise RuntimeError(f"収集状態取得失敗（{collection_state}）")
-            if collection_state == COLLECTION_STOPPED:
+            if collection_state == 1:
                 if has_started_reading:
                     break
                 stop_requested.wait(READ_INTERVAL)
@@ -82,10 +79,7 @@ def main(channel_names, managed):
             voltages = {}
             for channel_name, channel_index in channel_indexes.items():
                 voltage = waveform.GetCurrentData(unit_number, channel_index)
-                if (
-                    not math.isfinite(voltage)
-                    or abs(voltage) >= INVALID_VOLTAGE_THRESHOLD
-                ):
+                if not math.isfinite(voltage) or abs(voltage) >= 3.3e38:
                     voltage = None
                 voltages[channel_name] = voltage
 
@@ -97,6 +91,7 @@ def main(channel_names, managed):
     finally:
         if start_result is None or start_result == 0:
             logger.Stop()
+            time.sleep(10)
 
 
 def watch_parent(stop_requested):
@@ -107,16 +102,7 @@ def watch_parent(stop_requested):
 def prepare_logger(settings_file, device_id):
     application = DispatchEx("WaveLoggerPro2.Application")
     logger = dynamic.Dispatch(application)
-    logger._FlagAsMethod(
-        "Initialize",
-        "SetIdentifier",
-        "OpenFile",
-        "GetActiveFile",
-        "Start",
-        "GetState",
-        "GetErrorCode",
-        "Stop",
-    )
+    logger._FlagAsMethod("GetActiveFile", "Start", "GetState")
     logger.Initialize()
     logger.Visible = True
 

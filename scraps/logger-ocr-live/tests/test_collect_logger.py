@@ -194,7 +194,9 @@ class CollectLoggerTests(unittest.TestCase):
         for operation, error_message in cases:
             with self.subTest(operation=operation):
                 with patch.object(self.logger, operation, return_value=123):
-                    with self.assertRaisesRegex(RuntimeError, f"{error_message}（123）"):
+                    with self.assertRaisesRegex(
+                        RuntimeError, f"{error_message}（123）"
+                    ):
                         collect_logger.main(["U1_CH1"], managed=False)
 
         self.logger.GetState.assert_not_called()
