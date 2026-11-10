@@ -67,8 +67,8 @@ def main():
     validate_settings()
 
     script_folder = Path(__file__).resolve().parent
-    logger_script = script_folder / "collect_logger.py"
-    ocr_script = script_folder / "read_meter.py"
+    logger_script = script_folder / "logger.py"
+    ocr_script = script_folder / "counter.py"
     logger_command = [sys.executable, str(logger_script), "--managed"]
     logger_command.extend(CHANNELS.keys())
     ocr_command = [sys.executable, str(ocr_script), "--managed"]

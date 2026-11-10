@@ -4,27 +4,17 @@
 
 | スクリプト | 役割 |
 | --- | --- |
-| `collect_logger.py` | NR-600から指定CHの現在電圧を `GetCurrentData()` で読む |
-| `calibrate_meter.py` | 各桁7点をクリックし、OCRの校正設定を表示する |
-| `read_meter.py` | 赤い6桁の7セグを読み、同じ値が続いたら確定する |
-| `teli_camera.py` | TeliCamSDKで東芝テリー製カメラを開き、カラー画像を取得する |
-| `calculate_readings.py` | `collect_logger.py` と `read_meter.py` を起動し、電圧の換算とOCR値との時刻照合を行う |
+| `logger.py` | NR-600から指定CHの現在電圧を `GetCurrentData()` で読む |
+| `camera_calibrate.py` | 各桁7点をクリックし、OCRの校正設定を表示する |
+| `counter.py` | 赤い6桁の7セグを読み、同じ値が続いたら確定する |
+| `camera_sdk.py` | TeliCamSDKで東芝テリー製カメラを開き、カラー画像を取得する |
+| `main.py` | `logger.py` と `counter.py` を起動し、電圧の換算とOCR値との時刻照合を行う |
 
 ## 設定と実行
 
-Windows で Python 3.14 と製品版WAVE LOGGER PROを使います。このフォルダの `.python-version` で、uv が使う Python を 3.14 系に指定しています。
-
-```powershell
-uv venv
-uv pip install --python .venv/Scripts/python.exe -r requirements.txt
-.venv/Scripts/python.exe --version
-```
-
-既存の `.venv` が Python 3.13 などの場合は、先に別名に移してから作り直します。`--version` の出力が `Python 3.14.x` になっていることを確認します。以下のコマンドもこのフォルダで実行します。仮想環境の有効化は不要です。計算スクリプトは同じ仮想環境のPythonで取得スクリプトを起動します。
-
-1. ユニット1の電圧CH1～8を有効にし、入力レンジをすべて±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`collect_logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。[NR-600の準備手順](../rolling-gauge-meter/README.md#準備)
-2. OCRを校正し、表示された5項目をこのフォルダの `read_meter.py` に貼り付け、入力を選びます。初期の点は既存の合成動画用です。対象は `0.000`〜`999.999` の赤い6桁7セグです。[入力の切り替え](#ocrの入力を切り替える)・[OCRの校正手順](#ocrを校正する)
-3. `calculate_readings.py` の `CHANNELS` にある8CH分の設定を埋めます。初期の割当は下表のとおりです。実配線に合わせて名称と対応を確認し、各CHの `unit` と、`low_point`・`high_point` の `None` を現場の値に置き換えます。未設定のままでは取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
+1. ユニット1の電圧CH1～8を有効にし、入力レンジをすべて±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。[NR-600の準備手順](../rolling-gauge-meter/README.md#準備)
+2. OCRを校正し、表示された5項目をこのフォルダの `counter.py` に貼り付け、入力を選びます。初期の点は既存の合成動画用です。対象は `0.000`〜`999.999` の赤い6桁7セグです。[入力の切り替え](#ocrの入力を切り替える)・[OCRの校正手順](#ocrを校正する)
+3. `main.py` の `CHANNELS` にある8CH分の設定を埋めます。初期の割当は下表のとおりです。実配線に合わせて名称と対応を確認し、各CHの `unit` と、`low_point`・`high_point` の `None` を現場の値に置き換えます。未設定のままでは取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
 
 | CH | 初期の名称 | 信号 |
 | --- | --- | --- |
@@ -52,10 +42,6 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ロガーの測定レンジ±10Vと、信号ごとの換算範囲は別です。0～8V、1～3VなどをCHごとに設定できます。例えば `(0.0, 0.0)` と `(8.0, 80.0)` なら4Vは40になります。`unit` は換算後の数値に付ける表記で、mpm・ton・kgなどをCHごとに指定できます。単位同士の自動変換やCH間の加減算は行いません。±10Vの実際の入力レンジは `.ucf` 側で設定します。
 
-```powershell
-.venv/Scripts/python.exe calculate_readings.py
-```
-
 `Ctrl+C` または片方の取得終了で両方の取得を停止します。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。
 
 ## 単体で確認する
@@ -64,7 +50,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ### OCRの入力を切り替える
 
-`read_meter.py` 先頭の `SOURCE = None` を、使う入力に対応する下表の設定例に置き換えます。
+`counter.py` 先頭の `SOURCE = None` を、使う入力に対応する下表の設定例に置き換えます。
 
 | 入力 | 設定例 | 実行環境 |
 | --- | --- | --- |
@@ -76,21 +62,15 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 #### 東芝テリーを使う場合
 
-TeliCamSDKと `pytelicam` が使えるPython 3.13環境（`.venv-teli`）と、カラー・連続撮影の対応機を前提とします。 [メーカーのSDK情報](https://www.toshiba-teli.co.jp/cgi/ss/jp/service_j.cgi)
-
-校正にはライブ取得と同じ解像度・向きのPNGを使います。`read_meter.py` の `SOURCE` を `("teli", 0)` にし、単体なら `.venv-teli/Scripts/python.exe read_meter.py`、ロガーとの連携なら `.venv-teli/Scripts/python.exe calculate_readings.py` で起動します。
+校正にはライブ取得と同じ解像度・向きのPNGを使います。`counter.py` の `SOURCE` を `("teli", 0)`
 
 ### OCRを校正する
 
-このフォルダの `calibrate_meter.py` を使います。先頭の `SOURCE` にWebカメラの番号、動画のパス、または校正用PNGのパスを指定します。`REFLECTION` は `none`（補正なし）、`horizontal`（左右反転）、`vertical`（上下反転）、`both`（両方）から選び、既知の数字が正しく見えることを確認します。
+このフォルダの `camera_calibrate.py` を使います。先頭の `SOURCE` にWebカメラの番号、動画のパス、または校正用PNGのパスを指定します。`REFLECTION` は `none`（補正なし）、`horizontal`（左右反転）、`vertical`（上下反転）、`both`（両方）から選び、既知の数字が正しく見えることを確認します。
 
 `SAMPLE_RADIUS = 1`、`SAMPLE_LENGTH_RADIUS = None` は各点の周囲3×3画素を読みます。`SAMPLE_LENGTH_RADIUS` を `4` にすると、同じ半径1で横線は横長9×3、縦線は縦長3×9になります。線の一部がぼやける場合に試し、プレビューで帯が線の内側に収まり、隣の線や反射を含まない位置を選びます。半径は元の撮影画像上の画素数です。
 
 カメラと計器を固定し、ピントや露光を調整します。全桁が `8` の表示テストなど、消灯部を含む全セグメントの位置が分かる画像を使ってください。
-
-```powershell
-.venv/Scripts/python.exe calibrate_meter.py
-```
 
 `Space` で画像を止め、左の桁から、各桁の上→右上→右下→下→左下→左上→中央の順に、点灯時に白飛びしない赤い箇所を左クリックします。計42クリックです。`B` で直前の点を取り消せます。42点が揃ったら `Enter` で確定し、出力した `FRAME_SIZE`、`REFLECTION`、`SAMPLE_RADIUS`、`SAMPLE_LENGTH_RADIUS`、`SEGMENT_POINTS` を同じフォルダの `read_meter.py` に貼り付けます。
 
@@ -102,39 +82,22 @@ TeliCamSDKと `pytelicam` が使えるPython 3.13環境（`.venv-teli`）と、�
 
 `--segment-scores` を付けると、領域ごとの `R - max(G, B)` の中央値と、白い画素が多い領域の番号を標準エラーに表示します。数字は校正時と同じ順で、左端の桁の上が1番です。標準出力のJSONLとは別に記録できます。
 
-```powershell
-.venv/Scripts/python.exe read_meter.py --segment-scores 2> ocr-scores.log
-```
-
-東芝テリーの場合は上のコマンドの `.venv` を `.venv-teli` に読み替えます。実際の設置場所で、全点灯の `888.888` と、各線が消灯する複数の既知値（例 `111.111`、`222.222`、`555.555`）を別々に表示してスコアを比較します。白い画素が多いフレームは除きます。点灯と消灯の値に間隔がある場合は、`read_meter.py` の `RED_EXCESS_LIMITS` に `(消灯の上限, 点灯の下限)` を設定すると中央値で判定します。両者の間は `null` です。点灯と消灯が重なる場合は、遮光・露光・選択位置を見直します。判定方法や領域を変えたら、しきい値調整とは別の既知値で誤確定と欠測を確認します。
-
 ### OCRだけ取得する
 
 OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して次を実行します。ロガーや換算の設定は不要です。
-
-```powershell
-.venv/Scripts/python.exe read_meter.py
-```
 
 標準出力に `received_at` と `value` のJSONLが出ます。未確定・読取不能は `null` です。読み取り位置は校正画面で、赤みと白い画素は `--segment-scores` で確認できます。
 
 ### ロガーだけ取得する
 
-ロガーだけを動かす場合は、`collect_logger.py` の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体IDを設定します。`CHANNEL_NAMES` は単体起動で取得するCHの一覧で、初期値は `U1_CH1`〜`U1_CH8` の8CHです。実機で有効にしたCHに合わせて変更し、引数なしで実行します。OCRや `calculate_readings.py` の設定は不要です。
-
-```powershell
-.venv/Scripts/python.exe collect_logger.py
-```
+ロガーだけを動かす場合は、`logger.py` の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体IDを設定します。`CHANNEL_NAMES` は単体起動で取得するCHの一覧で、初期値は `U1_CH1`〜`U1_CH8` の8CHです。実機で有効にしたCHに合わせて変更し、引数なしで実行します。OCRや `main.py` の設定は不要です。
 
 その実行だけ取得するCHを変える場合は、引数で指定します。指定したCHを `CHANNEL_NAMES` より優先します。
 
-```powershell
-.venv/Scripts/python.exe collect_logger.py U1_CH1 U1_CH2
-```
 
 標準出力に `received_at` と取得CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、無効値は `null` です。終了は `Ctrl+C` です。終了後はWAVE LOGGER PROの画面で収集停止を確認します。連携起動では計算側がCHを明示的に渡すため、この単体用設定を重ねて変更する必要はありません。
 
-`calculate_readings.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
+`main.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
 
 ## 出力と時刻の照合
 
@@ -149,50 +112,3 @@ OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して�
 ロガーは `READ_INTERVAL`（初期値0.2秒）の待ち時間を挟み、CHごとに `GetCurrentData()` で各ユニットの現在値を読みます。PCに転送済みの波形の最新位置とは別の値です。値が前回と同じでも毎回出力し、保存番号やサンプル位置での重複判定は行いません（Automationマニュアル p.44）。
 
 NR-600の計測ユニット間同期は±1μs以下であり、今回の速報値の照合には現在値を使う方針です（NR-600マニュアル 10-2～10-3）。この仕様はCHを順に読むCOM呼出しの時間差や、カメラとの同期を保証するものではありません。多チャンネルリンクモードではサンプリング周期のずれが40ms以下、NR-CA04と他種ユニットの組み合わせでは設定に応じて最大40msまたは1サンプリング周期になる注記があります。現場の構成とOCRとの実際の時刻差を確認します。
-
-## Ruffで静的チェックする
-
-このフォルダで実行します。1行目はファイル名と行番号、2行目はルールごとの件数を表示します。
-
-```powershell
-uvx ruff@0.17.4 check .
-uvx ruff@0.17.4 check --statistics .
-```
-
-`ruff.toml` は Python 3.14 を基準に、未定義の名前や未使用の import、`zip()` の `strict=` 未指定などのバグにつながりやすい書き方、import の並び、古い Python の書き方をチェックします。安全性のチェックには `eval`、`exec`、シェル経由のコマンド実行を含めます。[Ruff のルール一覧](https://docs.astral.sh/ruff/rules/)
-
-2026-11-07、全ルールから上記のルールに絞り、Ruff 0.17.4 で指摘0件、自動テスト36件の成功を確認しました。
-
-## 検証
-
-2026-11-08、`calculate_readings.py` の設定確認とCSV行の組み立てを関数に分けました。Python 3.14で自動テスト52件、Python 3.13で換算・照合のテスト9件が通り、Ruffの指摘は0件でした。OCRの受信停止を一度だけ通知し、古い行を捨て、新しい行で照合が復帰することを確認しました。模擬の子プロセスでCSV出力と両方の正常終了も確認しました。実機での取得は未確認です。
-
-2026-11-08、東芝テリーのSDK処理を `teli_camera.py` に分離しました。Python 3.14と3.13で自動テスト51件、Ruffチェックが通りました。Webカメラ経路は補助スクリプトとSDKを読み込まず、模擬SDKでは停止要求中に画像待ちがタイムアウトしても正常に解放・終了することを確認しました。
-
-2026-11-08、OCRを校正領域だけの処理に変更し、東芝テリー入力、PNG校正、細帯と赤みの中央値による判定を追加しました。Python 3.14と3.13で自動テスト50件、Ruffチェックが通りました。既定設定は合成画像の4種類の反転で旧版の認識値と一致し、960×360の合成画像で反転と認識の中央値が約3.19 msから約0.13 msになりました。生成したAVIでJSONLと動画終了、日本語のファイル名を含むPNGで校正画像の読み込みを確認しました。東芝テリーは模擬SDKで画像の取得・重複除外・タイムアウト・解放を確認しました。SDKを入れた実機での取得、明所での精度、カメラからの取得遅延は未計測です。
-
-2026-11-07、ロガーの機器ID設定・設定ファイル読込・収集開始で共通する戻り値チェックをまとめました。模擬COMで、各操作の失敗時に操作名とエラーコードが出て電圧取得へ進まないことを確認しました。自動テスト37件とRuffが通りました。実機での確認は未実施です。
-
-2026-11-07、ロガーのCOMオブジェクト作成を `DispatchEx` に簡略化しました。COMのメソッドを明示するため、`dynamic.Dispatch` と `_FlagAsMethod` を使っています。模擬COMで初期化から電圧取得・停止までを確認し、自動テスト36件が通りました。変更後のWAVE LOGGER PROとNR-600での動作は未確認です。
-
-2026-11-07、Windows x64 の Python 3.14.9 で、既存の `requirements.txt` から pywin32 312・opencv-python 5.0.0.93・NumPy 2.5.4 をインストールしました。依存関係の整合性と読み込みを確認し、`-X dev -W error` を指定して自動テスト36件が通りました。合成動画と模擬ロガーを使い、子プロセスからの出力をCSVで照合できることと、動画の終了時に両方の子プロセスが停止することも確認しました。NR-600と実カメラでの取得は未確認です。
-
-2026-11-06、GM式の試算を追加したコミット `525249f` をリバートし、電圧換算とOCR照合までの動作へ戻しました。ロガー単体は引数なしで `CHANNEL_NAMES` のCHを取得できるようにしました。自動テスト36件が通り、模擬COMで単体8CH、単体のCH変更、引数の優先、連携時の親プロセス監視とCH指定を確認しています。実機での取得は未確認です。
-
-2026-11-06、このフォルダ内で単独実行できる `calibrate_meter.py` を追加し、自動テスト30件が通りました。校正GUIを模擬して、42点と4設定の出力、同じフォルダの読み取り側での認識、範囲外クリックの拒否、桁をまたぐ取り消し、中止、半径の設定、4K画像の座標維持を確認しました。実画面と実カメラでの操作確認は未実施です。
-
-2026-11-06、点の周囲3×3画素での認識へ変更し、この題材の自動テスト21件と `seven-segment-ocr` の43件が通りました。各桁の0〜9、`0.0`、不正な消灯位置、白飛びの拒否、1画素の雑音、曖昧な色、範囲外設定の拒否、JSONLの形式と白飛び後の連続確定リセットを確認しました。共通校正の4項目を両方の読み取り側に貼り付けて使えることも確認しています。実画面の操作確認は省略し、実機の精度と遅延は未確認です。
-
-2026-11-06にWindows上のuv 0.13.5、Python 3.13.18で `.venv` を作成しました。依存パッケージの整合性、pywin32・OpenCV 5.0.0・NumPy 2.5.4の読み込み、自動テスト14件の成功を確認しました。NR-600とカメラを使った取得・照合はこの環境では未確認です。
-
-現在値の取得・換算処理は、このフォルダで次のコマンドを実行して確認できます。
-
-```powershell
-.venv/Scripts/python.exe -m unittest discover -s tests -v
-```
-
-2026-11-05に模擬COMの自動テスト5件が通りました。指定CHの現在値、同値が続くときの出力、無効値の `null` 化、開始直後の停止状態での待機、異常時の収集停止を確認しました。実機での取得、現場の換算値、許容時刻差は未確認です。
-
-2026-11-06に自動テスト14件が通りました。1ユニット8CHの指定、異なる電圧範囲・単位での換算、増加・減少する出力、端点・範囲外・欠測、未設定や±10V外の基準点での起動防止を確認しました。CSVでは生電圧と各CHの換算値を確認し、OCR待ち・未確定・時刻差超過でも電圧の異常が隠れないこと、150msと151msの境界を確認しました。現場の換算値と実機動作は未確認です。
-
-点方式への変更前には、模擬COMと合成動画で3本の連携と片側の終了・異常時の停止を確認しています。合成動画168フレームのOCR確定値は当時の読み取り処理と一致しました。照合処理では `0.0` と `null`、150msと151msの境界、受信停止を確認しました。
