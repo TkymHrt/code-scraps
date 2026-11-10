@@ -1,7 +1,6 @@
 """プロセス監視ログの抽出と記録を実機なしで確認する。"""
 
 import importlib.util
-import io
 import json
 import tempfile
 import unittest
