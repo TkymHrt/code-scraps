@@ -20,6 +20,7 @@ READ_INTERVAL = 0.2
 DIAG_SKIP_INITIALIZE_ON_ATTACH = False
 DIAG_SKIP_IDENTIFIER_ON_ATTACH = False
 DIAG_SKIP_OPEN_FILE_ON_ATTACH = False
+DIAG_SKIP_VISIBLE_ON_ATTACH = False
 DIAG_SKIP_STOP = False  # 危険: 装置の収集が継続する可能性。終了後に手動停止必須
 DIAG_HOLD_COM_SECONDS = 0.0  # 例: 15.0 / Stop後もCOM参照を保持してGUIの寿命を確認
 DIAG_VERIFY_STOP_SECONDS = 2.0  # Stop後のGetStateを最大この秒数だけ確認
@@ -155,6 +156,7 @@ def main(channel_names, managed, attach=False, diagnose=False, stop_on_key=False
             skip_initialize=attach and DIAG_SKIP_INITIALIZE_ON_ATTACH,
             skip_identifier=attach and DIAG_SKIP_IDENTIFIER_ON_ATTACH,
             skip_open_file=attach and DIAG_SKIP_OPEN_FILE_ON_ATTACH,
+            skip_visible=attach and DIAG_SKIP_VISIBLE_ON_ATTACH,
             skip_stop=DIAG_SKIP_STOP,
             hold_com_seconds=DIAG_HOLD_COM_SECONDS,
             verify_stop_seconds=DIAG_VERIFY_STOP_SECONDS,
@@ -320,9 +322,12 @@ def prepare_logger(settings_file, device_id, attach=False, trace=None):
         initialize_result = logger.Initialize()
         if trace is not None:
             trace.record("initialize_result", result=repr(initialize_result))
-    logger.Visible = True
-    if trace is not None:
-        trace.record("visible_set", value=True)
+    if attach and trace is not None and trace.enabled and DIAG_SKIP_VISIBLE_ON_ATTACH:
+        trace.record("visible_skipped")
+    else:
+        logger.Visible = True
+        if trace is not None:
+            trace.record("visible_set", value=True)
 
     usb_identifier = 4 + device_id
     if attach and trace is not None and trace.enabled and DIAG_SKIP_IDENTIFIER_ON_ATTACH:
