@@ -22,7 +22,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 既存の `.venv` が Python 3.13 などの場合は、先に別名に移してから作り直します。`--version` の出力が `Python 3.14.x` になっていることを確認します。以下のコマンドもこのフォルダで実行します。仮想環境の有効化は不要です。計算スクリプトは同じ仮想環境のPythonで取得スクリプトを起動します。
 
-1. ユニット1の電圧CH1～8を有効にし、入力レンジをすべて±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`collect_logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。[NR-600の準備手順](../rolling-gauge-meter/README.md#準備)
+1. ユニット1の電圧CH1～8を有効にし、入力レンジをすべて±10Vにして、連続収集用の `.ucf` を作ります。通常起動モードではWAVE LOGGER PROを終了し、`collect_logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。起動済みアプリに接続する `--attach` モードでは終了しません。[NR-600の準備手順](../rolling-gauge-meter/README.md#準備)
 2. OCRを校正し、表示された5項目をこのフォルダの `read_meter.py` に貼り付け、入力を選びます。初期の点は既存の合成動画用です。対象は `0.000`〜`999.999` の赤い6桁7セグです。[入力の切り替え](#ocrの入力を切り替える)・[OCRの校正手順](#ocrを校正する)
 3. `calculate_readings.py` の `CHANNELS` にある8CH分の設定を埋めます。初期の割当は下表のとおりです。実配線に合わせて名称と対応を確認し、各CHの `unit` と、`low_point`・`high_point` の `None` を現場の値に置き換えます。未設定のままでは取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
 
@@ -56,7 +56,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 .venv/Scripts/python.exe calculate_readings.py
 ```
 
-`Ctrl+C` または片方の取得終了で両方の取得を停止します。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。
+`Ctrl+C` または片方の取得終了で両方の取得を停止します。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。アプリを残す `--attach` モードを使う場合は、`calculate_readings.py` の `logger_command` に `"--attach"` を追加し、WAVE LOGGER PROを先に手動起動します。
 
 ## 単体で確認する
 
@@ -125,6 +125,16 @@ OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して�
 ```powershell
 .venv/Scripts/python.exe collect_logger.py
 ```
+
+**Ctrl+CでWAVE LOGGER PROのウィンドウまで終了させたくない場合**は、WAVE LOGGER PROを通常の方法で先に起動し、収集していない状態で次のように接続します。
+
+```powershell
+.venv/Scripts/python.exe collect_logger.py --attach
+```
+
+`--attach` は `GetActiveObject()` で起動済みのAutomationサーバに接続します。`DispatchEx()` によるアプリの新規起動は行いません。接続できなければエラーで終了し、別のWAVE LOGGER PROを勝手に起動しません。事前にアプリ側で現在の設定・測定が変更されても問題ない状態か確認してください。このスクリプトは指定した `.ucf` を読み込み、`Start()`・`Stop()` を実行します。
+
+Ctrl+Cを受けると直ちにPythonの処理を中断する代わりに停止要求を記録し、通常の終了処理で `Stop()` を呼びます。`Stop()` は収集停止であり、アプリ終了の `Quit()` は呼びません。ただし、WAVE LOGGER PROが起動中インスタンスの取得に対応しているか、停止後にウィンドウが残るかは実機で確認が必要です。`--attach` なしではこれまでどおり `DispatchEx()` で新規起動します。
 
 その実行だけ取得するCHを変える場合は、引数で指定します。指定したCHを `CHANNEL_NAMES` より優先します。
 
