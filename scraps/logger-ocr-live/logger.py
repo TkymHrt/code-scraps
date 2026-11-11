@@ -12,33 +12,28 @@ from win32com.client import DispatchEx, dynamic
 
 SETTINGS_FILE = None
 DEVICE_ID = 0
+UNIT_NUMBER = 1
+CHANNEL_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8]
 READ_INTERVAL = 0.2
-CHANNEL_NAMES = [
-    "U1_CH1",
-    "U1_CH2",
-    "U1_CH3",
-    "U1_CH4",
-    "U1_CH5",
-    "U1_CH6",
-    "U1_CH7",
-    "U1_CH8",
-]
 
 
 def main(channel_names, managed):
+    if UNIT_NUMBER < 1:
+        raise ValueError("UNIT_NUMBER は1以上を指定")
+
     if not channel_names and not managed:
-        channel_names = CHANNEL_NAMES
+        channel_names = [f"U{UNIT_NUMBER}_CH{number}" for number in CHANNEL_NUMBERS]
     if not channel_names:
-        raise ValueError("取得する電圧CHを指定（例 U1_CH1）")
-    unit_number = 1
+        raise ValueError(f"取得する電圧CHを指定（例 U{UNIT_NUMBER}_CH1）")
+
     channel_indexes = {}
     for channel_name in channel_names:
-        channel_match = re.fullmatch(r"U1_CH([1-8])", channel_name)
-        if channel_match is None:
-            raise ValueError(f"電圧CHはU1_CH1〜U1_CH8（指定値 {channel_name}）")
-        channel_number_text = channel_match.group(1)
-        channel_number = int(channel_number_text)
-        channel_indexes[channel_name] = channel_number - 1
+        match = re.fullmatch(rf"U{UNIT_NUMBER}_CH([1-8])", channel_name)
+        if match is None:
+            raise ValueError(
+                f"電圧CHはU{UNIT_NUMBER}_CH1〜U{UNIT_NUMBER}_CH8（指定値 {channel_name}）"
+            )
+        channel_indexes[channel_name] = int(match.group(1)) - 1
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
         raise ValueError("SETTINGS_FILEに既存の .ucf を指定")
@@ -57,10 +52,8 @@ def main(channel_names, managed):
     logger, waveform = prepare_logger(SETTINGS_FILE, DEVICE_ID)
     if stop_requested.is_set():
         return
-    start_result = None
+    check_com_result(logger.Start(), "収集開始失敗")
     try:
-        start_result = logger.Start()
-        check_com_result(start_result, "収集開始失敗")
         has_started_reading = False
         while not stop_requested.is_set():
             collection_state = logger.GetState()
@@ -78,7 +71,7 @@ def main(channel_names, managed):
 
             voltages = {}
             for channel_name, channel_index in channel_indexes.items():
-                voltage = waveform.GetCurrentData(unit_number, channel_index)
+                voltage = waveform.GetCurrentData(UNIT_NUMBER, channel_index)
                 if not math.isfinite(voltage) or abs(voltage) >= 3.3e38:
                     voltage = None
                 voltages[channel_name] = voltage
@@ -89,9 +82,8 @@ def main(channel_names, managed):
             print(json_line, flush=True)
             stop_requested.wait(READ_INTERVAL)
     finally:
-        if start_result is None or start_result == 0:
-            logger.Stop()
-            time.sleep(10)
+        logger.Stop()
+        time.sleep(10)
 
 
 def watch_parent(stop_requested):

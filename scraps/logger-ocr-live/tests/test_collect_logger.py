@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-SCRIPT = Path(__file__).resolve().parents[1] / "collect_logger.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "logger.py"
 SPEC = importlib.util.spec_from_file_location("live_collect_logger", SCRIPT)
 collect_logger = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(collect_logger)
@@ -48,6 +48,7 @@ class CollectLoggerTests(unittest.TestCase):
         )
         self.output = io.StringIO()
         self.contexts.enter_context(redirect_stdout(self.output))
+        self.contexts.enter_context(patch.object(collect_logger.time, "sleep"))
 
     def test_outputs_repeated_current_values_for_requested_channels(self):
         self.logger.GetState.side_effect = [5, 5, 1]
@@ -111,7 +112,7 @@ class CollectLoggerTests(unittest.TestCase):
         self.logger.Stop.assert_called_once()
 
     def test_standalone_uses_channels_configured_at_top_of_script(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH3", "U1_CH5"]):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", [3, 5]):
             collect_logger.main([], managed=False)
         message = json.loads(self.output.getvalue())
         self.assertEqual(message["voltages"], {"U1_CH3": 1.25, "U1_CH5": 1.25})
@@ -120,14 +121,14 @@ class CollectLoggerTests(unittest.TestCase):
         )
 
     def test_explicit_channels_override_standalone_defaults(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH1"]):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", [1]):
             collect_logger.main(["U1_CH8"], managed=False)
         message = json.loads(self.output.getvalue())
         self.assertEqual(message["voltages"], {"U1_CH8": 1.25})
         self.waveform.GetCurrentData.assert_called_once_with(1, 7)
 
     def test_empty_standalone_configuration_is_rejected(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", []):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", []):
             with self.assertRaisesRegex(ValueError, "取得する電圧CH"):
                 collect_logger.main([], managed=False)
         self.logger.Start.assert_not_called()
@@ -156,6 +157,43 @@ class CollectLoggerTests(unittest.TestCase):
             with self.subTest(channel=channel):
                 with self.assertRaisesRegex(ValueError, "U1_CH1〜U1_CH8"):
                     collect_logger.main([channel], managed=False)
+        self.logger.Start.assert_not_called()
+
+    def test_configured_unit_number_controls_channel_validation_and_com_reads(self):
+        with patch.object(collect_logger, "UNIT_NUMBER", 2):
+            collect_logger.main(["U2_CH8", "U2_CH1"], managed=False)
+
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U2_CH8": 1.25, "U2_CH1": 1.25})
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list,
+            [call(2, 7), call(2, 0)],
+        )
+
+    def test_standalone_uses_configured_unit_and_subset(self):
+        with (
+            patch.object(collect_logger, "UNIT_NUMBER", 2),
+            patch.object(collect_logger, "CHANNEL_NUMBERS", [3, 5]),
+        ):
+            collect_logger.main([], managed=False)
+
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U2_CH3": 1.25, "U2_CH5": 1.25})
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list,
+            [call(2, 2), call(2, 4)],
+        )
+
+    def test_rejects_channels_from_a_different_unit(self):
+        with patch.object(collect_logger, "UNIT_NUMBER", 2):
+            with self.assertRaisesRegex(ValueError, "U2_CH1〜U2_CH8"):
+                collect_logger.main(["U1_CH1"], managed=False)
+        self.logger.Start.assert_not_called()
+
+    def test_rejects_invalid_unit_number(self):
+        with patch.object(collect_logger, "UNIT_NUMBER", 0):
+            with self.assertRaisesRegex(ValueError, "UNIT_NUMBER"):
+                collect_logger.main(["U0_CH1"], managed=False)
         self.logger.Start.assert_not_called()
 
     def test_invalid_values_are_json_null(self):
