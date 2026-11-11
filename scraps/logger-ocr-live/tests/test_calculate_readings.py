@@ -8,9 +8,10 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from queue import Queue
+from threading import Event
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).resolve().parents[1] / "calculate_readings.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "main.py"
 SPEC = importlib.util.spec_from_file_location("calculate_readings_under_test", SCRIPT)
 readings = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(readings)
@@ -46,13 +47,40 @@ class CalculateReadingsTests(unittest.TestCase):
     def read_rows(self, messages):
         received_lines = Queue()
         for source, message in messages:
-            received_lines.put((source, json.dumps(message), 1.0))
-        received_lines.put(("logger", "", 1.0))
+            received_lines.put((source, message, 1.0))
+        received_lines.put(("logger", None, 1.0))
         output = io.StringIO()
         with patch.object(readings.time, "monotonic", return_value=1.0):
             with redirect_stdout(output):
                 self.assertEqual(readings.write_readings_csv(received_lines), "logger")
         return list(csv.DictReader(io.StringIO(output.getvalue())))
+
+    def test_reader_puts_parsed_data_and_end_marker_in_queue(self):
+        message = {"received_at": self.timestamp, "value": 0.0}
+        stream = io.StringIO(json.dumps(message) + "\n")
+        measurement_queue = Queue()
+
+        readings.read_child_output("ocr", stream, measurement_queue, Event())
+
+        source, queued_message, read_at = measurement_queue.get_nowait()
+        self.assertEqual(source, "ocr")
+        self.assertEqual(queued_message, message)
+        self.assertIsInstance(read_at, float)
+
+        source, queued_message, _ = measurement_queue.get_nowait()
+        self.assertEqual(source, "ocr")
+        self.assertIsNone(queued_message)
+
+    def test_invalid_json_reports_an_error_instead_of_stalling(self):
+        for line in ("{broken}\n", "null\n", "[]\n"):
+            with self.subTest(line=line):
+                measurement_queue = Queue()
+                readings.read_child_output(
+                    "logger", io.StringIO(line), measurement_queue, Event()
+                )
+                with redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, "logger データ解析失敗"):
+                        readings.write_readings_csv(measurement_queue)
 
     def test_converts_eight_independent_ranges_and_units_to_csv(self):
         rows = self.read_rows(
@@ -159,9 +187,9 @@ class CalculateReadingsTests(unittest.TestCase):
         received_lines = Queue()
         clock_times = [10.0]
         for processed_at, line_read_at, source, message in events:
-            received_lines.put((source, json.dumps(message), line_read_at))
+            received_lines.put((source, message, line_read_at))
             clock_times.append(processed_at)
-        received_lines.put(("ocr", "", 11.6))
+        received_lines.put(("ocr", None, 11.6))
         clock_times.append(11.6)
 
         output = io.StringIO()

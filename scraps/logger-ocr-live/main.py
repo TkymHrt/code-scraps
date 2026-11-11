@@ -74,7 +74,7 @@ def main():
     ocr_command = [sys.executable, str(ocr_script), "--managed"]
     commands_by_source = {"logger": logger_command, "ocr": ocr_command}
 
-    output_queue = Queue(maxsize=64)
+    measurement_queue = Queue(maxsize=64)
     stop_readers = Event()
     processes_by_source = {}
     try:
@@ -89,12 +89,12 @@ def main():
 
             stdout_reader = Thread(
                 target=read_child_output,
-                args=(source, process.stdout, output_queue, stop_readers),
+                args=(source, process.stdout, measurement_queue, stop_readers),
                 daemon=True,
             )
             stdout_reader.start()
 
-        finished_source = write_readings_csv(output_queue)
+        finished_source = write_readings_csv(measurement_queue)
     finally:
         stop_readers.set()
         for process in processes_by_source.values():
@@ -135,23 +135,34 @@ def validate_settings():
             )
 
 
-def read_child_output(source, child_stdout, output_queue, stop_readers):
+def read_child_output(source, child_stdout, measurement_queue, stop_readers):
     with child_stdout:
-        while True:
+        while not stop_readers.is_set():
             line = child_stdout.readline()
             line_read_at = time.monotonic()
-            queued_output = (source, line, line_read_at)
+            if line:
+                try:
+                    message = json.loads(line)
+                    if not isinstance(message, dict):
+                        raise ValueError("JSONオブジェクトが必要")
+                except ValueError as error:
+                    message = RuntimeError(f"{source} データ解析失敗（{error}）")
+            else:
+                message = None
+
             while not stop_readers.is_set():
                 try:
-                    output_queue.put(queued_output, timeout=0.1)
+                    measurement_queue.put(
+                        (source, message, line_read_at), timeout=0.1
+                    )
                 except Full:
                     continue
                 break
-            if line == "":
+            if message is None or isinstance(message, RuntimeError):
                 return
 
 
-def write_readings_csv(output_queue):
+def write_readings_csv(measurement_queue):
     writer = csv.writer(sys.stdout, lineterminator="\n")
     columns = ["received_at"]
     for channel_name, channel_settings in CHANNELS.items():
@@ -169,7 +180,7 @@ def write_readings_csv(output_queue):
     last_read_at_by_source = {"logger": waiting_since, "ocr": waiting_since}
     while True:
         try:
-            queued_output = output_queue.get(timeout=0.1)
+            queued_output = measurement_queue.get(timeout=0.1)
         except Empty:
             queued_output = None
 
@@ -186,14 +197,15 @@ def write_readings_csv(output_queue):
 
         if queued_output is None:
             continue
-        source, line, line_read_at = queued_output
-        if line == "":
+        source, message, line_read_at = queued_output
+        if isinstance(message, RuntimeError):
+            raise message
+        if message is None:
             return source
         line_age_seconds = processing_started_at - line_read_at
         if line_age_seconds > INPUT_TIMEOUT:
             continue
 
-        message = json.loads(line)
         last_read_at_by_source[source] = line_read_at
         if source == "ocr":
             previous_value_confirmed = (
