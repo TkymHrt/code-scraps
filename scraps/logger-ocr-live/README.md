@@ -90,7 +90,9 @@ OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して�
 
 ### ロガーだけ取得する
 
-ロガーだけを動かす場合は、`logger.py` の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体IDを設定します。`CHANNEL_NAMES` は単体起動で取得するCHの一覧で、初期値は `U1_CH1`〜`U1_CH8` の8CHです。実機で有効にしたCHに合わせて変更し、引数なしで実行します。OCRや `main.py` の設定は不要です。
+ロガーだけを動かす場合は、`logger.py` の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体ID、`UNIT_NUMBER` に取得対象の入力ユニット番号（初期値 `1`）を設定します。`CHANNEL_NAMES` は単体起動で取得するCHの一覧で、初期値は `UNIT_NUMBER` に応じた1〜8CHです。実機で有効にしたCHに合わせて変更し、引数なしで実行します。OCRや `main.py` の設定は不要です。
+
+`UNIT_NUMBER` を変更する場合は、`.ucf` のユニット構成とCHの設定を確認してください。`main.py` と連携するときは、`main.py` の `CHANNELS` のキー（例：`U2_CH1`）も同じユニット番号に揃える必要があります。
 
 その実行だけ取得するCHを変える場合は、引数で指定します。指定したCHを `CHANNEL_NAMES` より優先します。
 
