@@ -13,7 +13,7 @@ from win32com.client import DispatchEx, dynamic
 SETTINGS_FILE = None
 DEVICE_ID = 0
 UNIT_NUMBER = 1
-CHANNEL_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8]
+CHANNEL_NUMBERS = [1, 2, 3, 6, 7]
 READ_INTERVAL = 0.2
 
 
