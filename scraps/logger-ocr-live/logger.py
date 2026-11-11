@@ -18,8 +18,8 @@ READ_INTERVAL = 0.2
 
 
 def main(channel_names, managed):
-    if not isinstance(UNIT_NUMBER, int) or isinstance(UNIT_NUMBER, bool) or UNIT_NUMBER < 1:
-        raise ValueError("UNIT_NUMBER は1以上の整数")
+    if UNIT_NUMBER < 1:
+        raise ValueError("UNIT_NUMBER は1以上を指定")
 
     if not channel_names and not managed:
         channel_names = [f"U{UNIT_NUMBER}_CH{number}" for number in CHANNEL_NUMBERS]
@@ -52,10 +52,8 @@ def main(channel_names, managed):
     logger, waveform = prepare_logger(SETTINGS_FILE, DEVICE_ID)
     if stop_requested.is_set():
         return
-    start_result = None
+    check_com_result(logger.Start(), "収集開始失敗")
     try:
-        start_result = logger.Start()
-        check_com_result(start_result, "収集開始失敗")
         has_started_reading = False
         while not stop_requested.is_set():
             collection_state = logger.GetState()
@@ -84,9 +82,8 @@ def main(channel_names, managed):
             print(json_line, flush=True)
             stop_requested.wait(READ_INTERVAL)
     finally:
-        if start_result is None or start_result == 0:
-            logger.Stop()
-            time.sleep(10)
+        logger.Stop()
+        time.sleep(10)
 
 
 def watch_parent(stop_requested):
