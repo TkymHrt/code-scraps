@@ -112,7 +112,7 @@ class CollectLoggerTests(unittest.TestCase):
         self.logger.Stop.assert_called_once()
 
     def test_standalone_uses_channels_configured_at_top_of_script(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH3", "U1_CH5"]):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", [3, 5]):
             collect_logger.main([], managed=False)
         message = json.loads(self.output.getvalue())
         self.assertEqual(message["voltages"], {"U1_CH3": 1.25, "U1_CH5": 1.25})
@@ -121,14 +121,14 @@ class CollectLoggerTests(unittest.TestCase):
         )
 
     def test_explicit_channels_override_standalone_defaults(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", ["U1_CH1"]):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", [1]):
             collect_logger.main(["U1_CH8"], managed=False)
         message = json.loads(self.output.getvalue())
         self.assertEqual(message["voltages"], {"U1_CH8": 1.25})
         self.waveform.GetCurrentData.assert_called_once_with(1, 7)
 
     def test_empty_standalone_configuration_is_rejected(self):
-        with patch.object(collect_logger, "CHANNEL_NAMES", []):
+        with patch.object(collect_logger, "CHANNEL_NUMBERS", []):
             with self.assertRaisesRegex(ValueError, "取得する電圧CH"):
                 collect_logger.main([], managed=False)
         self.logger.Start.assert_not_called()
@@ -168,6 +168,20 @@ class CollectLoggerTests(unittest.TestCase):
         self.assertEqual(
             self.waveform.GetCurrentData.call_args_list,
             [call(2, 7), call(2, 0)],
+        )
+
+    def test_standalone_uses_configured_unit_and_subset(self):
+        with (
+            patch.object(collect_logger, "UNIT_NUMBER", 2),
+            patch.object(collect_logger, "CHANNEL_NUMBERS", [3, 5]),
+        ):
+            collect_logger.main([], managed=False)
+
+        message = json.loads(self.output.getvalue())
+        self.assertEqual(message["voltages"], {"U2_CH3": 1.25, "U2_CH5": 1.25})
+        self.assertEqual(
+            self.waveform.GetCurrentData.call_args_list,
+            [call(2, 2), call(2, 4)],
         )
 
     def test_rejects_channels_from_a_different_unit(self):
