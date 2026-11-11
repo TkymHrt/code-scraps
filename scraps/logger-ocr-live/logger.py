@@ -36,11 +36,11 @@ def main(channel_names, managed):
         channel_indexes[channel_name] = int(match.group(1)) - 1
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
-        raise ValueError("SETTINGS_FILE に既存の .ucf ファイルを指定")
+        raise ValueError("SETTINGS_FILEに既存の .ucf を指定")
     if not 0 <= DEVICE_ID <= 3:
-        raise ValueError("DEVICE_ID は0〜3")
+        raise ValueError("DEVICE_IDは0〜3")
     if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
-        raise ValueError("READ_INTERVAL は正の秒数")
+        raise ValueError("READ_INTERVALは正の秒数")
 
     stop_requested = Event()
     if managed:
