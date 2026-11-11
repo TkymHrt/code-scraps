@@ -97,7 +97,7 @@ OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して�
 その実行だけ取得するCHを変える場合は、従来どおり引数で `U1_CH3` などのCH名を指定できます（ユニット番号は設定に合わせます）。引数のCH名を `CHANNEL_NUMBERS` より優先します。連携起動時は `main.py` の `CHANNELS` のキーからCH名を渡すため、`CHANNEL_NUMBERS` は参照しません。
 
 
-標準出力に `received_at` と取得CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、無効値は `null` です。終了は `Ctrl+C` です。終了後はWAVE LOGGER PROの画面で収集停止を確認します。連携起動では計算側がCHを明示的に渡すため、この単体用設定を重ねて変更する必要はありません。
+標準出力に `received_at` と取得CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、無効値は `null` です。終了は `Ctrl+C` です。終了後はWAVE LOGGER PROの画面で収集停止を確認します。連携起動では `CHANNEL_NUMBERS` の変更は不要ですが、`UNIT_NUMBER` は `main.py` のCH名と一致させてください。
 
 `main.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
 
