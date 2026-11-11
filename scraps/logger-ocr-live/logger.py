@@ -12,40 +12,22 @@ from win32com.client import DispatchEx, dynamic
 
 SETTINGS_FILE = None
 DEVICE_ID = 0
+UNIT_NUMBER = 1
 READ_INTERVAL = 0.2
-CHANNEL_NAMES = [
-    "U1_CH1",
-    "U1_CH2",
-    "U1_CH3",
-    "U1_CH4",
-    "U1_CH5",
-    "U1_CH6",
-    "U1_CH7",
-    "U1_CH8",
-]
+CHANNEL_NAMES = [f"U{UNIT_NUMBER}_CH{channel}" for channel in range(1, 9)]
 
 
 def main(channel_names, managed):
     if not channel_names and not managed:
         channel_names = CHANNEL_NAMES
-    if not channel_names:
-        raise ValueError("取得する電圧CHを指定（例 U1_CH1）")
-    unit_number = 1
-    channel_indexes = {}
-    for channel_name in channel_names:
-        channel_match = re.fullmatch(r"U1_CH([1-8])", channel_name)
-        if channel_match is None:
-            raise ValueError(f"電圧CHはU1_CH1〜U1_CH8（指定値 {channel_name}）")
-        channel_number_text = channel_match.group(1)
-        channel_number = int(channel_number_text)
-        channel_indexes[channel_name] = channel_number - 1
+    channel_indexes = get_channel_indexes(channel_names)
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
-        raise ValueError("SETTINGS_FILEに既存の .ucf を指定")
+        raise ValueError("SETTINGS_FILE に既存の .ucf ファイルを指定")
     if not 0 <= DEVICE_ID <= 3:
-        raise ValueError("DEVICE_IDは0〜3")
+        raise ValueError("DEVICE_ID は0〜3")
     if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
-        raise ValueError("READ_INTERVALは正の秒数")
+        raise ValueError("READ_INTERVAL は正の秒数")
 
     stop_requested = Event()
     if managed:
@@ -78,7 +60,7 @@ def main(channel_names, managed):
 
             voltages = {}
             for channel_name, channel_index in channel_indexes.items():
-                voltage = waveform.GetCurrentData(unit_number, channel_index)
+                voltage = waveform.GetCurrentData(UNIT_NUMBER, channel_index)
                 if not math.isfinite(voltage) or abs(voltage) >= 3.3e38:
                     voltage = None
                 voltages[channel_name] = voltage
@@ -92,6 +74,24 @@ def main(channel_names, managed):
         if start_result is None or start_result == 0:
             logger.Stop()
             time.sleep(10)
+
+
+def get_channel_indexes(channel_names):
+    if not channel_names:
+        raise ValueError(f"取得する電圧CHを指定（例 U{UNIT_NUMBER}_CH1）")
+    if not isinstance(UNIT_NUMBER, int) or isinstance(UNIT_NUMBER, bool) or UNIT_NUMBER < 1:
+        raise ValueError("UNIT_NUMBERは1以上の整数")
+
+    channel_pattern = re.compile(rf"U{UNIT_NUMBER}_CH([1-8])")
+    channel_indexes = {}
+    for channel_name in channel_names:
+        channel_match = channel_pattern.fullmatch(channel_name)
+        if channel_match is None:
+            raise ValueError(
+                f"電圧CHはU{UNIT_NUMBER}_CH1〜U{UNIT_NUMBER}_CH8（指定値 {channel_name}）"
+            )
+        channel_indexes[channel_name] = int(channel_match.group(1)) - 1
+    return channel_indexes
 
 
 def watch_parent(stop_requested):
