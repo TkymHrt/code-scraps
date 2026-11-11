@@ -10,7 +10,7 @@ from pathlib import Path
 from queue import Queue
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).resolve().parents[1] / "calculate_readings.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "main.py"
 SPEC = importlib.util.spec_from_file_location("calculate_readings_under_test", SCRIPT)
 readings = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(readings)

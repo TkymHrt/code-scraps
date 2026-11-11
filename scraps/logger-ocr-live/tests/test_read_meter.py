@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-SCRIPT = Path(__file__).resolve().parents[1] / "read_meter.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "counter.py"
 SPEC = importlib.util.spec_from_file_location("logger_reader_under_test", SCRIPT)
 reader = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reader)
@@ -192,7 +192,7 @@ class ReadMeterTests(unittest.TestCase):
         with (
             patch.multiple(reader, SOURCE="test.avi", REFLECTION="none"),
             patch.object(reader.cv2, "VideoCapture", return_value=capture),
-            patch.object(sys, "argv", ["read_meter.py", "--segment-scores"]),
+            patch.object(sys, "argv", ["counter.py", "--segment-scores"]),
             redirect_stdout(output),
             redirect_stderr(diagnostics),
         ):

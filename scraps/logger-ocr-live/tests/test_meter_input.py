@@ -13,7 +13,7 @@ from unittest.mock import Mock, call, patch
 
 import numpy as np
 
-SCRIPT = Path(__file__).resolve().parents[1] / "read_meter.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "counter.py"
 SPEC = importlib.util.spec_from_file_location("logger_input_under_test", SCRIPT)
 reader = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reader)
@@ -23,11 +23,14 @@ class MeterInputTests(unittest.TestCase):
     def setUp(self):
         # ファイルから直接読み込むテストでも、スクリプト起動時と同じ場所を探す。
         self.enterContext(patch.object(sys, "path", [str(SCRIPT.parent), *sys.path]))
+        self.enterContext(patch.dict(sys.modules))
+        sys.modules.pop("camera_sdk", None)
 
     def make_teli_camera(self):
         sdk = Mock()
         sdk.CamApiStatus = SimpleNamespace(Success=0, Error=1, Timeout=2)
         sdk.OutputImageType = SimpleNamespace(Bgr24=object())
+        sdk.PytelicamError = type("PytelicamError", (Exception,), {})
         system = sdk.get_camera_system.return_value
         system.get_num_of_cameras.return_value = 2
         system.create_signal.return_value = object()
@@ -35,15 +38,17 @@ class MeterInputTests(unittest.TestCase):
             sdk.CamApiStatus.Success,
             KeyboardInterrupt(),
         ]
-        system.terminate.return_value = sdk.CamApiStatus.Success
+        system.terminate.return_value = None
+        system.close_signal.return_value = None
         device = system.create_device_object.return_value
-        device.open.return_value = sdk.CamApiStatus.Success
-        device.close.return_value = sdk.CamApiStatus.Success
+        device.open.return_value = None
+        device.close.return_value = None
+        device.cam_control.set_trigger_mode.return_value = sdk.CamApiStatus.Success
         stream = device.cam_stream
-        stream.open.return_value = sdk.CamApiStatus.Success
-        stream.start.return_value = sdk.CamApiStatus.Success
-        stream.stop.return_value = sdk.CamApiStatus.Success
-        stream.close.return_value = sdk.CamApiStatus.Success
+        stream.open.return_value = None
+        stream.start.return_value = None
+        stream.stop.return_value = None
+        stream.close.return_value = None
         image = self.make_teli_image(sdk, 0)
         stream.get_current_buffered_image.return_value = image
         return sdk, system, device, stream, image
@@ -56,13 +61,14 @@ class MeterInputTests(unittest.TestCase):
         )
         width, height = reader.FRAME_SIZE
         image.get_ndarray.return_value = np.full((height, width, 3), 19, dtype=np.uint8)
+        image.release.return_value = None
         return image
 
     def test_web_camera_sets_resolution_without_importing_teli_support(self):
         capture = Mock()
         capture.isOpened.return_value = True
         capture.read.return_value = (False, None)
-        with patch.dict(sys.modules, {"teli_camera": None, "pytelicam": None}):
+        with patch.dict(sys.modules, {"camera_sdk": None, "pytelicam": None}):
             webcam_reader = importlib.util.module_from_spec(SPEC)
             SPEC.loader.exec_module(webcam_reader)
             with (
@@ -116,6 +122,7 @@ class MeterInputTests(unittest.TestCase):
             reader.main()
         video_capture.assert_not_called()
         system.create_device_object.assert_called_once_with(1)
+        device.cam_control.set_trigger_mode.assert_called_once_with(False)
         signal = system.create_signal.return_value
         stream.open.assert_called_once_with(signal)
         self.assertEqual(
@@ -134,6 +141,26 @@ class MeterInputTests(unittest.TestCase):
         system.close_signal.assert_called_once_with(signal)
         device.close.assert_called_once()
         system.terminate.assert_called_once()
+        self.assertLess(
+            sdk.mock_calls.index(
+                call.get_camera_system()
+                .create_device_object()
+                .cam_control.set_trigger_mode(False)
+            ),
+            sdk.mock_calls.index(
+                call.get_camera_system().create_device_object().cam_stream.start()
+            ),
+        )
+        self.assertEqual(
+            sdk.mock_calls[-5:],
+            [
+                call.get_camera_system().create_device_object().cam_stream.stop(),
+                call.get_camera_system().create_device_object().cam_stream.close(),
+                call.get_camera_system().close_signal(signal),
+                call.get_camera_system().create_device_object().close(),
+                call.get_camera_system().terminate(),
+            ],
+        )
 
     def test_teli_input_propagates_missing_sdk(self):
         with (
@@ -157,6 +184,56 @@ class MeterInputTests(unittest.TestCase):
             reader.main()
         system.create_device_object.assert_not_called()
         system.create_signal.assert_not_called()
+        system.terminate.assert_called_once()
+
+    def test_teli_device_open_failure_terminates_the_sdk(self):
+        sdk, system, device, stream, _ = self.make_teli_camera()
+        error = sdk.PytelicamError("device.open")
+        device.open.side_effect = error
+        with (
+            patch.object(reader, "SOURCE", ("teli", 0)),
+            patch.dict(sys.modules, {"pytelicam": sdk}),
+            self.assertRaises(sdk.PytelicamError) as caught,
+        ):
+            reader.main()
+        self.assertIs(caught.exception, error)
+        device.cam_control.set_trigger_mode.assert_not_called()
+        system.create_signal.assert_not_called()
+        stream.open.assert_not_called()
+        device.close.assert_not_called()
+        system.terminate.assert_called_once()
+
+    def test_teli_trigger_mode_failure_closes_device_before_stream_is_opened(self):
+        sdk, system, device, stream, _ = self.make_teli_camera()
+        device.cam_control.set_trigger_mode.return_value = sdk.CamApiStatus.Error
+        with (
+            patch.object(reader, "SOURCE", ("teli", 0)),
+            patch.dict(sys.modules, {"pytelicam": sdk}),
+            self.assertRaisesRegex(RuntimeError, "set_trigger_mode"),
+        ):
+            reader.main()
+        device.cam_control.set_trigger_mode.assert_called_once_with(False)
+        system.create_signal.assert_not_called()
+        stream.open.assert_not_called()
+        device.close.assert_called_once()
+        system.terminate.assert_called_once()
+
+    def test_teli_stream_open_failure_closes_signal_and_device(self):
+        sdk, system, device, stream, _ = self.make_teli_camera()
+        error = sdk.PytelicamError("stream.open")
+        stream.open.side_effect = error
+        with (
+            patch.object(reader, "SOURCE", ("teli", 0)),
+            patch.dict(sys.modules, {"pytelicam": sdk}),
+            self.assertRaises(sdk.PytelicamError) as caught,
+        ):
+            reader.main()
+        self.assertIs(caught.exception, error)
+        stream.start.assert_not_called()
+        stream.stop.assert_not_called()
+        stream.close.assert_not_called()
+        system.close_signal.assert_called_once_with(system.create_signal.return_value)
+        device.close.assert_called_once()
         system.terminate.assert_called_once()
 
     def test_teli_unusable_frame_is_released_before_closing_camera(self):
@@ -185,14 +262,35 @@ class MeterInputTests(unittest.TestCase):
 
     def test_teli_start_failure_closes_open_stream_and_device(self):
         sdk, system, device, stream, _ = self.make_teli_camera()
-        stream.start.return_value = sdk.CamApiStatus.Error
+        error = sdk.PytelicamError("stream.start")
+        stream.start.side_effect = error
         with (
             patch.object(reader, "SOURCE", ("teli", 0)),
             patch.dict(sys.modules, {"pytelicam": sdk}),
-            self.assertRaises(RuntimeError),
+            self.assertRaises(sdk.PytelicamError) as caught,
         ):
             reader.main()
+        self.assertIs(caught.exception, error)
         stream.get_current_buffered_image.assert_not_called()
+        stream.stop.assert_not_called()
+        stream.close.assert_called_once()
+        system.close_signal.assert_called_once_with(system.create_signal.return_value)
+        device.close.assert_called_once()
+        system.terminate.assert_called_once()
+
+    def test_teli_conversion_failure_releases_image_and_closes_camera(self):
+        sdk, system, device, stream, image = self.make_teli_camera()
+        error = sdk.PytelicamError("get_ndarray")
+        image.get_ndarray.side_effect = error
+        with (
+            patch.object(reader, "SOURCE", ("teli", 0)),
+            patch.dict(sys.modules, {"pytelicam": sdk}),
+            self.assertRaises(sdk.PytelicamError) as caught,
+        ):
+            reader.main()
+        self.assertIs(caught.exception, error)
+        image.release.assert_called_once()
+        stream.stop.assert_called_once()
         stream.close.assert_called_once()
         system.close_signal.assert_called_once_with(system.create_signal.return_value)
         device.close.assert_called_once()

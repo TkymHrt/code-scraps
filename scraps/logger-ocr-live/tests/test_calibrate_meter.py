@@ -14,13 +14,13 @@ import numpy as np
 
 TOPIC = Path(__file__).resolve().parents[1]
 reader_spec = importlib.util.spec_from_file_location(
-    "logger_reader_for_calibration", TOPIC / "read_meter.py"
+    "logger_reader_for_calibration", TOPIC / "counter.py"
 )
 read_meter = importlib.util.module_from_spec(reader_spec)
 reader_spec.loader.exec_module(read_meter)
 
 calibration_spec = importlib.util.spec_from_file_location(
-    "logger_calibration_under_test", TOPIC / "calibrate_meter.py"
+    "logger_calibration_under_test", TOPIC / "camera_calibration.py"
 )
 calibrate_meter = importlib.util.module_from_spec(calibration_spec)
 calibration_spec.loader.exec_module(calibrate_meter)

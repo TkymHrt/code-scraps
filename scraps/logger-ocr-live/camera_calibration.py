@@ -108,10 +108,6 @@ def main():
 
         frame_height, frame_width = frame.shape[:2]
         frame_size = [frame_width, frame_height]
-        print(
-            "以下の5行をread_meter.py先頭の同名設定へ貼り付けてください。",
-            file=sys.stderr,
-        )
         print("FRAME_SIZE = " + repr(frame_size))
         print("REFLECTION = " + repr(REFLECTION))
         print("SAMPLE_RADIUS = " + repr(SAMPLE_RADIUS))

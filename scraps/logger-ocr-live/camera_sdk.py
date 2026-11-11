@@ -17,18 +17,18 @@ def open_teli_camera(camera_index, stop_requested):
             raise IndexError(f"カメラ番号範囲外（{camera_index}）")
 
         device = camera_system.create_device_object(camera_index)
-        device_open_status = device.open()
-        check_teli_status(device_open_status, "device.open")
+        device.open()
         camera_cleanup.callback(device.close)
+
+        trigger_status = device.cam_control.set_trigger_mode(False)
+        check_teli_status(trigger_status, "set_trigger_mode")
 
         frame_ready_signal = camera_system.create_signal()
         camera_cleanup.callback(camera_system.close_signal, frame_ready_signal)
         stream = device.cam_stream
-        stream_open_status = stream.open(frame_ready_signal)
-        check_teli_status(stream_open_status, "stream.open")
+        stream.open(frame_ready_signal)
         camera_cleanup.callback(stream.close)
-        stream_start_status = stream.start()
-        check_teli_status(stream_start_status, "stream.start")
+        stream.start()
         camera_cleanup.callback(stream.stop)
 
         last_delivered_image_id = None

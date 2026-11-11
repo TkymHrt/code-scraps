@@ -128,7 +128,7 @@ def main():
     video_frame_interval = None
     with ExitStack() as capture_resources:
         if source_is_teli:
-            from teli_camera import open_teli_camera
+            from camera_sdk import open_teli_camera
 
             read_frame = capture_resources.enter_context(
                 open_teli_camera(camera_index, stop_requested)
