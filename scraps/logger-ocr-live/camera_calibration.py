@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -108,11 +109,18 @@ def main():
 
         frame_height, frame_width = frame.shape[:2]
         frame_size = [frame_width, frame_height]
-        print("FRAME_SIZE = " + repr(frame_size))
-        print("REFLECTION = " + repr(REFLECTION))
-        print("SAMPLE_RADIUS = " + repr(SAMPLE_RADIUS))
-        print("SAMPLE_LENGTH_RADIUS = " + repr(SAMPLE_LENGTH_RADIUS))
-        print("SEGMENT_POINTS = " + repr(points_by_digit))
+        settings = {
+            "FRAME_SIZE": frame_size,
+            "REFLECTION": REFLECTION,
+            "SAMPLE_RADIUS": SAMPLE_RADIUS,
+            "SAMPLE_LENGTH_RADIUS": SAMPLE_LENGTH_RADIUS,
+            "SEGMENT_POINTS": points_by_digit,
+        }
+        if "--json" in sys.argv:
+            print(json.dumps(settings, indent=2))
+        else:
+            for name, value in settings.items():
+                print(name + " = " + repr(value))
     finally:
         if capture is not None:
             capture.release()

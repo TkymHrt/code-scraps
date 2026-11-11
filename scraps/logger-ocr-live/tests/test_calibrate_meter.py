@@ -3,6 +3,7 @@
 import ast
 import importlib.util
 import io
+import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -130,10 +131,25 @@ class CalibrationTests(unittest.TestCase):
             self.assertEqual(call.args, (30,))
 
         settings = {}
-        for line in output.getvalue().splitlines():
-            name, literal = line.split("=", 1)
-            settings[name.strip()] = ast.literal_eval(literal.strip())
+        if "--json" in calibrate_meter.sys.argv:
+            if output.getvalue():
+                settings = json.loads(output.getvalue())
+        else:
+            for line in output.getvalue().splitlines():
+                name, literal = line.split("=", 1)
+                settings[name.strip()] = ast.literal_eval(literal.strip())
         return settings, mouse_events
+
+    def test_json_output_can_be_loaded_as_shared_calibration(self):
+        with patch.object(
+            calibrate_meter.sys, "argv", ["camera_calibration.py", "--json"]
+        ):
+            settings, mouse_events = self.run_calibration()
+        self.assertEqual(settings["FRAME_SIZE"], [960, 360])
+        self.assertEqual(settings["REFLECTION"], "vertical")
+        self.assertEqual(settings["SEGMENT_POINTS"], read_meter.SEGMENT_POINTS)
+        self.assertIsNone(settings["SAMPLE_LENGTH_RADIUS"])
+        self.assertEqual(len(mouse_events), 42)
 
     def test_printed_calibration_can_be_copied_into_reader(self):
         settings, mouse_events = self.run_calibration()

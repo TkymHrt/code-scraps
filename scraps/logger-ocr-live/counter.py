@@ -79,7 +79,7 @@ RED_EXCESS_LIMITS = None
 WHITE_MIN = 200
 OFF_FRACTION = 0.15
 ON_FRACTION = 0.65
-STABLE_FRAMES = 3
+STABLE_FRAMES = 1
 
 PATTERN_TO_DIGIT = {
     "1111110": "0",
@@ -346,12 +346,10 @@ def recognize_display(image, sample_coordinates, *, show_segment_scores=False):
             return None
         display_text += digit
 
-    integer_part = display_text[:3].lstrip(" ")
-    fraction_part = display_text[3:]
-    if not integer_part.isdigit() or not fraction_part.isdigit():
+    count_text = display_text.lstrip(" ")
+    if not count_text.isdigit():
         return None
-    decimal_text = f"{integer_part}.{fraction_part}"
-    return float(decimal_text)
+    return int(count_text) / 1000
 
 
 if __name__ == "__main__":

@@ -58,6 +58,9 @@ class ReadMeterTests(unittest.TestCase):
                     value = recognize(make_image(display))
                     self.assertEqual(value, int(display) / 1000)
         self.assertEqual(recognize(make_image("  0000")), 0.0)
+        for display in ("     0", "     1", "    12", "   123", "  1234"):
+            with self.subTest(display=display):
+                self.assertEqual(recognize(make_image(display)), int(display) / 1000)
         for display in ("      ", "12 456", "123 56", "12345 "):
             self.assertIsNone(recognize(make_image(display)))
 
@@ -190,7 +193,9 @@ class ReadMeterTests(unittest.TestCase):
         output = io.StringIO()
         diagnostics = io.StringIO()
         with (
-            patch.multiple(reader, SOURCE="test.avi", REFLECTION="none"),
+            patch.multiple(
+                reader, SOURCE="test.avi", REFLECTION="none", STABLE_FRAMES=3
+            ),
             patch.object(reader.cv2, "VideoCapture", return_value=capture),
             patch.object(sys, "argv", ["counter.py", "--segment-scores"]),
             redirect_stdout(output),
@@ -212,6 +217,23 @@ class ReadMeterTests(unittest.TestCase):
             self.assertEqual(len(json.loads(scores)), 42)
             self.assertEqual(json.loads(white_segments), [7] if index == 3 else [])
         capture.release.assert_called_once()
+
+    def test_default_reports_changing_values_without_waiting_for_equal_frames(self):
+        self.assertEqual(reader.STABLE_FRAMES, 1)
+        frames = [make_image(text) for text in ("     0", "     1", "      ", "    12")]
+        capture = Mock()
+        capture.isOpened.return_value = True
+        capture.get.return_value = 1000.0
+        capture.read.side_effect = [(True, frame) for frame in frames] + [(False, None)]
+        output = io.StringIO()
+        with (
+            patch.multiple(reader, SOURCE="test.avi", REFLECTION="none"),
+            patch.object(reader.cv2, "VideoCapture", return_value=capture),
+            redirect_stdout(output),
+        ):
+            reader.main()
+        values = [json.loads(line)["value"] for line in output.getvalue().splitlines()]
+        self.assertEqual(values, [0.0, 0.001, None, 0.012])
 
     def test_video_mirror_directions_read_the_same_value_without_flipping_frame(self):
         image = make_image("123456")
