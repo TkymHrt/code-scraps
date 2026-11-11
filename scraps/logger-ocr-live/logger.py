@@ -13,14 +13,27 @@ from win32com.client import DispatchEx, dynamic
 SETTINGS_FILE = None
 DEVICE_ID = 0
 UNIT_NUMBER = 1
+CHANNEL_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8]
 READ_INTERVAL = 0.2
-CHANNEL_NAMES = [f"U{UNIT_NUMBER}_CH{channel}" for channel in range(1, 9)]
 
 
 def main(channel_names, managed):
+    if not isinstance(UNIT_NUMBER, int) or isinstance(UNIT_NUMBER, bool) or UNIT_NUMBER < 1:
+        raise ValueError("UNIT_NUMBER は1以上の整数")
+
     if not channel_names and not managed:
-        channel_names = CHANNEL_NAMES
-    channel_indexes = get_channel_indexes(channel_names)
+        channel_names = [f"U{UNIT_NUMBER}_CH{number}" for number in CHANNEL_NUMBERS]
+    if not channel_names:
+        raise ValueError(f"取得する電圧CHを指定（例 U{UNIT_NUMBER}_CH1）")
+
+    channel_indexes = {}
+    for channel_name in channel_names:
+        match = re.fullmatch(rf"U{UNIT_NUMBER}_CH([1-8])", channel_name)
+        if match is None:
+            raise ValueError(
+                f"電圧CHはU{UNIT_NUMBER}_CH1〜U{UNIT_NUMBER}_CH8（指定値 {channel_name}）"
+            )
+        channel_indexes[channel_name] = int(match.group(1)) - 1
 
     if SETTINGS_FILE is None or not Path(SETTINGS_FILE).is_file():
         raise ValueError("SETTINGS_FILE に既存の .ucf ファイルを指定")
@@ -74,24 +87,6 @@ def main(channel_names, managed):
         if start_result is None or start_result == 0:
             logger.Stop()
             time.sleep(10)
-
-
-def get_channel_indexes(channel_names):
-    if not channel_names:
-        raise ValueError(f"取得する電圧CHを指定（例 U{UNIT_NUMBER}_CH1）")
-    if not isinstance(UNIT_NUMBER, int) or isinstance(UNIT_NUMBER, bool) or UNIT_NUMBER < 1:
-        raise ValueError("UNIT_NUMBERは1以上の整数")
-
-    channel_pattern = re.compile(rf"U{UNIT_NUMBER}_CH([1-8])")
-    channel_indexes = {}
-    for channel_name in channel_names:
-        channel_match = channel_pattern.fullmatch(channel_name)
-        if channel_match is None:
-            raise ValueError(
-                f"電圧CHはU{UNIT_NUMBER}_CH1〜U{UNIT_NUMBER}_CH8（指定値 {channel_name}）"
-            )
-        channel_indexes[channel_name] = int(channel_match.group(1)) - 1
-    return channel_indexes
 
 
 def watch_parent(stop_requested):
