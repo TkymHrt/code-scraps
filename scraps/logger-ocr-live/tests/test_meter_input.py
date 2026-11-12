@@ -5,7 +5,7 @@ import io
 import json
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -334,6 +334,43 @@ class MeterInputTests(unittest.TestCase):
         stream.get_current_buffered_image.assert_not_called()
         stream.stop.assert_called_once()
         system.terminate.assert_called_once()
+
+    def test_read_counter_can_be_closed_without_json_or_stdout(self):
+        capture = Mock()
+        capture.isOpened.return_value = True
+        width, height = reader.FRAME_SIZE
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        capture.read.return_value = (True, frame)
+        output = io.StringIO()
+        with (
+            patch.object(reader.cv2, "VideoCapture", return_value=capture),
+            patch.object(reader, "recognize_display", return_value=1.234),
+            patch.object(reader.json, "dumps", side_effect=AssertionError),
+            redirect_stdout(output),
+            closing(reader.read_counter(0, Event())) as messages,
+        ):
+            message = next(messages)
+            capture.release.assert_not_called()
+
+        self.assertEqual(message["value"], 1.234)
+        self.assertIsInstance(message["acquired_mono_ns"], int)
+        self.assertEqual(output.getvalue(), "")
+        capture.release.assert_called_once()
+
+    def test_output_failure_still_releases_camera(self):
+        capture = Mock()
+        capture.isOpened.return_value = True
+        width, height = reader.FRAME_SIZE
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        capture.read.return_value = (True, frame)
+        with (
+            patch.object(reader, "SOURCE", 0),
+            patch.object(reader.cv2, "VideoCapture", return_value=capture),
+            patch.object(reader.json, "dumps", side_effect=OSError("出力失敗")),
+            self.assertRaisesRegex(OSError, "出力失敗"),
+        ):
+            reader.main()
+        capture.release.assert_called_once()
 
 
 if __name__ == "__main__":

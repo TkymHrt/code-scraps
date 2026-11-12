@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, closing, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, call, patch
@@ -27,7 +27,7 @@ class CollectLoggerTests(unittest.TestCase):
         self.logger.OpenFile.return_value = 0
         self.logger.Start.return_value = 0
         self.logger.GetActiveFile.return_value = self.waveform
-        self.logger.GetState.side_effect = [5, 1]
+        self.logger.GetState.side_effect = [5, 1, 1]
 
         self.dispatch_ex = self.contexts.enter_context(
             patch.object(collect_logger, "DispatchEx")
@@ -51,7 +51,7 @@ class CollectLoggerTests(unittest.TestCase):
         self.contexts.enter_context(patch.object(collect_logger.time, "sleep"))
 
     def test_outputs_repeated_current_values_for_requested_channels(self):
-        self.logger.GetState.side_effect = [5, 5, 1]
+        self.logger.GetState.side_effect = [5, 5, 1, 1]
         self.waveform.GetCurrentData.side_effect = [0.0, 1.25, 0.0, 1.25]
 
         collect_logger.main(["U1_CH8", "U1_CH1"], managed=False)
@@ -78,8 +78,11 @@ class CollectLoggerTests(unittest.TestCase):
         )
         self.logger.Stop.assert_called_once()
 
-    def test_standalone_without_arguments_reads_default_eight_channels(self):
-        with patch.object(collect_logger, "Thread") as parent_watcher:
+    def test_standalone_can_read_all_eight_configured_channels(self):
+        with (
+            patch.object(collect_logger, "CHANNEL_NUMBERS", list(range(1, 9))),
+            patch.object(collect_logger, "Thread") as parent_watcher,
+        ):
             collect_logger.main([], managed=False)
         parent_watcher.assert_not_called()
         message = json.loads(self.output.getvalue())
@@ -215,7 +218,7 @@ class CollectLoggerTests(unittest.TestCase):
         self.assertNotIn("Infinity", self.output.getvalue())
 
     def test_waits_for_startup_without_reading_a_stopped_device(self):
-        self.logger.GetState.side_effect = [1, 5, 1]
+        self.logger.GetState.side_effect = [1, 5, 1, 1]
 
         collect_logger.main(["U1_CH1"], managed=False)
 
@@ -251,13 +254,46 @@ class CollectLoggerTests(unittest.TestCase):
         self.assertEqual(self.output.getvalue(), "")
 
     def test_error_state_stops_without_reading(self):
-        self.logger.GetState.side_effect = [11]
+        self.logger.GetState.side_effect = [11, 1]
         self.logger.GetErrorCode.return_value = 123
 
         with self.assertRaisesRegex(RuntimeError, "123"):
             collect_logger.main(["U1_CH1"], managed=False)
 
         self.waveform.GetCurrentData.assert_not_called()
+        self.logger.Stop.assert_called_once()
+
+    def test_read_logger_returns_data_without_json_or_stdout(self):
+        with patch.object(collect_logger.json, "dumps", side_effect=AssertionError):
+            messages = list(collect_logger.read_logger(["U1_CH1"], self.stop_requested))
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["voltages"], {"U1_CH1": 1.25})
+        self.assertIsInstance(messages[0]["acquired_mono_ns"], int)
+        self.assertEqual(self.output.getvalue(), "")
+        self.logger.Stop.assert_called_once()
+
+    def test_closing_read_logger_stops_collection_before_next_read(self):
+        with closing(
+            collect_logger.read_logger(["U1_CH1"], self.stop_requested)
+        ) as messages:
+            next(messages)
+
+        self.waveform.GetCurrentData.assert_called_once_with(1, 0)
+        self.logger.Stop.assert_called_once()
+
+    def test_output_failure_still_stops_collection(self):
+        with patch.object(
+            collect_logger.json, "dumps", side_effect=OSError("出力失敗")
+        ):
+            with self.assertRaisesRegex(OSError, "出力失敗"):
+                collect_logger.main(["U1_CH1"], managed=False)
+        self.logger.Stop.assert_called_once()
+
+    def test_reports_unconfirmed_device_stop(self):
+        self.logger.GetState.side_effect = [5, 1, 5]
+        with self.assertRaisesRegex(RuntimeError, "収集停止未確認.*5"):
+            collect_logger.main(["U1_CH1"], managed=False)
         self.logger.Stop.assert_called_once()
 
 

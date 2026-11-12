@@ -205,7 +205,7 @@ class ReadMeterTests(unittest.TestCase):
         messages = []
         for line in output.getvalue().splitlines():
             message = json.loads(line)
-            self.assertEqual(set(message), {"received_at", "value"})
+            self.assertEqual(set(message), {"received_at", "acquired_mono_ns", "value"})
             messages.append(message["value"])
         self.assertEqual(messages, [None, None, 888.888, None, None, None, 888.888])
         lines = diagnostics.getvalue().splitlines()

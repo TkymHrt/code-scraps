@@ -46,12 +46,15 @@ class CalculateReadingsTests(unittest.TestCase):
     def read_rows(self, messages):
         received_lines = Queue()
         for source, message in messages:
+            message = dict(message, acquired_mono_ns=1_000_000_000)
             received_lines.put((source, json.dumps(message), 1.0))
         received_lines.put(("logger", "", 1.0))
         output = io.StringIO()
         with patch.object(readings.time, "monotonic", return_value=1.0):
             with redirect_stdout(output):
-                self.assertEqual(readings.write_readings_csv(received_lines), "logger")
+                self.assertEqual(
+                    readings.write_readings_csv(received_lines, Queue(), {}), "logger"
+                )
         return list(csv.DictReader(io.StringIO(output.getvalue())))
 
     def test_converts_eight_independent_ranges_and_units_to_csv(self):
@@ -159,6 +162,7 @@ class CalculateReadingsTests(unittest.TestCase):
         received_lines = Queue()
         clock_times = [10.0]
         for processed_at, line_read_at, source, message in events:
+            message = dict(message, acquired_mono_ns=int(line_read_at * 1_000_000_000))
             received_lines.put((source, json.dumps(message), line_read_at))
             clock_times.append(processed_at)
         received_lines.put(("ocr", "", 11.6))
@@ -172,7 +176,9 @@ class CalculateReadingsTests(unittest.TestCase):
             redirect_stdout(output),
             redirect_stderr(notices),
         ):
-            self.assertEqual(readings.write_readings_csv(received_lines), "ocr")
+            self.assertEqual(
+                readings.write_readings_csv(received_lines, Queue(), {}), "ocr"
+            )
 
         rows = csv.DictReader(io.StringIO(output.getvalue()))
         ocr_results = [(row["ocr_status"], row["ocr_value"]) for row in rows]

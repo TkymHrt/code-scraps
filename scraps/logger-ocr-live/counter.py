@@ -3,7 +3,7 @@ import math
 import os
 import sys
 import time
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, closing, nullcontext
 from datetime import UTC, datetime
 from threading import Event, Thread
 
@@ -97,11 +97,24 @@ PATTERN_TO_DIGIT = {
 
 
 def main():
-    if SOURCE is None:
+    stop_requested = Event()
+    if "--managed" in sys.argv:
+        Thread(target=watch_parent, args=(stop_requested,), daemon=True).start()
+    show_segment_scores = "--segment-scores" in sys.argv
+
+    with closing(
+        read_counter(SOURCE, stop_requested, show_segment_scores=show_segment_scores)
+    ) as readings:
+        for message in readings:
+            print(json.dumps(message, allow_nan=False), flush=True)
+
+
+def read_counter(source, stop_requested, *, show_segment_scores=False):
+    if source is None:
         raise ValueError("SOURCE未設定")
-    source_is_teli = isinstance(SOURCE, tuple)
+    source_is_teli = isinstance(source, tuple)
     if source_is_teli:
-        camera_kind, camera_index = SOURCE
+        camera_kind, camera_index = source
         if camera_kind != "teli":
             raise ValueError(f"SOURCEのカメラ種別は 'teli'（{camera_kind!r}）")
     if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
@@ -120,11 +133,6 @@ def main():
             )
     sample_coordinates = prepare_samples(REFLECTION)
 
-    stop_requested = Event()
-    if "--managed" in sys.argv:
-        Thread(target=watch_parent, args=(stop_requested,), daemon=True).start()
-    show_segment_scores = "--segment-scores" in sys.argv
-
     video_frame_interval = None
     with ExitStack() as capture_resources:
         if source_is_teli:
@@ -134,11 +142,11 @@ def main():
                 open_teli_camera(camera_index, stop_requested)
             )
         else:
-            source_is_webcam = isinstance(SOURCE, int)
+            source_is_webcam = isinstance(source, int)
             if source_is_webcam:
-                capture_source = SOURCE
+                capture_source = source
             else:
-                capture_source = str(SOURCE)
+                capture_source = str(source)
             capture = cv2.VideoCapture(capture_source)
             capture_resources.callback(capture.release)
             if not capture.isOpened():
@@ -161,7 +169,7 @@ def main():
 
             read_frame = read_opencv_frame
 
-        read_and_report_frames(
+        yield from read_frames(
             read_frame,
             sample_coordinates,
             stop_requested,
@@ -235,7 +243,7 @@ def watch_parent(stop_requested):
     stop_requested.set()
 
 
-def read_and_report_frames(
+def read_frames(
     read_frame,
     sample_coordinates,
     stop_requested,
@@ -260,6 +268,7 @@ def read_and_report_frames(
                 raise RuntimeError("画像取得失敗")
 
             received_at = datetime.now(UTC).isoformat(timespec="milliseconds")
+            acquired_mono_ns = time.monotonic_ns()
             has_read_a_frame = True
             frame_height, frame_width = frame.shape[:2]
             if [frame_width, frame_height] != FRAME_SIZE:
@@ -285,8 +294,11 @@ def read_and_report_frames(
         confirmed_value = None
         if matching_frame_count >= STABLE_FRAMES:
             confirmed_value = reading
-        message = {"received_at": received_at, "value": confirmed_value}
-        print(json.dumps(message, allow_nan=False), flush=True)
+        yield {
+            "received_at": received_at,
+            "acquired_mono_ns": acquired_mono_ns,
+            "value": confirmed_value,
+        }
 
         if playing_video:
             elapsed_seconds = time.monotonic() - frame_started_at

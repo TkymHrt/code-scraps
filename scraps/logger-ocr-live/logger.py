@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -18,11 +19,25 @@ READ_INTERVAL = 0.2
 
 
 def main(channel_names, managed):
+    if not channel_names and not managed:
+        channel_names = [f"U{UNIT_NUMBER}_CH{number}" for number in CHANNEL_NUMBERS]
+
+    stop_requested = Event()
+    if managed:
+        parent_watcher = Thread(
+            target=watch_parent, args=(stop_requested,), daemon=True
+        )
+        parent_watcher.start()
+
+    with closing(read_logger(channel_names, stop_requested)) as readings:
+        for message in readings:
+            print(json.dumps(message, allow_nan=False), flush=True)
+
+
+def read_logger(channel_names, stop_requested):
     if UNIT_NUMBER < 1:
         raise ValueError("UNIT_NUMBER は1以上を指定")
 
-    if not channel_names and not managed:
-        channel_names = [f"U{UNIT_NUMBER}_CH{number}" for number in CHANNEL_NUMBERS]
     if not channel_names:
         raise ValueError(f"取得する電圧CHを指定（例 U{UNIT_NUMBER}_CH1）")
 
@@ -41,13 +56,6 @@ def main(channel_names, managed):
         raise ValueError("DEVICE_IDは0〜3")
     if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
         raise ValueError("READ_INTERVALは正の秒数")
-
-    stop_requested = Event()
-    if managed:
-        parent_watcher = Thread(
-            target=watch_parent, args=(stop_requested,), daemon=True
-        )
-        parent_watcher.start()
 
     logger, waveform = prepare_logger(SETTINGS_FILE, DEVICE_ID)
     if stop_requested.is_set():
@@ -77,13 +85,18 @@ def main(channel_names, managed):
                 voltages[channel_name] = voltage
 
             received_at = datetime.now(UTC).isoformat(timespec="milliseconds")
-            message = {"received_at": received_at, "voltages": voltages}
-            json_line = json.dumps(message, allow_nan=False)
-            print(json_line, flush=True)
+            yield {
+                "received_at": received_at,
+                "acquired_mono_ns": time.monotonic_ns(),
+                "voltages": voltages,
+            }
             stop_requested.wait(READ_INTERVAL)
     finally:
         logger.Stop()
         time.sleep(10)
+        stopped_state = logger.GetState()
+        if stopped_state != 1:
+            raise RuntimeError(f"収集停止未確認（状態 {stopped_state}）")
 
 
 def watch_parent(stop_requested):
