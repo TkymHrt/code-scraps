@@ -46,7 +46,8 @@ class CalculateReadingsTests(unittest.TestCase):
     def read_rows(self, messages):
         received_lines = Queue()
         for source, message in messages:
-            message = dict(message, acquired_mono_ns=1_000_000_000)
+            message = message.copy()
+            message.setdefault("acquired_mono_ns", 1_000_000_000)
             received_lines.put((source, json.dumps(message), 1.0))
         received_lines.put(("logger", "", 1.0))
         output = io.StringIO()
@@ -143,6 +144,28 @@ class CalculateReadingsTests(unittest.TestCase):
                 )[0]
                 self.assertEqual(row["voltage_status"], "invalid")
                 self.assertEqual(row["ocr_status"], expected)
+
+    def test_late_ocr_leaves_previous_logger_row_waiting(self):
+        first_logger = {
+            "received_at": "2026-11-06T00:00:00.900+00:00",
+            "acquired_mono_ns": 900_000_000,
+            "voltages": self.voltages,
+        }
+        late_ocr = {
+            "received_at": "2026-11-06T00:00:00.880+00:00",
+            "acquired_mono_ns": 880_000_000,
+            "value": 1.234,
+        }
+        next_logger = {
+            "received_at": "2026-11-06T00:00:00.950+00:00",
+            "acquired_mono_ns": 950_000_000,
+            "voltages": self.voltages,
+        }
+        rows = self.read_rows(
+            [("logger", first_logger), ("ocr", late_ocr), ("logger", next_logger)]
+        )
+        ocr_results = [(row["ocr_status"], row["ocr_value"]) for row in rows]
+        self.assertEqual(ocr_results, [("waiting", ""), ("ready", "1.234")])
 
     def test_ocr_timeout_discards_stale_lines_and_recovers(self):
         ocr_message = {"received_at": self.timestamp, "value": 0.0}
