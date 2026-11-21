@@ -43,11 +43,11 @@ Windows PCでNR-600の現在電圧と、計器を撮影した画像のOCR値を�
 
 | スクリプト | 役割 |
 | --- | --- |
-| `logger.py` | NR-600から指定CHの現在電圧を `GetCurrentData()` で読む |
-| `camera_calibration.py` | 各桁7点をクリックし、OCRの校正設定を表示する |
-| `counter.py` | 赤い6桁の7セグをフレームごとに読む |
-| `camera_sdk.py` | TeliCamSDKで東芝テリー製カメラを開き、カラー画像を取得する |
-| `main.py` | `logger.py` と `counter.py` を起動し、電圧の換算とOCR値との時刻照合を行う |
+| `src/logger.py` | NR-600から指定CHの現在電圧を `GetCurrentData()` で読む |
+| `src/camera_calibration.py` | 各桁7点をクリックし、OCRの校正設定を表示する |
+| `src/counter.py` | 赤い6桁の7セグをフレームごとに読む |
+| `src/camera_sdk.py` | TeliCamSDKで東芝テリー製カメラを開き、カラー画像を取得する |
+| `src/main.py` | `logger.py` と `counter.py` を起動し、電圧の換算とOCR値との時刻照合を行う |
 
 ## 実行環境
 
@@ -63,9 +63,9 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
 
 ## 設定と実行
 
-1. 使用するユニットの電圧CH（初期設定ではユニット1のCH1〜8）を有効にし、入力レンジを±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。連続収集・対象CH・入力レンジはWAVE LOGGER PRO側で設定します。
-2. OCRを校正し、表示された5項目をこのフォルダの `counter.py` に貼り付け、入力を選びます。初期の点は既存の合成動画用です。MDR-060Mの赤い6桁7セグを整数として読み、1000で割って `0.000`〜`999.999` として扱います。計器そのものに小数点はありません。[入力の切り替え](#ocrの入力を切り替える)・[OCRの校正手順](#ocrを校正する)
-3. `main.py` の `CHANNELS` に取得・換算するCHを設定します。現在はCH1・2・3・6・7の5CHが有効で、CH4・5・8はコメントアウトしています。対応候補は下表のとおりです。実配線に合わせて名称・単位・2点の換算値を確認し、使用するキーだけを有効にします。現在の設定値を実機で校正済みとは扱わないでください。換算点が未設定・不正なら取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
+1. 使用するユニットの電圧CH（初期設定ではユニット1のCH1〜8）を有効にし、入力レンジを±10Vにして、連続収集用の `.ucf` を作ります。WAVE LOGGER PROを終了し、`src/logger.py` の `SETTINGS_FILE` にそのパスを、`DEVICE_ID` に本体IDを設定します。連続収集・対象CH・入力レンジはWAVE LOGGER PRO側で設定します。
+2. OCRを校正し、表示された5項目を `src` の `counter.py` に貼り付け、入力を選びます。初期の点は既存の合成動画用です。MDR-060Mの赤い6桁7セグを整数として読み、1000で割って `0.000`〜`999.999` として扱います。計器そのものに小数点はありません。[入力の切り替え](#ocrの入力を切り替える)・[OCRの校正手順](#ocrを校正する)
+3. `src/main.py` の `CHANNELS` に取得・換算するCHを設定します。現在はCH1・2・3・6・7の5CHが有効で、CH4・5・8はコメントアウトしています。対応候補は下表のとおりです。実配線に合わせて名称・単位・2点の換算値を確認し、使用するキーだけを有効にします。現在の設定値を実機で校正済みとは扱わないでください。換算点が未設定・不正なら取得を開始しません。計算側がCH名を取得側に渡すため、取得側でCHを重ねて設定する必要はありません。
 
 | CH | 初期の名称 | 信号 |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
 `Ctrl+C` または片方の取得終了で両方の取得を停止します。長時間の無更新や受信処理の失敗でも両方を停止し、自動再起動はしません。終了後はWAVE LOGGER PROの画面で収集停止を確認してください。[無更新・異常・終了の扱い](#無更新異常終了の扱い)
 
 ```powershell
-uv run python main.py
+uv run python src/main.py
 ```
 
 ## 単体で確認する
@@ -105,7 +105,7 @@ uv run python main.py
 
 ### OCRの入力を切り替える
 
-`counter.py` 先頭の `SOURCE = None` を、使う入力に対応する下表の設定例に置き換えます。
+`src/counter.py` 先頭の `SOURCE = None` を、使う入力に対応する下表の設定例に置き換えます。
 
 | 入力 | 設定例 | 実行環境 |
 | --- | --- | --- |
@@ -126,23 +126,23 @@ uv pip install --python .venv\Scripts\python.exe "hoge\wheel_files\pytelicam-1.1
 uv run python -c "import pytelicam; print(pytelicam.__version__)"
 ```
 
-校正にはライブ取得と同じ解像度・向きのPNGを使います。`camera_calibration.py` の `SOURCE` にPNGのパスを設定して校正し、表示された設定を `counter.py` に貼り付け、`SOURCE = ("teli", 0)` に変更します。
+校正にはライブ取得と同じ解像度・向きのPNGを使います。`src` の `camera_calibration.py` の `SOURCE` にPNGのパスを設定して校正し、表示された設定を `counter.py` に貼り付け、`SOURCE = ("teli", 0)` に変更します。
 
 `camera_sdk.py` は開始前にトリガーモードをOFFにし、最新の受信画像をBGR24に変換します。モノクロ画像は受け付けません。解像度や露光はカメラ側で設定し、校正条件と合わせます。画像が1秒間届かなければ取得をエラー終了します。
 
 ### OCRを校正する
 
-このフォルダの `camera_calibration.py` を使います。先頭の `SOURCE` にWebカメラの番号、動画のパス、または校正用PNGのパスを指定します。`REFLECTION` は `none`（補正なし）、`horizontal`（左右反転）、`vertical`（上下反転）、`both`（両方）から選び、既知の数字が正しく見えることを確認します。
+`src` の `camera_calibration.py` を使います。先頭の `SOURCE` にWebカメラの番号、動画のパス、または校正用PNGのパスを指定します。`REFLECTION` は `none`（補正なし）、`horizontal`（左右反転）、`vertical`（上下反転）、`both`（両方）から選び、既知の数字が正しく見えることを確認します。
 
 ```powershell
-uv run python camera_calibration.py
+uv run python src/camera_calibration.py
 ```
 
 `SAMPLE_RADIUS = 1`、`SAMPLE_LENGTH_RADIUS = None` は各点の周囲3×3画素を読みます。`SAMPLE_LENGTH_RADIUS` を `4` にすると、同じ半径1で横線は横長9×3、縦線は縦長3×9になります。線の一部がぼやける場合に試し、プレビューで帯が線の内側に収まり、隣の線や反射を含まない位置を選びます。半径は元の撮影画像上の画素数です。
 
 カメラと計器を固定し、ピントや露光を調整します。全桁が `8` の表示テストなど、消灯部を含む全セグメントの位置が分かる画像を使ってください。
 
-`Space` で画像を止め、左の桁から、各桁の上→右上→右下→下→左下→左上→中央の順に、点灯時に白飛びしない赤い箇所を左クリックします。計42クリックです。`B` で直前の点を取り消せます。42点が揃ったら `Enter` で確定し、出力した `FRAME_SIZE`、`REFLECTION`、`SAMPLE_RADIUS`、`SAMPLE_LENGTH_RADIUS`、`SEGMENT_POINTS` を同じフォルダの `counter.py` に貼り付けます。
+`Space` で画像を止め、左の桁から、各桁の上→右上→右下→下→左下→左上→中央の順に、点灯時に白飛びしない赤い箇所を左クリックします。計42クリックです。`B` で直前の点を取り消せます。42点が揃ったら `Enter` で確定し、出力した `FRAME_SIZE`、`REFLECTION`、`SAMPLE_RADIUS`、`SAMPLE_LENGTH_RADIUS`、`SEGMENT_POINTS` を `src` の `counter.py` に貼り付けます。
 
 動画では停止前に `N` で次のフレームへ進めます。中止は `Q`、`Esc`、画面の×です。中止した場合は設定を出力しません。画像端から読み取り範囲がはみ出す点は受け付けず、同じ部位を選び直します。縮小表示でも点と半径は元の撮影画像の座標です。カメラを動かしたときや解像度を変えたときも再校正します。校正スクリプトは単独で動き、設定値を表示するだけで読み取り側のファイルは書き換えません。
 
@@ -161,28 +161,28 @@ uv run python camera_calibration.py
 OCRだけを動かす場合は、校正した設定と `SOURCE` を指定して次を実行します。ロガーや換算の設定は不要です。
 
 ```powershell
-uv run python counter.py
-uv run python counter.py --segment-scores
+uv run python src/counter.py
+uv run python src/counter.py --segment-scores
 ```
 
 標準出力に `received_at`・`acquired_mono_ns`・`value` のJSONLが出ます。未確定・読取不能は `null` です。読み取り位置は校正画面で、赤みと白い画素は `--segment-scores` で確認できます。
 
 ### ロガーだけ取得する
 
-ロガーだけを動かす場合は、`logger.py` 冒頭の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体ID、`UNIT_NUMBER` に取得対象の入力ユニット番号（初期値 `1`）を設定します。`CHANNEL_NUMBERS` は単体起動で取得するCH番号の一覧です。現在は `[1, 2, 3, 6, 7]` で、例えばCH1・CH3・CH5だけなら `[1, 3, 5]` とします。引数なしで実行すると、この設定に従います。OCRや `main.py` の設定は不要です。
+ロガーだけを動かす場合は、`src/logger.py` 冒頭の `SETTINGS_FILE` に実機の `.ucf`、`DEVICE_ID` に本体ID、`UNIT_NUMBER` に取得対象の入力ユニット番号（初期値 `1`）を設定します。`CHANNEL_NUMBERS` は単体起動で取得するCH番号の一覧です。現在は `[1, 2, 3, 6, 7]` で、例えばCH1・CH3・CH5だけなら `[1, 3, 5]` とします。引数なしで実行すると、この設定に従います。OCRや `src/main.py` の設定は不要です。
 
-`UNIT_NUMBER` を変更する場合は、`.ucf` のユニット構成とCHの設定を確認してください。`main.py` と連携するときは、`main.py` の `CHANNELS` のキー（例：`U2_CH1`）も同じユニット番号に揃える必要があります。
+`UNIT_NUMBER` を変更する場合は、`.ucf` のユニット構成とCHの設定を確認してください。`src/main.py` と連携するときは、`src/main.py` の `CHANNELS` のキー（例：`U2_CH1`）も同じユニット番号に揃える必要があります。
 
-その実行だけ取得するCHを変える場合は、従来どおり引数で `U1_CH3` などのCH名を指定できます（ユニット番号は設定に合わせます）。引数のCH名を `CHANNEL_NUMBERS` より優先します。連携起動時は `main.py` の `CHANNELS` のキーからCH名を渡すため、`CHANNEL_NUMBERS` は参照しません。
+その実行だけ取得するCHを変える場合は、従来どおり引数で `U1_CH3` などのCH名を指定できます（ユニット番号は設定に合わせます）。引数のCH名を `CHANNEL_NUMBERS` より優先します。連携起動時は `src/main.py` の `CHANNELS` のキーからCH名を渡すため、`CHANNEL_NUMBERS` は参照しません。
 
 ```powershell
-uv run python logger.py
-uv run python logger.py U1_CH1 U1_CH8
+uv run python src/logger.py
+uv run python src/logger.py U1_CH1 U1_CH8
 ```
 
-標準出力に `received_at`・`acquired_mono_ns`・取得CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、無効値は `null` です。終了は `Ctrl+C` です。終了後はWAVE LOGGER PROの画面で収集停止を確認します。連携起動では `CHANNEL_NUMBERS` の変更は不要ですが、`UNIT_NUMBER` は `main.py` のCH名と一致させてください。
+標準出力に `received_at`・`acquired_mono_ns`・取得CHの `voltages` のJSONLが出ます。出力は換算前の電圧で、無効値は `null` です。終了は `Ctrl+C` です。終了後はWAVE LOGGER PROの画面で収集停止を確認します。連携起動では `CHANNEL_NUMBERS` の変更は不要ですが、`UNIT_NUMBER` は `src/main.py` のCH名と一致させてください。
 
-`main.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
+`src/main.py` は両方の取得を起動して、電圧の換算とOCR値の時刻照合を行います。片方だけで換算・照合する起動方法はありません。
 
 ## 出力と時刻の照合
 
@@ -200,7 +200,7 @@ NR-600の計測ユニット間同期は±1μs以下であり、今回の速報�
 
 ## 取得関数と単体起動
 
-`logger.py` の `read_logger(channel_names, stop_requested)` と、`counter.py` の `read_counter(source, stop_requested, show_segment_scores=False)` は、データを1件ずつ `yield` する取得関数です。JSONL出力と親の監視は各スクリプトの `main()` に置きます。親の `main.py` は引き続き `subprocess` で2つのスクリプトを起動し、取得関数をimportしません。
+`src/logger.py` の `read_logger(channel_names, stop_requested)` と、`src/counter.py` の `read_counter(source, stop_requested, show_segment_scores=False)` は、データを1件ずつ `yield` する取得関数です。JSONL出力と親の監視は各スクリプトの `main()` に置きます。親の `src/main.py` は引き続き `subprocess` で2つのスクリプトを起動し、取得関数をimportしません。
 
 取得関数は、読み進めたスレッドで機器を開き、停止・解放まで行います。現在は取得子のメインスレッドで実行し、別スレッドでのCOM利用は対象外です。途中で読み取りを終える場合は、単体起動側と同じく `contextlib.closing()` で囲み、必ず閉じます。ジェネレーターの終了処理をGC任せにしません。設定は各スクリプト先頭に残し、汎用の機器クラスや設定クラスは設けません。
 
@@ -230,6 +230,6 @@ NR-600の計測ユニット間同期は±1μs以下であり、今回の速報�
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests
-.\.venv\Scripts\ruff.exe check logger.py counter.py main.py tests
-.\.venv\Scripts\ruff.exe format --check logger.py counter.py main.py tests
+.\.venv\Scripts\ruff.exe check src tests
+.\.venv\Scripts\ruff.exe format --check src tests
 ```

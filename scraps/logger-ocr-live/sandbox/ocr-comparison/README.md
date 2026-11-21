@@ -47,12 +47,12 @@ uv run python sandbox/ocr-comparison/capture_bayer.py --frames 100 --output-dir 
 
 ## 2. 共通の校正設定を作る
 
-親フォルダの`camera_calibration.py`を使います。先頭の`SOURCE`を上で保存した`preview.png`のパスにし、`REFLECTION`は通常`none`にします。必要なら撮影画像を見て向きを決めます。画像やROIを変更したら再校正してください。
+`src`の`camera_calibration.py`を使います。先頭の`SOURCE`を上で保存した`preview.png`のパスにし、`REFLECTION`は通常`none`にします。必要なら撮影画像を見て向きを決めます。画像やROIを変更したら再校正してください。
 
 各セグメントの中心を選び、領域がセグメント内に収まるよう`SAMPLE_RADIUS`・`SAMPLE_LENGTH_RADIUS`を調整します。Bayer方式には領域内に少なくとも1個の赤画素が必要です。赤画素がない領域は開始時にエラーにします。実画像で赤画素が十分に含まれる大きさを選んでください。
 
 ```powershell
-uv run python camera_calibration.py --json | Set-Content -Encoding utf8 sandbox/ocr-comparison/calibration.json
+uv run python src/camera_calibration.py --json | Set-Content -Encoding utf8 sandbox/ocr-comparison/calibration.json
 ```
 
 通常どおり42点を選んでEnterで確定すると、5項目をJSONで保存します。中止すると設定が出ないので、保存ファイルが空の場合は校正をやり直してください。既存の本体向け設定表示は`--json`を付けずに使えます。
@@ -91,11 +91,11 @@ uv run python sandbox/ocr-comparison/read_bayer_red.py sandbox/ocr-comparison/ca
 
 2026-11-11: 合成したBayerBG8画像と模擬SDKで、OCR関連45テスト成功。全数字・ゼロサプレス・反転4方向・白反射・曖昧な判定・保存後の再生・バッファ解放後の画像保持・重複フレーム・保存失敗時の終了処理を確認しました。Ruffの検査・整形確認も成功しています。
 
-全体テストは71件中70件成功。既存の`test_standalone_without_arguments_reads_default_eight_channels`は、現在の`logger.py`の設定が5CH（1・2・3・6・7）であるのに8CHを期待するため失敗します。今回ロガーの設定・テストは変更していません。
+全体テストは71件中70件成功。既存の`test_standalone_without_arguments_reads_default_eight_channels`は、現在の`src/logger.py`の設定が5CH（1・2・3・6・7）であるのに8CHを期待するため失敗します。今回ロガーの設定・テストは変更していません。
 
 実機の撮影・最適露光・閾値・性能差は未検証です。実データと出力は、このフォルダの`.gitignore`で除外します。
 
 ```powershell
 uv run python -m unittest discover -s tests
-uv run ruff check counter.py camera_calibration.py sandbox/ocr-comparison tests
+uv run ruff check src/counter.py src/camera_calibration.py sandbox/ocr-comparison tests
 ```

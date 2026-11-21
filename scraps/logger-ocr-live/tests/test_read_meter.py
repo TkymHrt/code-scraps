@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-SCRIPT = Path(__file__).resolve().parents[1] / "counter.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "src" / "counter.py"
 SPEC = importlib.util.spec_from_file_location("logger_reader_under_test", SCRIPT)
 reader = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reader)

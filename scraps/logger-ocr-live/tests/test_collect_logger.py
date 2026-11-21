@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-SCRIPT = Path(__file__).resolve().parents[1] / "logger.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "src" / "logger.py"
 SPEC = importlib.util.spec_from_file_location("live_collect_logger", SCRIPT)
 collect_logger = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(collect_logger)

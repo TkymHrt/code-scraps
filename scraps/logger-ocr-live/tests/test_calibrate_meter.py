@@ -13,15 +13,15 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-TOPIC = Path(__file__).resolve().parents[1]
+SOURCE_FOLDER = Path(__file__).resolve().parents[1] / "src"
 reader_spec = importlib.util.spec_from_file_location(
-    "logger_reader_for_calibration", TOPIC / "counter.py"
+    "logger_reader_for_calibration", SOURCE_FOLDER / "counter.py"
 )
 read_meter = importlib.util.module_from_spec(reader_spec)
 reader_spec.loader.exec_module(read_meter)
 
 calibration_spec = importlib.util.spec_from_file_location(
-    "logger_calibration_under_test", TOPIC / "camera_calibration.py"
+    "logger_calibration_under_test", SOURCE_FOLDER / "camera_calibration.py"
 )
 calibrate_meter = importlib.util.module_from_spec(calibration_spec)
 calibration_spec.loader.exec_module(calibrate_meter)

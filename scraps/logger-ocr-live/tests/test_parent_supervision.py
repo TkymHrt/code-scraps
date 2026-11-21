@@ -13,7 +13,7 @@ from queue import Queue
 from threading import Event, Thread
 from unittest.mock import Mock, patch
 
-SCRIPT = Path(__file__).resolve().parents[1] / "main.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "src" / "main.py"
 SPEC = importlib.util.spec_from_file_location("parent_under_test", SCRIPT)
 parent = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parent)
