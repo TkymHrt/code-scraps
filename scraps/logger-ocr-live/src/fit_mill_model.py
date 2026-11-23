@@ -65,11 +65,13 @@ def read_measurements(path):
                         value = float(field)
                     except ValueError:
                         value = math.nan
-                    if not math.isfinite(value) or (
-                        column == "width_mm" and value <= 0
-                    ):
+                    if not math.isfinite(value):
                         raise ValueError(
                             f"{rows.line_num}行目の {column} の数値を確認してください"
+                        )
+                    if column in ("width_mm", "measured_thickness_mm") and value <= 0:
+                        raise ValueError(
+                            f"{rows.line_num}行目の {column} は正の値を指定してください"
                         )
                     values.append(value)
                 measurements.append((row, values))
@@ -190,9 +192,10 @@ def fit_width_model(model, by_width, p0):
     width_factors = [width_factor(width, full_model) for width in check_widths]
     if not all(math.isfinite(kb) and kb > 0 for kb in width_factors):
         raise ValueError("板幅範囲内にkbが正にならない幅があります")
-    min_kb = min(width_factors)
-    for load in (load_min, load_max, p0):
-        stiffness_at_load(load, min_kb, full_model)
+    for width, curve in by_width.items():
+        kb = width_factor(width, full_model)
+        for load in (p0, *curve["load_range"]):
+            stiffness_at_load(load, kb, full_model)
     return full_model
 
 

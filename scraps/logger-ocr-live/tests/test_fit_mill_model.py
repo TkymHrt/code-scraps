@@ -100,6 +100,29 @@ class FitMillModelTests(unittest.TestCase):
             )
             self.assertAlmostEqual(float(returned["error_mm"]), 0, places=10)
 
+    def test_fits_widths_with_separate_measured_load_ranges(self):
+        rows = []
+        loads_by_width = {600: (10, 15, 20), 800: (25, 30, 35), 1000: (45, 50, 55)}
+        for width, loads in loads_by_width.items():
+            kb = width / 1000
+            zero = math.sqrt(100**2 - 120 * 7 / kb)
+            for gap, load in zip((-0.01, 0, 2), loads, strict=True):
+                loaded = math.sqrt(100**2 - 120 * load / kb)
+                rows.append(["op", width, load, gap, gap + (zero - loaded) / 60])
+        self.write_measurements(rows)
+
+        process = self.run_fit()
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result, comparison = self.read_outputs()
+        model = result["op"]["model"]
+        self.assertEqual(model["width_range_mm"], [600, 1000])
+        self.assertEqual(model["load_range"], [10, 55])
+        self.assertAlmostEqual(model["c4"], 1)
+        self.assertEqual(len(comparison), 9)
+        for row in comparison:
+            self.assertAlmostEqual(float(row["error_mm"]), 0, places=10)
+
     def test_keeps_reference_fit_when_widths_are_insufficient_and_repeats_safely(self):
         rows = list(synthetic_rows("op", 7, (100, 0, 1, 0, 0), [900, 1000]))
         rows += [["dr", 1000, 25, 2, 2.2], ["dr", 1000, 25, 3, 3.2]]
@@ -148,13 +171,13 @@ class FitMillModelTests(unittest.TestCase):
         self.assertIn("kbが正にならない", result["op"]["fit"]["reason"])
 
     def test_reports_bad_csv_column_and_does_not_create_results(self):
-        self.write_measurements([["op", 1000, 12, 1.5, ""]])
-
-        process = self.run_fit()
-
-        self.assertEqual(process.returncode, 2)
-        self.assertIn("2行目の measured_thickness_mm", process.stderr)
-        self.assertEqual(list(self.trial.glob("fit-*")), [])
+        for thickness in ("", 0, -0.01):
+            with self.subTest(thickness=thickness):
+                self.write_measurements([["op", 1000, 12, 1.5, thickness]])
+                process = self.run_fit()
+                self.assertEqual(process.returncode, 2)
+                self.assertIn("2行目の measured_thickness_mm", process.stderr)
+                self.assertEqual(list(self.trial.glob("fit-*")), [])
 
 
 if __name__ == "__main__":
