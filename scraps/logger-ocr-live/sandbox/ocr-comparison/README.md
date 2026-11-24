@@ -1,101 +1,178 @@
-# BG505LMCF・MDR-060MのOCR比較
+# 1台のカメラでOP／DRの2表示を読む比較試験
 
-同じBayer画像・同じ校正領域を使い、BGRの赤画素率とBayerの赤画素の中央値を比較します。各スクリプトは単独で動き、親フォルダのPythonモジュールを読み込みません。
+保存画像で読み方を試すスクリプトです。本体の`src`、ロガー、親プロセスを使わず、このフォルダだけで撮影・校正・比較ができます。本体への方式採用とライブ取得への組込みは別作業です。
 
-対象はBG505LMCFのBayerBG8です。カメラ側の反転はOff、ROI開始位置は偶数とし、受信画像の左上から `B G / G R` の配列として扱います。10/12bit、領域の自動校正、Bayerの色間比較は次の段階です。
-
-MDR-060Mには小数点がなく、現場では6桁の中央に小数点があるものとして読みます。整数の表示値を取得して1000で割り、`123456`は`123.456`、先頭が消灯した`    12`は`0.012`とします。全桁消灯・途中の空白・不正なパターン・曖昧な点灯は欠測です。各フレームで判定し、連続一致待ちはしません。
-
-## スクリプト
-
-| ファイル | 内容 |
+| スクリプト | 役割 |
 | --- | --- |
-| `capture_bayer.py` | GigEカメラから最新のBayerBG8画像をコピーし、無圧縮の`.npy`と撮影情報を保存 |
-| `read_bgr_fraction.py` | 保存画像をOpenCVのバイリニア補間でBGRへ変換し、現行と同じ赤画素率・白い画素率の規則で判定 |
-| `read_bayer_red.py` | 同じ領域内の赤画素だけを選び、その中央値で判定 |
+| `capture_bayer.py` | BG505LMCFからBayerBG8を保存。カメラSDKが必要なのはこの処理だけ |
+| `calibrate.py` | 保存した静止画像でOP／DR各42点を指定し、校正JSONを保存 |
+| `compare.py` | 同じ画像・校正点で固定二値化、適応二値化、Bayer赤画素の中央値を比較 |
 
-BGR変換はOpenCVを使うため、TeliCamSDKのBGR変換と画素単位で同一とは保証しません。赤画素だけの方式は白い反射と赤いLEDを区別できません。BGR方式の白判定は残して比較します。
+校正・比較にはNumPyとOpenCVを使います。校正画面は**Qt対応OpenCV**の標準機能で拡大・移動します。Matplotlibや独自のズーム処理は使いません。以下のコマンドは`logger-ocr-live`フォルダで実行します。この3ファイルを別の場所に置いても、本体モジュールは不要です。
 
-閾値は各スクリプトの先頭に置いています。BGR側は現行の初期値、Bayer側は消灯上限30・点灯下限70です。Bayer側の値は実機で未調整です。`segment_scores`を見て調整し、比較記録にも使った値を残します。
+## WindowsのQt環境
 
-## 1. Bayer画像を保存する
+PyPIのWindows用`opencv-python`はWIN32表示のため、Qt版を含むconda-forgeの環境を別に作ります。`pip install PyQt6`だけではOpenCVをQt版に切り替えられません。本体用の`.venv`はそのまま使い、比較試験用はリポジトリ外の`%LOCALAPPDATA%\code-scraps\logger-ocr-qt`に置きます。
 
-以下のコマンドはすべて`logger-ocr-live`フォルダから実行します。親READMEの環境構築とpytelicam導入を済ませてください。画像の再生・判定にはpytelicamは不要です。
-
-メーカーのビューアでピント・露光・ゲイン・ROIを調整します。露光制御をManual、自動ゲインと自動ホワイトバランスをOff、カメラのReverseX・ReverseYをOffにします。その後ビューアを終了します。
+初回だけ、[公式配布のmicromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)を展開します。シェルの設定やシステムのPATHは変更しません。
 
 ```powershell
-uv run python sandbox/ocr-comparison/capture_bayer.py --frames 100 --output-dir sandbox/ocr-comparison/captures/run-01
+$qtTools = Join-Path $env:LOCALAPPDATA 'code-scraps/qt-tools'
+New-Item -ItemType Directory -Force $qtTools | Out-Null
+Invoke-WebRequest 'https://micro.mamba.pm/api/micromamba/win-64/latest' -OutFile "$qtTools/micromamba.tar.bz2"
+tar -xjf "$qtTools/micromamba.tar.bz2" -C $qtTools Library/bin/micromamba.exe
 ```
 
-`--camera-index`の初期値は0です。保存先を省略すると、このフォルダの`captures/`内にUTC日時のフォルダを作ります。既存フォルダには書き込みません。最初は短い記録で空き容量と保存時間を確認してください。全画素100枚の画像部分は約501MBです。
+続けて環境を作ります。新しいPowerShellを開いたときも、先頭の3変数を設定してから実行コマンドを使います。環境の作成は初回のみです。
 
-取得開始時にTriggerModeをOff、PixelFormatをBayerBG8にします。露光時間・ゲイン・画像補正・ROIは現在の設定を使い、設定値を`session.json`に記録します。保存処理はカメラのユーザー設定保存を実行しません。カメラ側の`BayerProcessingMode=Raw`と、SDKで変換せず画像を取り出す`OutputImageType.Raw`は別の設定です。黒レベル・ガンマ・色ゲインは設定値として残り、カメラ側のRawモードでは適用されません。
+```powershell
+$qtMamba = Join-Path $env:LOCALAPPDATA 'code-scraps/qt-tools/Library/bin/micromamba.exe'
+$qtRoot = Join-Path $env:LOCALAPPDATA 'code-scraps/mamba'
+$qtPrefix = Join-Path $env:LOCALAPPDATA 'code-scraps/logger-ocr-qt'
+& $qtMamba create --root-prefix $qtRoot --prefix $qtPrefix --file sandbox/ocr-comparison/environment-qt.yml --yes
+& $qtMamba run --prefix $qtPrefix python -c "import cv2; print(cv2.__version__, cv2.currentUIFramework())"
+```
+
+`5.0.0 QT`のように`QT`が出ることを確認します。校正はQt以外では起動時にエラーにします。Qt環境にはpip版OpenCVを重ねて入れず、`uv sync`も実行しません。必要なDLLの検索先を設定するため、環境内の`python.exe`を直接実行せず、上の`micromamba run`経由で起動します。
+
+## 1. 試験画像を用意する
+
+### カメラが届く前・通常の画像を使う場合
+
+OP／DRの両表示が写った静止画像を用意します。JPEG・BMP・PNGなど、OpenCVが読める形式を使えます。拡張子による形式制限はありません。動画のフレーム選択・画像への書き出しは動画プレーヤーなどで行います。実データはリポジトリ外か、このフォルダの`captures/`に置きます。
+
+校正と判定は同じ解像度・切り出し・向きの画像を使います。画像は8bit BGRとして読み、EXIFによる自動回転は行いません。保存画像の向きは表示して確認してください。JPEGも使えますが、圧縮の影響を避けたい比較では無劣化の画像を使います。
+
+通常画像では固定二値化と適応二値化を比較します。BGRのRチャンネルを生Bayerの代わりにはしません。
+
+### BG505LMCFから記録する場合
+
+親READMEのTeliCamSDK導入を済ませ、Qt環境で撮影する場合は同じPython 3.13用pytelicam wheelを`& $qtMamba run --prefix $qtPrefix python -m pip install "配布物内のwheelの実パス"`で追加します。撮影だけはpytelicam導入済みの本体用`.venv`でも実行でき、保存物をQt環境で校正・比較できます。SDKの実機動作はカメラ接続後に確認します。
+
+メーカーのビューアでピント・露光・ゲイン・ROIを調整し、露光をManual、GainAutoとBalanceWhiteAutoをOff、ReverseX・ReverseYをOff、ROI開始位置OffsetX・OffsetYを偶数にします。その後ビューアを終了します。
+
+```powershell
+& $qtMamba run --prefix $qtPrefix python sandbox/ocr-comparison/capture_bayer.py --frames 100 --output-dir sandbox/ocr-comparison/captures/run-01
+```
+
+カメラ番号は既定で0です。保存先の既存フォルダには書き込みません。最初は少ない枚数で撮影条件と保存時間を確認します。全画素100枚の画像部分は約501MBです。
+
+取得時にTriggerModeをOff、PixelFormatをBayerBG8にし、露光・ゲイン・画像補正・ROIは現在の設定を使います。カメラのユーザー設定保存は実行しません。
 
 | 保存物 | 内容 |
 | --- | --- |
-| `session.json` | 機種・製造番号・画像形式・解像度・ROI開始位置・反転・露光・ゲイン・色ゲイン等の開始時の設定 |
-| `frames.jsonl` | 保存できた画像のファイル名、PC取得時刻、カメラのフレーム番号・時刻、待ち・コピー・保存の時間 |
-| `frame-000000.npy`以降 | SDKのバッファを解放する前にコピーしたBayer画像 |
-| `preview.png` | 最初の画像をBGRに変換した、元の解像度の校正用画像 |
+| `session.json` | 機種・解像度・ROI・反転・露光・ゲイン等の撮影条件 |
+| `frames.jsonl` | 画像ファイル名、PC取得時刻、カメラのフレーム番号・時刻、取得・保存時間 |
+| `frame-000000.npy`以降 | SDKのバッファを解放する前にコピーしたBayerBG8画像 |
+| `preview.png` | 最初の画像をBGRへ変換した校正用画像 |
 
-取得は最新画像を使うため、全フレームの保存を保証しません。ディスク保存や最初のプレビュー生成中にも撮影は進みます。`block_gap`は直前に保存したフレーム番号からの飛び数です。初回・番号の減少時は`null`とし、折り返し・再開始の推測はしません。飛びがあっても、通信損失か処理による読み飛ばしかはこの項目だけでは区別できません。
+最新画像を取得するため、全フレームの保存は保証しません。`block_gap`は保存したフレーム番号の飛び数で、通信損失と処理による読み飛ばしを区別しません。PC時刻`received_at`は撮影時刻ではなく、カメラの`timestamp_ticks`とも別の時計です。
 
-`received_at`はBayerのコピー前にPCで付けた時刻で、撮影時刻ではありません。`timestamp_ticks / timestamp_tick_frequency_hz`でカメラ時計の秒数になりますが、PCのUTC時刻とは別の時計です。
+カメラ側の`BayerProcessingMode=Raw`と、SDKから変換せず取り出す`OutputImageType.Raw`は別の設定です。黒レベル・ガンマ・色ゲインは記録に残りますが、カメラ側のRawモードでは適用されません。
 
-`Ctrl+C`で中断できます。中断・失敗までに`frames.jsonl`へ記録できた画像は判定に使えます。最後に未記録の`.npy`が残った場合、判定側は読みません。
+`Ctrl+C`で中断できます。比較で使うのは`frames.jsonl`に記録できた画像だけです。10/12bitや別のBayer配列は扱いません。
 
-## 2. 共通の校正設定を作る
+## 2. OP／DRを校正する
 
-`src`の`camera_calibration.py`を使います。先頭の`SOURCE`を上で保存した`preview.png`のパスにし、`REFLECTION`は通常`none`にします。必要なら撮影画像を見て向きを決めます。画像やROIを変更したら再校正してください。
+`calibrate.py`先頭の設定を編集します。`FOLDER`はこのスクリプトのあるフォルダです。
 
-各セグメントの中心を選び、領域がセグメント内に収まるよう`SAMPLE_RADIUS`・`SAMPLE_LENGTH_RADIUS`を調整します。Bayer方式には領域内に少なくとも1個の赤画素が必要です。赤画素がない領域は開始時にエラーにします。実画像で赤画素が十分に含まれる大きさを選んでください。
-
-```powershell
-uv run python src/camera_calibration.py --json | Set-Content -Encoding utf8 sandbox/ocr-comparison/calibration.json
+```python
+SOURCE = FOLDER / "captures/run-01/preview.png"
+OUTPUT = FOLDER / "calibration.json"
+REFLECTION = "none"
+SAMPLE_RADIUS = 1
+SAMPLE_LENGTH_RADIUS = None
 ```
 
-通常どおり42点を選んでEnterで確定すると、5項目をJSONで保存します。中止すると設定が出ないので、保存ファイルが空の場合は校正をやり直してください。既存の本体向け設定表示は`--json`を付けずに使えます。
+`SOURCE`はJPEGなどにも変更できます。`OUTPUT`の親フォルダは用意しておきます。既存ファイルには上書きしないため、やり直すときは別名を指定するか、不要な校正ファイルを自分で削除します。
 
-両判定スクリプトは同じJSONを読みます。反転を指定しても、判定座標は元のBayer画像へ戻してから赤画素を選びます。生のBayer画像を反転・拡大縮小してから色を振り分けることはしません。
-
-## 3. 同じ記録を判定する
+`REFLECTION`は`none`・`horizontal`・`vertical`・`both`。両表示が同じ補正で正しく見える取付けを前提とします。カメラの反転機能は使わず、ここで見た目を補正します。
 
 ```powershell
-New-Item -ItemType Directory -Force sandbox/ocr-comparison/results
-uv run python sandbox/ocr-comparison/read_bgr_fraction.py sandbox/ocr-comparison/captures/run-01 --calibration sandbox/ocr-comparison/calibration.json > sandbox/ocr-comparison/results/bgr.jsonl 2> sandbox/ocr-comparison/results/bgr-summary.jsonl
-uv run python sandbox/ocr-comparison/read_bayer_red.py sandbox/ocr-comparison/captures/run-01 --calibration sandbox/ocr-comparison/calibration.json > sandbox/ocr-comparison/results/bayer.jsonl 2> sandbox/ocr-comparison/results/bayer-summary.jsonl
+& $qtMamba run --prefix $qtPrefix python sandbox/ocr-comparison/calibrate.py
 ```
 
-標準出力はフレームごとのJSONLです。`file`と`block_id`で両方式を対応付けます。
+1. 全セグメントの位置が分かる画像を使います。可能なら両計器の表示テストを利用します。
+2. **OP側を先に**、左から各桁の上→右上→右下→下→左下→左上→中央をクリックします。42点です。
+3. 続けて**DR側**を同じ順で42点指定します。画像の左にある計器がOPとは限りません。実機の対応を確認します。
+4. OPは黄色、DRは水色で読み取り範囲が表示されます。84点を確認し、Enterで保存します。
 
-| 項目 | 意味 |
+画像上の**ホイールでカーソル位置を中心に拡大縮小**し、拡大中の**左ドラッグで移動**します。Qt標準ツールバーの元のサイズへ戻すボタンで全体表示に戻せます。拡大・移動モードの切替は不要です。点は移動せずに左クリックを離したときだけ確定し、ドラッグ操作は点として登録しません。
+
+拡大・移動・画面サイズの変更後も選択済みの点を保持します。座標変換はQt版OpenCVに任せ、コールバックに渡された元画像座標を保存します。[OpenCVのQt表示](https://docs.opencv.org/4.x/dc/d46/group__highgui__qt.html)
+
+`B`で直前の点を取り消せます。OP／DRの境界を戻ることもできます。`Q`・Esc・ウィンドウの×で中止し、中止時はファイルを作りません。静止画像なので一時停止やコマ送りはありません。設定は先頭、操作説明はこのREADMEと画面に置き、CLIの出力形式切替や独自ヘルプは設けていません。
+
+校正JSONの保存は84点指定後のEnterです。ツールバーの保存ボタンは表示画像の書き出しで、校正JSONの保存ではありません。
+
+点は赤い縁を探すのではなく、セグメントの内側を選びます。半径1・長手半径Noneなら3×3画素、長手半径3なら横線は7×3、縦線は3×7画素です。隣の線や背景が入らず、Bayer比較では赤画素を十分含む大きさにします。
+
+JSONには画像サイズ、反転、読み取り半径、`op_points_px`・`dr_points_px`（各6桁×7点）と元画像のパスが入ります。座標は向き補正後の画像上の元解像度で、表示サイズには依存しません。比較では反転前の座標に戻して画素を読みます。生Bayer画像を反転してから赤画素を選ぶことはしません。
+
+閾値を調整するだけなら再校正は不要です。カメラ・計器・ミラーの位置や、解像度・ROIを変えたときは再校正します。同じ画像サイズのまま位置が変わった場合はプログラムでは検出できません。
+
+## 3. 同じ画像で方式を比較する
+
+`compare.py`先頭の設定を編集します。
+
+```python
+SOURCE = FOLDER / "captures/run-01"
+CALIBRATION = FOLDER / "calibration.json"
+OUTPUT_DIR = FOLDER / "results/run-01"
+```
+
+`SOURCE`がフォルダなら`capture_bayer.py`の記録を読み、3方式を比較します。通常画像では`SOURCE = FOLDER / "captures/trial.jpg"`のように画像ファイルを指定します。通常画像のフォルダ一括読込や動画再生は行いません。
+
+```powershell
+& $qtMamba run --prefix $qtPrefix python sandbox/ocr-comparison/compare.py
+```
+
+`OUTPUT_DIR`は毎回新しい名前にします。既存フォルダには書き込みません。判定条件は`THRESHOLDS`のOP／DR欄と`OFF_FRACTION`・`ON_FRACTION`です。
+
+| 設定 | 意味・初期値 |
 | --- | --- |
-| `display` | 認識した6文字。先頭の空白を保持。判定途中で失敗した場合は`null` |
-| `raw_value` / `value` | 整数表示 / 1000で割った値。欠測はどちらも`null` |
-| `reason` | `ok`、`ambiguous`（点灯・消灯の中間）、`invalid_pattern`、`invalid_display`（全消灯・途中の空白等）、`white`（BGRのみ） |
-| `segment_scores` | 左から各桁の上・右上・右下・下・左下・左上・中央の順の42個の値。BGRは赤画素率、Bayerは赤画素の中央値 |
-| `load_ms` | `.npy`の読込時間 |
-| `convert_ms` | BGR変換時間。Bayer方式は変換しないので0 |
-| `recognize_ms` | 領域の画素取得から数字への復号までの時間 |
+| `binary` | グレースケールの固定閾値。111より大きい画素を白にする |
+| `block_size`, `c` | 適応二値化の近傍サイズ25と定数0。`ADAPTIVE_THRESH_GAUSSIAN_C`・`THRESH_BINARY`を使う |
+| `OFF_FRACTION`, `ON_FRACTION` | 白画素率が0.15以下なら消灯、0.65以上なら点灯。その間は欠測 |
+| `off_red`, `on_red` | 生Bayer赤画素の中央値が30以下なら消灯、70以上なら点灯。その間は欠測 |
 
-標準エラーの最初の行に閾値・校正設定・領域ごとの使用画素数、最後の行に読取可能件数・欠測件数と各処理時間の中央値・95パーセンタイルを出します。画像読込は`load_ms`、BGR変換は`convert_ms`として分けています。ファイル出力・コンソール表示はこれらの処理時間に含みません。再生時の速度を、そのままライブ取得のFPSや遅延とは扱いません。
+111・25・0はGoProでの試行を出発点にした値で、本番カメラの調整済み設定ではありません。赤画素の閾値も未調整です。OP／DRで明るさが違う場合は各側の値を変更します。位置の校正JSONは共用します。
 
-## 比較する条件
+二値化はBGRをグレースケールへ変換して行います。各側の読み取り領域を囲み、適応二値化の近傍半径分を加えた範囲を処理します。3×3などの小さなサンプル領域だけを切り出して適応二値化することはありません。白飛びだけを理由とした除外はありません。白い映り込みも点灯に見えるため、消灯位置での誤読を確認します。
 
-ゼロ付近・各数字・桁上がり／桁下がり・リセット・通常の変化速度・強い反射を含む短い記録を用意します。まず同じ校正領域で読み方だけを比較し、その後に領域の自動設定を比較します。
+| 出力 | 内容 |
+| --- | --- |
+| `settings.json` | 実際に使った撮影条件、校正、閾値、二値化画像の切り出し範囲 |
+| `results.jsonl` | 1画像・1側・1方式につき1行。Bayerなら1画像で6行、通常画像なら4行 |
+| `op-binary.png`など4枚 | 最初の画像のOP／DR各固定・適応二値化。反転前の向きで保存 |
+| `summary.json` | 処理完了時の画像数と側・方式・理由別の件数。途中で失敗した場合は作らない |
 
-読取可能件数は正解件数ではありません。既知の表示や人が確認できる画像に正解を付け、`ok`の誤読と欠測を分けて確認してください。切替え途中など人にも値を決められない画像は、その状態を記録します。各方式で閾値を調整した記録と、最終評価用の記録も分けます。
+各行は`file`・`block_id`・`side`・`method`で対応付けます。`display`は先頭空白を保つ6文字、`raw_value`は整数、`value`は1000で割った値です。`reason`は`ok`・`ambiguous`・`invalid_pattern`・`invalid_display`。`segment_scores`は各桁7点の順の42個で、二値化は白画素率、Bayerは赤画素の中央値です。
 
-## 検証記録
+先頭消灯はゼロサプレスとして許容し、`    12`は`0.012`です。全消灯、途中・末尾の空白、不正な7セグパターン、曖昧な点灯はその側だけを欠測にします。OPの欠測でDRは捨てず、前フレームの値で補いません。連続一致待ちもしません。
 
-2026-11-11: 合成したBayerBG8画像と模擬SDKで、OCR関連45テスト成功。全数字・ゼロサプレス・反転4方向・白反射・曖昧な判定・保存後の再生・バッファ解放後の画像保持・重複フレーム・保存失敗時の終了処理を確認しました。Ruffの検査・整形確認も成功しています。
+`load_ms`は画像読込、`bgr_gray_ms`は共通のBGR・グレースケール変換、`process_ms`はその側・方式の処理時間です。共通時間は同じ画像の各行に同じ値を記録するため合計しません。Bayer赤画素判定自体はBGR変換を必要としません。ファイル出力時間は含まず、この数値をライブ取得のFPSや遅延とは扱いません。
 
-全体テストは71件中70件成功。既存の`test_standalone_without_arguments_reads_default_eight_channels`は、現在の`src/logger.py`の設定が5CH（1・2・3・6・7）であるのに8CHを期待するため失敗します。今回ロガーの設定・テストは変更していません。
+## 確認する点
 
-実機の撮影・最適露光・閾値・性能差は未検証です。実データと出力は、このフォルダの`.gitignore`で除外します。
+- 全数字、ゼロ付近、桁上がり・桁下がり、通常の変化速度、強い反射を含む記録を使う。
+- 点灯・消灯の判定値の間に余裕があるかを見る。閾値を決めた記録と、評価する記録を分ける。
+- 適応二値化でセグメントの中心が黒く抜けていないか、保存画像と判定値で確認する。
+- `ok`の件数を正解件数と扱わない。既知の表示や目視の正解と照合し、誤読と欠測を分ける。
+- 片側の白飛び・反射や表示切替中に、もう片側の読み取りが保たれるかを見る。
+
+形式名の網羅的な検証、位置の自動検出、校正ファイルの自動修復は行いません。読込失敗、画像サイズ・座標・Bayer配列の不一致、赤画素不足、判定閾値の不正、保存先の既存データはチェックします。撮影条件の固定、OP／DRの対応、画像の選択、取付け変更時の再校正は運用で確認します。
+
+## 既存の1表示比較
+
+`read_bgr_fraction.py`と`read_bayer_red.py`は従来の1表示試作として残しています。新しい2表示JSONとは互換性がありません。既存の1表示校正JSONと記録でのみ使います。BGR方式は赤画素率と白い画素の除外、Bayer方式は赤画素の中央値を使います。今回の2表示試験には上記3スクリプトを使います。
+
+## 検証
 
 ```powershell
-uv run python -m unittest discover -s tests
-uv run ruff check src/counter.py src/camera_calibration.py sandbox/ocr-comparison tests
+& $qtMamba run --prefix $qtPrefix python -B -m unittest discover -s tests
+& $qtMamba run --prefix $qtPrefix ruff check src sandbox/ocr-comparison tests
+& $qtMamba run --prefix $qtPrefix ruff format --check src sandbox/ocr-comparison tests
 ```
+
+合成画像と模擬入力で、2台の全数字・反転・ゼロサプレス・片側欠測、静止画像の形式、校正の取り消し・中止・上書き防止、標準ツールバーでの拡大・移動・全体表示後の座標、独立したフォルダでの比較実行を検証します。実機の撮影・最適露光・閾値・性能差は現物で確認してください。`captures/`・`results/`・`calibration.json`はGitの対象外です。
