@@ -1,4 +1,3 @@
-import argparse
 import json
 import sys
 import time
@@ -8,6 +7,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+FOLDER = Path(__file__).resolve().parent
+CAMERA_INDEX = 0
+FRAME_COUNT = 1
+OUTPUT_DIR = FOLDER / "captures/run-01"
 
 
 def check_status(status, operation):
@@ -23,21 +27,12 @@ def checked_value(result, operation):
     return value
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="BG505LMCFのBayerBG8画像を保存する")
-    parser.add_argument("--camera-index", type=int, default=0)
-    parser.add_argument("--frames", type=int, default=100)
-    parser.add_argument("--output-dir", type=Path)
-    args = parser.parse_args(argv)
-    if args.frames < 1:
-        raise ValueError("--framesは1以上")
-    if args.camera_index < 0:
-        raise ValueError("--camera-indexは0以上")
+def main(frame_count, output_dir):
+    if frame_count < 1:
+        raise ValueError("FRAME_COUNTは1以上")
+    if CAMERA_INDEX < 0:
+        raise ValueError("CAMERA_INDEXは0以上")
 
-    output_dir = args.output_dir
-    if output_dir is None:
-        run_name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-        output_dir = Path(__file__).resolve().parent / "captures" / run_name
     if output_dir.exists():
         raise FileExistsError(f"保存先が既に存在（{output_dir}）")
 
@@ -46,10 +41,10 @@ def main(argv=None):
     with ExitStack() as cleanup:
         system = pytelicam.get_camera_system(int(pytelicam.CameraType.Gev))
         cleanup.callback(system.terminate)
-        if args.camera_index >= system.get_num_of_cameras():
-            raise IndexError(f"カメラ番号範囲外（{args.camera_index}）")
-        camera_info = system.get_camera_information(args.camera_index)
-        device = system.create_device_object(args.camera_index)
+        if CAMERA_INDEX >= system.get_num_of_cameras():
+            raise IndexError(f"カメラ番号範囲外（{CAMERA_INDEX}）")
+        camera_info = system.get_camera_information(CAMERA_INDEX)
+        device = system.create_device_object(CAMERA_INDEX)
         device.open()
         cleanup.callback(device.close)
         control = device.cam_control
@@ -94,7 +89,7 @@ def main(argv=None):
             "serial_number": camera_info.cam_serial_number,
             "camera_version": camera_info.cam_version,
             "started_at": datetime.now(UTC).isoformat(timespec="milliseconds"),
-            "requested_frames": args.frames,
+            "requested_frames": frame_count,
             "pixel_format": checked_value(
                 control.get_pixel_format(), "PixelFormat"
             ).name,
@@ -143,7 +138,7 @@ def main(argv=None):
         saved_count = 0
         last_image_id = None
         last_block_id = None
-        while saved_count < args.frames:
+        while saved_count < frame_count:
             wait_started = time.perf_counter()
             check_status(system.wait_for_signal(signal, 1000), "wait_for_signal")
             with stream.get_current_buffered_image() as image:
@@ -195,6 +190,6 @@ def main(argv=None):
 
 if __name__ == "__main__":
     try:
-        main()
+        main(FRAME_COUNT, OUTPUT_DIR)
     except KeyboardInterrupt:
         print("撮影中断", file=sys.stderr)

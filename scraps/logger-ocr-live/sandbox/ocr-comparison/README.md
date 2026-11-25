@@ -5,10 +5,11 @@
 | スクリプト | 役割 |
 | --- | --- |
 | `capture_bayer.py` | BG505LMCFからBayerBG8を保存。カメラSDKが必要なのはこの処理だけ |
+| `check_snapshot.py` | 保存したBayerBG8を直接グレー化し、固定しきい値の全画面PNGを出力。校正後は同じ二値画像からOP／DRの数字を表示 |
 | `calibrate.py` | 保存した静止画像でOP／DR各42点を指定し、校正JSONを保存 |
 | `compare.py` | 同じ画像・校正点で固定二値化、適応二値化、Bayer赤画素の中央値を比較 |
 
-校正・比較にはNumPyとOpenCVを使います。校正画面は**Qt対応OpenCV**の標準機能で拡大・移動します。Matplotlibや独自のズーム処理は使いません。以下のコマンドは`logger-ocr-live`フォルダで実行します。この3ファイルを別の場所に置いても、本体モジュールは不要です。
+校正・比較にはNumPyとOpenCVを使います。校正画面は**Qt対応OpenCV**の標準機能で拡大・移動します。以下のコマンドは`logger-ocr-live`フォルダで実行します。スクリプトを別の場所に置く場合、`check_snapshot.py`と`compare.py`は同じフォルダに置きます。
 
 ## WindowsのQt環境
 
@@ -37,6 +38,29 @@ $qtPrefix = Join-Path $env:LOCALAPPDATA 'code-scraps/logger-ocr-qt'
 
 ## 1. 試験画像を用意する
 
+### カメラ到着時の最小テスト
+
+各スクリプトの設定はファイル先頭で変更します。初回は撮影から校正まで初期値でつながります。以下は `logger-ocr-live` で実行します。
+
+1. 下の「BG505LMCFから記録する場合」に従ってSDKと撮影条件を用意し、ビューアを閉じます。できれば両計器を全点灯（`888888`）にして撮ります。
+
+   ```powershell
+   .\.venv\Scripts\python.exe sandbox/ocr-comparison/capture_bayer.py
+   .\.venv\Scripts\python.exe sandbox/ocr-comparison/check_snapshot.py
+   ```
+
+2. `results/snapshot-01/gray.png` と `binary.png` を見比べます。点灯線の中央が白く、線同士の隙間が黒くなるかを確認します。しきい値を試すには `check_snapshot.py` の `THRESHOLD`（初期値50）と `OUTPUT_DIR` を変え、同じ `FRAME` で再実行します。
+3. 「2. OP／DRを校正する」の手順で、選んだ二値画像に両側各42点を指定し、`calibration.json` を保存します。初期値以外の画像を選んだ場合は `calibrate.py` の `SOURCE` を合わせます。
+4. カメラとROIを固定し、両側に異なる既知の値を表示して数字を控えます。以下の設定を変え、手順1の2コマンドをもう一度実行します。
+
+   | ファイル | 2枚目の設定例 |
+   | --- | --- |
+   | `capture_bayer.py` | `OUTPUT_DIR = FOLDER / "captures/check"` |
+   | `check_snapshot.py` | `FRAME = FOLDER / "captures/check/frame-000000.npy"`、`OUTPUT_DIR = FOLDER / "results/check"`、`CALIBRATION = FOLDER / "calibration.json"`。しきい値は校正時と同じ値 |
+
+   端末に出たOP・DRの数字をそれぞれ目視値と照合します。`ok`でも別の数字なら誤読です。欠測なら理由と `binary.png` を確認します。
+5. 静止表示で一致したら、撮影側の `FRAME_COUNT` を例えば10にし、新しい保存先で表示切替中を短く撮ります。判定側の `FRAME` と `OUTPUT_DIR` を変えれば、同じ校正で切替前後を1枚ずつ確認できます。
+
 ### カメラが届く前・通常の画像を使う場合
 
 OP／DRの両表示が写った静止画像を用意します。JPEG・BMP・PNGなど、OpenCVが読める形式を使えます。拡張子による形式制限はありません。動画のフレーム選択・画像への書き出しは動画プレーヤーなどで行います。実データはリポジトリ外か、このフォルダの`captures/`に置きます。
@@ -52,10 +76,10 @@ OP／DRの両表示が写った静止画像を用意します。JPEG・BMP・PNG
 メーカーのビューアでピント・露光・ゲイン・ROIを調整し、露光をManual、GainAutoとBalanceWhiteAutoをOff、ReverseX・ReverseYをOff、ROI開始位置OffsetX・OffsetYを偶数にします。その後ビューアを終了します。
 
 ```powershell
-& $qtMamba run --prefix $qtPrefix python sandbox/ocr-comparison/capture_bayer.py --frames 100 --output-dir sandbox/ocr-comparison/captures/run-01
+& $qtMamba run --prefix $qtPrefix python sandbox/ocr-comparison/capture_bayer.py
 ```
 
-カメラ番号は既定で0です。保存先の既存フォルダには書き込みません。最初は少ない枚数で撮影条件と保存時間を確認します。全画素100枚の画像部分は約501MBです。
+初期値は `CAMERA_INDEX = 0`、`FRAME_COUNT = 1`、`OUTPUT_DIR = FOLDER / "captures/run-01"` です。保存先の既存フォルダには書き込みません。最初は少ない枚数で撮影条件と保存時間を確認します。全画素100枚の画像部分は約501MBです。
 
 取得時にTriggerModeをOff、PixelFormatをBayerBG8にし、露光・ゲイン・画像補正・ROIは現在の設定を使います。カメラのユーザー設定保存は実行しません。
 
@@ -77,7 +101,7 @@ OP／DRの両表示が写った静止画像を用意します。JPEG・BMP・PNG
 `calibrate.py`先頭の設定を編集します。`FOLDER`はこのスクリプトのあるフォルダです。
 
 ```python
-SOURCE = FOLDER / "captures/run-01/preview.png"
+SOURCE = FOLDER / "results/snapshot-01/binary.png"
 OUTPUT = FOLDER / "calibration.json"
 REFLECTION = "none"
 SAMPLE_RADIUS = 1
@@ -165,7 +189,7 @@ OUTPUT_DIR = FOLDER / "results/run-01"
 
 ## 既存の1表示比較
 
-`read_bgr_fraction.py`と`read_bayer_red.py`は従来の1表示試作として残しています。新しい2表示JSONとは互換性がありません。既存の1表示校正JSONと記録でのみ使います。BGR方式は赤画素率と白い画素の除外、Bayer方式は赤画素の中央値を使います。今回の2表示試験には上記3スクリプトを使います。
+`read_bgr_fraction.py`と`read_bayer_red.py`は従来の1表示試作として残しています。新しい2表示JSONとは互換性がありません。既存の1表示校正JSONと記録でのみ使います。BGR方式は赤画素率と白い画素の除外、Bayer方式は赤画素の中央値を使います。1表示試作を使うときは各ファイル先頭の `CAPTURE_DIR` と `CALIBRATION` に撮影フォルダと1表示用の校正JSONを指定します。
 
 ## 検証
 

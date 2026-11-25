@@ -1,4 +1,3 @@
-import argparse
 import json
 import sys
 import time
@@ -6,6 +5,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+FOLDER = Path(__file__).resolve().parent
+CAPTURE_DIR = FOLDER / "captures/run-01"
+CALIBRATION = FOLDER / "calibration-single.json"
 
 RED_MIN = 70
 RED_MARGIN = 40
@@ -107,21 +110,13 @@ def recognize_display(image, sample_coordinates):
     return raw_value, display_text, reason, scores
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="保存したBayerBG8をBGRに変換し、赤画素率で各フレームを判定する"
-    )
-    parser.add_argument("capture_dir", type=Path)
-    parser.add_argument("--calibration", type=Path, required=True)
-    args = parser.parse_args(argv)
+def main(capture_dir, calibration_file):
     if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
         raise ValueError("0 <= OFF_FRACTION < ON_FRACTION <= 1")
     if not (0 <= RED_MIN <= 255 and 0 < RED_MARGIN <= 255 and 0 <= WHITE_MIN <= 255):
         raise ValueError("RED_MIN・WHITE_MINは0〜255、RED_MARGINは1〜255")
 
-    session = json.loads(
-        (args.capture_dir / "session.json").read_text(encoding="utf-8-sig")
-    )
+    session = json.loads((capture_dir / "session.json").read_text(encoding="utf-8-sig"))
     if session["pixel_format"] != "BayerBG8":
         raise ValueError("対応する保存形式はBayerBG8")
     if session["reverse_x"] or session["reverse_y"]:
@@ -131,7 +126,7 @@ def main(argv=None):
     width, height = session["frame_size"]
     if width < 4 or height < 4:
         raise ValueError("画像サイズは4×4以上")
-    calibration = json.loads(args.calibration.read_text(encoding="utf-8-sig"))
+    calibration = json.loads(calibration_file.read_text(encoding="utf-8-sig"))
     sample_coordinates = prepare_samples(calibration, session["frame_size"])
 
     print(
@@ -155,7 +150,7 @@ def main(argv=None):
     frame_count = 0
     readable_count = 0
     timings = []
-    manifest_path = args.capture_dir / "frames.jsonl"
+    manifest_path = capture_dir / "frames.jsonl"
     with manifest_path.open(encoding="utf-8-sig") as manifest:
         for line in manifest:
             frame_info = json.loads(line)
@@ -163,7 +158,7 @@ def main(argv=None):
             if Path(filename).name != filename or not filename.endswith(".npy"):
                 raise ValueError(f"画像ファイル名不正（{filename}）")
             load_started = time.perf_counter()
-            raw = np.load(args.capture_dir / filename, allow_pickle=False)
+            raw = np.load(capture_dir / filename, allow_pickle=False)
             load_ms = (time.perf_counter() - load_started) * 1000
             if raw.shape != (height, width) or raw.dtype != np.uint8:
                 raise ValueError(
@@ -214,4 +209,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    main(CAPTURE_DIR, CALIBRATION)

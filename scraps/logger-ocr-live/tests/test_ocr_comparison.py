@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import shutil
 import subprocess
 import sys
 import unittest
@@ -137,19 +138,15 @@ class ComparisonTests(unittest.TestCase):
         ]
         expected = [0, 1, 12, 123, 1234, 123456, None, None, None]
         with TemporaryDirectory() as directory:
-            folder = Path(directory)
-            calibration_file = write_recording(folder, displays)
+            root = Path(directory)
+            folder = root / "captures/run-01"
+            folder.mkdir(parents=True)
+            write_recording(folder, displays).rename(root / "calibration-single.json")
             for name in ("read_bgr_fraction", "read_bayer_red"):
                 with self.subTest(method=name):
+                    script = shutil.copy(FOLDER / f"{name}.py", root)
                     run = subprocess.run(
-                        [
-                            sys.executable,
-                            "-B",
-                            str(FOLDER / f"{name}.py"),
-                            str(folder),
-                            "--calibration",
-                            str(calibration_file),
-                        ],
+                        [sys.executable, "-B", script],
                         capture_output=True,
                         text=True,
                         check=True,
@@ -179,9 +176,7 @@ class ComparisonTests(unittest.TestCase):
                     with self.subTest(reflection=reflection, method=reader.__name__):
                         output = io.StringIO()
                         with redirect_stdout(output), redirect_stderr(io.StringIO()):
-                            reader.main(
-                                [str(folder), "--calibration", str(calibration_file)]
-                            )
+                            reader.main(folder, calibration_file)
                         results = [
                             json.loads(line) for line in output.getvalue().splitlines()
                         ]
@@ -222,12 +217,12 @@ class ComparisonTests(unittest.TestCase):
             settings["SEGMENT_POINTS"][0][0] = [40, 24]
             calibration_file.write_text(json.dumps(settings), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "赤画素なし"):
-                bayer_reader.main([str(folder), "--calibration", str(calibration_file)])
+                bayer_reader.main(folder, calibration_file)
             settings["FRAME_SIZE"] = [641, 160]
             calibration_file.write_text(json.dumps(settings), encoding="utf-8")
             for reader in (bgr_reader, bayer_reader):
                 with self.assertRaisesRegex(ValueError, "FRAME_SIZE"):
-                    reader.main([str(folder), "--calibration", str(calibration_file)])
+                    reader.main(folder, calibration_file)
             calibration_file = write_recording(folder, ["123456"])
             np.save(folder / "frame-000000.npy", np.zeros((160, 640), dtype=np.uint16))
             for reader in (bgr_reader, bayer_reader):
@@ -235,7 +230,7 @@ class ComparisonTests(unittest.TestCase):
                     redirect_stderr(io.StringIO()),
                     self.assertRaisesRegex(ValueError, "画像不正"),
                 ):
-                    reader.main([str(folder), "--calibration", str(calibration_file)])
+                    reader.main(folder, calibration_file)
 
 
 class CaptureTests(unittest.TestCase):
@@ -307,7 +302,7 @@ class CaptureTests(unittest.TestCase):
                 patch.dict(sys.modules, {"pytelicam": sdk}),
                 redirect_stderr(io.StringIO()),
             ):
-                capture.main(["--frames", "2", "--output-dir", str(folder)])
+                capture.main(2, folder)
             session = json.loads((folder / "session.json").read_text(encoding="utf-8"))
             self.assertEqual(session["timestamp_tick_frequency_hz"], 1000000)
             self.assertEqual(session["camera_settings"]["exposure_us"], 5000)
@@ -326,7 +321,7 @@ class CaptureTests(unittest.TestCase):
             for reader in (bgr_reader, bayer_reader):
                 output = io.StringIO()
                 with redirect_stdout(output), redirect_stderr(io.StringIO()):
-                    reader.main([str(folder), "--calibration", str(calibration_file)])
+                    reader.main(folder, calibration_file)
                 self.assertEqual(
                     [
                         json.loads(line)["value"]
@@ -354,7 +349,7 @@ class CaptureTests(unittest.TestCase):
                 redirect_stderr(io.StringIO()),
                 self.assertRaisesRegex(OSError, "disk full"),
             ):
-                capture.main(["--frames", "1", "--output-dir", str(folder)])
+                capture.main(1, folder)
             self.assertEqual((folder / "frames.jsonl").read_text(), "")
         images[0].__exit__.assert_called_once()
         device.cam_stream.stop.assert_called_once()
@@ -378,7 +373,7 @@ class CaptureTests(unittest.TestCase):
                     patch.dict(sys.modules, {"pytelicam": sdk}),
                     self.assertRaises(ValueError),
                 ):
-                    capture.main(["--frames", "1", "--output-dir", str(folder)])
+                    capture.main(1, folder)
                 self.assertFalse(folder.exists())
             device.cam_stream.start.assert_not_called()
             device.close.assert_called_once()
@@ -387,7 +382,7 @@ class CaptureTests(unittest.TestCase):
     def test_existing_output_folder_is_not_overwritten(self):
         with TemporaryDirectory() as directory:
             with self.assertRaises(FileExistsError):
-                capture.main(["--output-dir", directory])
+                capture.main(1, Path(directory))
 
 
 if __name__ == "__main__":

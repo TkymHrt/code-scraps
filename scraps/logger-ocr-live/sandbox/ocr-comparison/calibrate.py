@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 FOLDER = Path(__file__).resolve().parent
-SOURCE = FOLDER / "captures/run-01/preview.png"
+SOURCE = FOLDER / "results/snapshot-01/binary.png"
 OUTPUT = FOLDER / "calibration.json"
 REFLECTION = "none"
 SAMPLE_RADIUS = 1
