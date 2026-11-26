@@ -108,32 +108,20 @@ def select_points(image, radius, length_radius):
         points.append([x, y])
 
     window = "OP / DR calibration - OpenCV Qt"
-    scale = min(1.0, 1280 / width, 720 / height)
-    thickness = max(1, round(1 / scale))
     try:
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_EXPANDED)
-        cv2.resizeWindow(window, round(width * scale), round(height * scale))
+        cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_EXPANDED)
         cv2.setMouseCallback(window, on_mouse)
         while True:
             preview = image.copy()
             for index, (x, y) in enumerate(points):
-                side = SIDES[index // 42].upper()
-                digit = index % 42 // 7 + 1
-                segment = index % 7
-                x_radius, y_radius = radii[segment]
-                color = (0, 255, 255) if side == "OP" else (255, 255, 0)
-                left, top = x - x_radius, y - y_radius
+                x_radius, y_radius = radii[index % 7]
+                color = (0, 255, 255) if index < 42 else (255, 255, 0)
                 cv2.rectangle(
-                    preview, (left, top), (x + x_radius, y + y_radius), color, thickness
-                )
-                cv2.putText(
                     preview,
-                    f"{side} {digit}.{segment + 1}",
-                    (left, max(round(14 / scale), top - round(3 / scale))),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4 / scale,
+                    (x - x_radius, y - y_radius),
+                    (x + x_radius, y + y_radius),
                     color,
-                    thickness,
+                    1,
                 )
             if len(points) == 84:
                 title = "84/84 - ENTER: save calibration"
