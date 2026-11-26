@@ -68,7 +68,7 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
 
 試行用のフォルダをリポジトリ外に作り、次の2ファイルを置きます。ロガーやカメラを接続せずに実行できます。
 
-1. `measurements.csv` に、同じ側・位置で対応する板幅、片側荷重、ロール開き量、出側実測板厚を記入します。表計算ソフトから保存する場合はCSV UTF-8を選びます。小数点は `.`、長さの単位はmmです。
+1. `measurements.csv` に、同じ側・位置で対応する板幅、片側荷重、ロール開き量、出側実測板厚を記入します。表計算ソフトから保存する場合はCSV UTF-8を選びます。下記のヘッダーと列順を使い、小数点は `.`、長さの単位はmmとします。
 
    ```csv
    side,width_mm,load,gap_mm,measured_thickness_mm
@@ -86,13 +86,19 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
    reference_width_mm = 1000.0
    ```
 
-3. 試行用のフォルダを指定して実行します。
+3. `src/fit_mill_model.py` 冒頭の `MEASUREMENTS_FILE`、`CONDITIONS_FILE`、`OUTPUT_ROOT` を設定し、引数なしで実行します。相対パスはコマンドを実行するフォルダが基準です。
 
-   ```powershell
-   uv run python src/fit_mill_model.py "C:\measurement\trial-01"
+   ```python
+   MEASUREMENTS_FILE = Path(r"C:\measurement\trial-01\measurements.csv")
+   CONDITIONS_FILE = Path(r"C:\measurement\trial-01\conditions.toml")
+   OUTPUT_ROOT = Path(r"C:\measurement\trial-01")
    ```
 
-側ごとの係数、板厚の評価件数、平均誤差と最大絶対誤差がターミナルに出ます。実行ごとに試行フォルダ内に `fit-日時` フォルダを作り、条件と係数を `coefficients.json`、各点の予測と誤差を `comparison.csv` に保存します。使う測定点を変えたら、同じコマンドで再計算できます。
+   ```powershell
+   uv run python src/fit_mill_model.py
+   ```
+
+側ごとの係数、板厚の評価件数、平均誤差と最大絶対誤差がターミナルに出ます。実行ごとに `OUTPUT_ROOT` に `fit-日時` フォルダを作り、条件と係数を `coefficients.json`、各点の予測と誤差を `comparison.csv` に保存します。使う測定点を変えたら、同じコマンドで再計算できます。
 
 基準幅だけでも、異なる荷重の点が揃っていればC1・C2を求められます。C3〜C5には、基準幅を含む3種類以上の板幅と、幅ごとに異なる荷重での測定が必要です。出力の誤差は係数を求めるのに使った点での値です。計算式と入力条件は[係数特定要件](COEFFICIENT_FIT.md)を参照してください。
 

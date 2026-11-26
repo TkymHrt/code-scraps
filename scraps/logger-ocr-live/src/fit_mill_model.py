@@ -1,4 +1,3 @@
-import argparse
 import csv
 import json
 import math
@@ -10,6 +9,10 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
+MEASUREMENTS_FILE = Path("measurements.csv")
+CONDITIONS_FILE = Path("conditions.toml")
+OUTPUT_ROOT = Path(".")
+
 INPUT_COLUMNS = ["side", "width_mm", "load", "gap_mm", "measured_thickness_mm"]
 SIDES = ("op", "dr")
 FIT_TOLERANCE = math.sqrt(np.finfo(float).eps)
@@ -20,24 +23,22 @@ def read_conditions(path, measured_sides):
     for key in ("roll", "zero_reference", "load_unit"):
         value = conditions.get(key)
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{key} に空でない文字列を指定してください")
+            raise ValueError(f"{key} が不正です")
     for side in SIDES:
         if side not in conditions and side not in measured_sides:
             continue
         settings = conditions.get(side)
         if not isinstance(settings, dict):
-            raise ValueError(f"[{side}] に実験条件を指定してください")
+            raise ValueError(f"[{side}] が不正です")
         for key in ("p0", "reference_width_mm"):
             value = settings.get(key)
-            try:
-                number = float(value) if type(value) in (int, float) else math.nan
-            except OverflowError:
-                number = math.nan
-            if not math.isfinite(number) or (
-                key == "reference_width_mm" and number <= 0
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or (key == "reference_width_mm" and value <= 0)
             ):
-                raise ValueError(f"{side}.{key} の数値を確認してください")
-            settings[key] = number
+                raise ValueError(f"{side}.{key} が不正です")
+            settings[key] = float(value)
     return conditions
 
 
@@ -47,38 +48,22 @@ def read_measurements(path):
         rows = csv.reader(stream, strict=True)
         try:
             if next(rows, None) != INPUT_COLUMNS:
-                raise ValueError(
-                    f"1行目の列は {','.join(INPUT_COLUMNS)} にしてください"
-                )
+                raise ValueError
             for row in rows:
                 if not row:
                     continue
-                if len(row) != len(INPUT_COLUMNS):
-                    raise ValueError(f"{rows.line_num}行目は5列にしてください")
-                if row[0] not in SIDES:
-                    raise ValueError(
-                        f"{rows.line_num}行目の side は op か dr を指定してください"
-                    )
-                values = []
-                for column, field in zip(INPUT_COLUMNS[1:], row[1:], strict=True):
-                    try:
-                        value = float(field)
-                    except ValueError:
-                        value = math.nan
-                    if not math.isfinite(value):
-                        raise ValueError(
-                            f"{rows.line_num}行目の {column} の数値を確認してください"
-                        )
-                    if column in ("width_mm", "measured_thickness_mm") and value <= 0:
-                        raise ValueError(
-                            f"{rows.line_num}行目の {column} は正の値を指定してください"
-                        )
-                    values.append(value)
+                values = tuple(map(float, row[1:]))
+                width, _, _, thickness = values
+                if (
+                    row[0] not in SIDES
+                    or not all(map(math.isfinite, values))
+                    or width <= 0
+                    or thickness <= 0
+                ):
+                    raise ValueError
                 measurements.append((row, values))
-        except csv.Error as error:
-            raise ValueError(
-                f"{rows.line_num}行目のCSV形式を確認してください ({error})"
-            ) from error
+        except (ValueError, csv.Error):
+            raise ValueError(f"{rows.line_num or 1}行目が不正です") from None
     if not measurements:
         raise ValueError("測定データがありません")
     return measurements
@@ -287,27 +272,15 @@ def compare_thickness(measurements, results):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="手入力の圧延実測CSVから側別に係数を求めます"
-    )
-    parser.add_argument(
-        "trial_dir",
-        type=Path,
-        help="measurements.csv と conditions.toml のあるフォルダ",
-    )
-    trial_dir = parser.parse_args().trial_dir.resolve()
-    input_path = trial_dir / "measurements.csv"
-    conditions_path = trial_dir / "conditions.toml"
+    input_path = MEASUREMENTS_FILE
     try:
         measurements = read_measurements(input_path)
-    except (OSError, ValueError) as error:
-        parser.exit(2, f"{input_path}: {error}\n")
-    try:
-        conditions = read_conditions(
-            conditions_path, {row[0] for row, _ in measurements}
-        )
-    except (OSError, ValueError) as error:
-        parser.exit(2, f"{conditions_path}: {error}\n")
+        input_path = CONDITIONS_FILE
+        conditions = read_conditions(input_path, {row[0] for row, _ in measurements})
+    except (OSError, ValueError, OverflowError) as error:
+        reason = error.strerror if isinstance(error, OSError) else error
+        print(f"{input_path}: {reason}", file=sys.stderr)
+        return 2
 
     points = {side: {} for side in SIDES}
     for row, (width, load, gap, thickness) in measurements:
@@ -318,9 +291,11 @@ def main():
             results[side] = fit_side(points[side], conditions.get(side, {}))
     comparison, errors = compare_thickness(measurements, results)
 
-    output_dir = trial_dir / f"fit-{datetime.now():%Y%m%d-%H%M%S-%f}"
     try:
-        with TemporaryDirectory(prefix=".fit-", dir=trial_dir) as staging:
+        output_root = OUTPUT_ROOT.resolve()
+        output_dir = output_root / f"fit-{datetime.now():%Y%m%d-%H%M%S-%f}"
+        output_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix=".fit-", dir=output_root) as staging:
             staged_results = Path(staging) / output_dir.name
             staged_results.mkdir()
             with (staged_results / "comparison.csv").open(
@@ -335,8 +310,9 @@ def main():
                 encoding="utf-8",
             )
             staged_results.rename(output_dir)
-    except (OSError, ValueError) as error:
-        parser.exit(2, f"{output_dir} への結果保存に失敗しました ({error})\n")
+    except (OSError, ValueError):
+        print(f"保存失敗 {OUTPUT_ROOT}", file=sys.stderr)
+        return 2
 
     for side in SIDES:
         result = results[side]

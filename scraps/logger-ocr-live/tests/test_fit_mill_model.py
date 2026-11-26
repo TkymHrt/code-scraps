@@ -48,7 +48,8 @@ class FitMillModelTests(unittest.TestCase):
 
     def run_fit(self):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), str(self.trial)],
+            [sys.executable, str(SCRIPT)],
+            cwd=self.trial,
             capture_output=True,
             encoding="utf-8",
             check=False,
@@ -170,13 +171,13 @@ class FitMillModelTests(unittest.TestCase):
         self.assertIsNone(result["op"]["model"]["c3"])
         self.assertIn("kbが正にならない", result["op"]["fit"]["reason"])
 
-    def test_reports_bad_csv_column_and_does_not_create_results(self):
+    def test_reports_bad_csv_row_and_does_not_create_results(self):
         for thickness in ("", 0, -0.01):
             with self.subTest(thickness=thickness):
                 self.write_measurements([["op", 1000, 12, 1.5, thickness]])
                 process = self.run_fit()
                 self.assertEqual(process.returncode, 2)
-                self.assertIn("2行目の measured_thickness_mm", process.stderr)
+                self.assertEqual(process.stderr, "measurements.csv: 2行目が不正です\n")
                 self.assertEqual(list(self.trial.glob("fit-*")), [])
 
 
