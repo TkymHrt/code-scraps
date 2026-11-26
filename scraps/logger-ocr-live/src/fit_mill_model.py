@@ -14,22 +14,27 @@ CONDITIONS_FILE = Path("conditions.toml")
 OUTPUT_ROOT = Path(".")
 
 INPUT_COLUMNS = ["side", "width_mm", "load", "gap_mm", "measured_thickness_mm"]
+CONDITION_KEYS = ("roll", "zero_reference", "load_unit")
 SIDES = ("op", "dr")
 FIT_TOLERANCE = math.sqrt(np.finfo(float).eps)
 
 
 def read_conditions(path, measured_sides):
-    conditions = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    for key in ("roll", "zero_reference", "load_unit"):
+    source = path.read_text(encoding="utf-8-sig")
+    try:
+        conditions = tomllib.loads(source)
+    except ValueError:
+        raise ValueError("TOML形式不正") from None
+    for key in CONDITION_KEYS:
         value = conditions.get(key)
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{key} が不正です")
+            raise ValueError(f"{key} が不正")
     for side in SIDES:
         if side not in conditions and side not in measured_sides:
             continue
         settings = conditions.get(side)
         if not isinstance(settings, dict):
-            raise ValueError(f"[{side}] が不正です")
+            raise ValueError(f"[{side}] が不正")
         for key in ("p0", "reference_width_mm"):
             value = settings.get(key)
             if (
@@ -37,13 +42,14 @@ def read_conditions(path, measured_sides):
                 or not math.isfinite(value)
                 or (key == "reference_width_mm" and value <= 0)
             ):
-                raise ValueError(f"{side}.{key} が不正です")
+                raise ValueError(f"{side}.{key} が不正")
             settings[key] = float(value)
     return conditions
 
 
 def read_measurements(path):
     measurements = []
+    points_by_side = {side: {} for side in SIDES}
     with path.open(encoding="utf-8-sig", newline="") as stream:
         rows = csv.reader(stream, strict=True)
         try:
@@ -52,46 +58,50 @@ def read_measurements(path):
             for row in rows:
                 if not row:
                     continue
-                values = tuple(map(float, row[1:]))
-                width, _, _, thickness = values
+                side, *fields = row
+                values = tuple(map(float, fields))
+                width, load, gap, thickness = values
                 if (
-                    row[0] not in SIDES
+                    side not in SIDES
                     or not all(map(math.isfinite, values))
                     or width <= 0
                     or thickness <= 0
                 ):
                     raise ValueError
                 measurements.append((row, values))
+                points_by_side[side].setdefault(width, []).append(
+                    (load, gap, thickness)
+                )
         except (ValueError, csv.Error):
-            raise ValueError(f"{rows.line_num or 1}行目が不正です") from None
+            raise ValueError(f"{rows.line_num or 1}行目が不正") from None
     if not measurements:
-        raise ValueError("測定データがありません")
-    return measurements
+        raise ValueError("測定データなし")
+    return measurements, points_by_side
 
 
 def fit_two_columns(matrix, target):
     coefficients, _, rank, _ = np.linalg.lstsq(matrix, target, rcond=FIT_TOLERANCE)
     if rank != 2:
-        raise ValueError("当てはめに必要な独立したデータが不足しています")
+        raise ValueError("行列の階数不足")
     if not np.all(np.isfinite(coefficients)):
-        raise ValueError("係数が有限値になりません")
+        raise ValueError("係数が非有限")
     return coefficients
 
 
 def fit_load_curve(points, p0):
     loads, gaps, thicknesses = np.array(points).T
     load_min, load_max = float(loads.min()), float(loads.max())
-    if len(points) < 2 or math.isclose(
+    if math.isclose(
         load_min,
         load_max,
         rel_tol=FIT_TOLERANCE,
         abs_tol=FIT_TOLERANCE * abs(p0),
     ):
-        raise ValueError("荷重を変えた測定点が不足しています")
+        raise ValueError("荷重差不足")
     extension = thicknesses - gaps
     scale = float(np.max(np.abs(extension)))
     if scale == 0:
-        raise ValueError("実測板厚と開き量の差がすべて0です")
+        raise ValueError("実測板厚と開き量の差が全点で0")
     scaled = extension / scale
     matrix = np.column_stack((scaled, scaled**2))
     load_difference = loads - p0
@@ -100,7 +110,7 @@ def fit_load_curve(points, p0):
     b = float(coefficients[1]) / scale / scale
     stiffness = a + 2 * (b * extension)
     if not math.isfinite(a) or not math.isfinite(b) or a <= 0 or np.any(stiffness <= 0):
-        raise ValueError("剛性が正になりません")
+        raise ValueError("剛性が不正")
     return {
         "rows": len(points),
         "load_range": [load_min, load_max],
@@ -121,10 +131,10 @@ def width_factor(width_mm, model):
 
 def stiffness_at_load(load, kb, model):
     if not math.isfinite(kb) or kb <= 0:
-        raise ValueError("kbが正になりません")
+        raise ValueError("kbが不正")
     square = model["c1"] ** 2 + 2 * model["c2"] * (load / kb)
     if not math.isfinite(square) or square <= 0:
-        raise ValueError("荷重に対する平方根の中身または剛性が正になりません")
+        raise ValueError("剛性が非正または非有限")
     return math.sqrt(square)
 
 
@@ -143,7 +153,7 @@ def fit_width_model(model, by_width, p0):
             root = math.hypot(d, c1 * a)
             kb = a * a / (root + d) if d >= 0 else (root - d) / (c1 * c1)
         if not math.isfinite(kb) or kb <= 0:
-            raise ValueError(f"板幅 {width:g} mm のkbが正になりません")
+            raise ValueError(f"板幅 {width:g} mm のkbが不正")
         curve["kb"] = kb
         widths.append(width)
         factors.append(kb)
@@ -167,7 +177,7 @@ def fit_width_model(model, by_width, p0):
     if not math.isclose(
         width_factor(reference, full_model), 1.0, rel_tol=FIT_TOLERANCE
     ):
-        raise ValueError("基準幅でkbを1に正規化できません")
+        raise ValueError("基準幅のkbが1にならない")
     # 測定幅の間でもkbが正である必要があるため、二次式の最小値を調べる。
     check_widths = [width_min, width_max]
     if c5 > 0:
@@ -176,7 +186,7 @@ def fit_width_model(model, by_width, p0):
             check_widths.append(vertex)
     width_factors = [width_factor(width, full_model) for width in check_widths]
     if not all(math.isfinite(kb) and kb > 0 for kb in width_factors):
-        raise ValueError("板幅範囲内にkbが正にならない幅があります")
+        raise ValueError("測定幅範囲内でkbが不正")
     for width, curve in by_width.items():
         kb = width_factor(width, full_model)
         for load in (p0, *curve["load_range"]):
@@ -187,18 +197,21 @@ def fit_width_model(model, by_width, p0):
 def fit_side(points_by_width, settings):
     p0 = settings.get("p0")
     reference = settings.get("reference_width_mm")
-    diagnostics = {"reference_width_mm": reference, "reason": None, "by_width": {}}
+    by_width = {}
+    diagnostics = {
+        "reference_width_mm": reference,
+        "reason": None,
+        "by_width": by_width,
+    }
     result = {"p0": p0, "model": None, "fit": diagnostics}
-    by_width = diagnostics["by_width"]
     if not points_by_width:
-        diagnostics["reason"] = "測定データがありません"
+        diagnostics["reason"] = "測定データなし"
         return result
     if reference != max(points_by_width):
-        diagnostics["reason"] = (
-            f"基準幅 {reference:g} mm を測定データの最大板幅に揃えてください"
-        )
+        diagnostics["reason"] = f"基準幅 {reference:g} mm が最大板幅と不一致"
         return result
 
+    stage = f"基準幅 {reference:g} mm"
     try:
         base_curve = fit_load_curve(points_by_width[reference], p0)
         base_curve["kb"] = 1.0
@@ -206,7 +219,7 @@ def fit_side(points_by_width, settings):
         a, b = base_curve["a"], base_curve["b"]
         square = a * a - 4 * b * p0
         if not math.isfinite(square) or square <= 0:
-            raise ValueError("C1の平方根の中身が正になりません")
+            raise ValueError("C1が非正または非有限")
         base_model = {
             "c1": math.sqrt(square),
             "c2": 2 * b,
@@ -217,26 +230,23 @@ def fit_side(points_by_width, settings):
             "width_range_mm": [reference, reference],
             "load_range": base_curve["load_range"],
         }
-        for load in [p0, *base_model["load_range"]]:
+        for load in (p0, *base_model["load_range"]):
             stiffness_at_load(load, 1.0, base_model)
-    except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
-        diagnostics["reason"] = f"基準幅 {reference:g} mm の当てはめに失敗 ({error})"
-        return result
-    result["model"] = base_model
+        result["model"] = base_model
 
-    if len(points_by_width) < 3:
-        diagnostics["reason"] = "板幅補正には基準幅を含む3種類以上の板幅が必要です"
-        return result
-    try:
+        if len(points_by_width) < 3:
+            diagnostics["reason"] = "板幅補正には板幅が3種類以上必要"
+            return result
         for width, points in sorted(points_by_width.items()):
             if width != reference:
-                try:
-                    by_width[width] = fit_load_curve(points, p0)
-                except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
-                    raise ValueError(f"板幅 {width:g} mm ({error})") from error
+                stage = f"板幅 {width:g} mm"
+                by_width[width] = fit_load_curve(points, p0)
+        stage = "板幅補正"
         result["model"] = fit_width_model(base_model, by_width, p0)
-    except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
-        diagnostics["reason"] = f"板幅補正の当てはめに失敗 ({error})"
+    except (ArithmeticError, np.linalg.LinAlgError):
+        diagnostics["reason"] = f"{stage}: 数値計算失敗"
+    except ValueError as error:
+        diagnostics["reason"] = f"{stage}: {error}"
     return result
 
 
@@ -244,13 +254,14 @@ def compare_thickness(measurements, results):
     comparison = []
     errors = {side: [] for side in SIDES}
     for row, (width, load, gap, thickness) in measurements:
+        comparison_row = [*row, "", ""]
+        comparison.append(comparison_row)
         side = row[0]
         model = results[side]["model"]
         if (
             model is None
             or not model["width_range_mm"][0] <= width <= model["width_range_mm"][1]
         ):
-            comparison.append([*row, "", ""])
             continue
         p0 = results[side]["p0"]
         kb = width_factor(width, model)
@@ -258,37 +269,34 @@ def compare_thickness(measurements, results):
             stiffness = stiffness_at_load(load, kb, model)
             zero_stiffness = stiffness_at_load(p0, kb, model)
         except (ValueError, ArithmeticError):
-            comparison.append([*row, "", ""])
             continue
         # Sm(P)とSm(P0)を個別に引く際の桁落ちを避ける。
         predicted = gap + ((load - p0) / kb) * (2 / (stiffness + zero_stiffness))
         error = predicted - thickness
-        if not math.isfinite(predicted) or not math.isfinite(error):
-            comparison.append([*row, "", ""])
-            continue
-        comparison.append([*row, predicted, error])
-        errors[side].append(error)
+        if math.isfinite(predicted) and math.isfinite(error):
+            comparison_row[-2:] = predicted, error
+            errors[side].append(error)
     return comparison, errors
 
 
 def main():
     input_path = MEASUREMENTS_FILE
     try:
-        measurements = read_measurements(input_path)
+        measurements, points_by_side = read_measurements(input_path)
         input_path = CONDITIONS_FILE
-        conditions = read_conditions(input_path, {row[0] for row, _ in measurements})
-    except (OSError, ValueError, OverflowError) as error:
-        reason = error.strerror if isinstance(error, OSError) else error
-        print(f"{input_path}: {reason}", file=sys.stderr)
+        measured_sides = {side for side, points in points_by_side.items() if points}
+        conditions = read_conditions(input_path, measured_sides)
+    except (OSError, UnicodeError, OverflowError):
+        print(f"{input_path}: 読込失敗", file=sys.stderr)
+        return 2
+    except ValueError as error:
+        print(f"{input_path}: {error}", file=sys.stderr)
         return 2
 
-    points = {side: {} for side in SIDES}
-    for row, (width, load, gap, thickness) in measurements:
-        points[row[0]].setdefault(width, []).append((load, gap, thickness))
-    results = {key: conditions[key] for key in ("roll", "zero_reference", "load_unit")}
+    results = {key: conditions[key] for key in CONDITION_KEYS}
     with np.errstate(over="raise", invalid="raise", divide="raise"):
         for side in SIDES:
-            results[side] = fit_side(points[side], conditions.get(side, {}))
+            results[side] = fit_side(points_by_side[side], conditions.get(side, {}))
     comparison, errors = compare_thickness(measurements, results)
 
     try:
@@ -311,7 +319,7 @@ def main():
             )
             staged_results.rename(output_dir)
     except (OSError, ValueError):
-        print(f"保存失敗 {OUTPUT_ROOT}", file=sys.stderr)
+        print(f"{OUTPUT_ROOT}: 保存失敗", file=sys.stderr)
         return 2
 
     for side in SIDES:

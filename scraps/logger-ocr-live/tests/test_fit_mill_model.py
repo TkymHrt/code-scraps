@@ -169,7 +169,26 @@ class FitMillModelTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         result, _ = self.read_outputs()
         self.assertIsNone(result["op"]["model"]["c3"])
-        self.assertIn("kbが正にならない", result["op"]["fit"]["reason"])
+        self.assertEqual(
+            result["op"]["fit"]["reason"], "板幅補正: 測定幅範囲内でkbが不正"
+        )
+
+    def test_keeps_completed_fits_when_a_width_fails(self):
+        rows = list(synthetic_rows("op", 7, (100, 20, 0.64, 0.24, 0.12), [1000, 600]))
+        rows.append(["op", 800, 25, 2, 2.2])
+        self.write_measurements(rows)
+
+        process = self.run_fit()
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result, comparison = self.read_outputs()
+        self.assertIsNone(result["op"]["model"]["c3"])
+        fit = result["op"]["fit"]
+        self.assertEqual(fit["reason"], "板幅 800 mm: 荷重差不足")
+        self.assertEqual(list(fit["by_width"]), ["1000.0", "600.0"])
+        self.assertEqual(fit["by_width"]["1000.0"]["kb"], 1)
+        self.assertNotIn("kb", fit["by_width"]["600.0"])
+        self.assertEqual(comparison[-1]["predicted_thickness_mm"], "")
 
     def test_reports_bad_csv_row_and_does_not_create_results(self):
         for thickness in ("", 0, -0.01):
@@ -177,7 +196,7 @@ class FitMillModelTests(unittest.TestCase):
                 self.write_measurements([["op", 1000, 12, 1.5, thickness]])
                 process = self.run_fit()
                 self.assertEqual(process.returncode, 2)
-                self.assertEqual(process.stderr, "measurements.csv: 2行目が不正です\n")
+                self.assertEqual(process.stderr, "measurements.csv: 2行目が不正\n")
                 self.assertEqual(list(self.trial.glob("fit-*")), [])
 
 
