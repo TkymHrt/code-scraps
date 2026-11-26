@@ -32,13 +32,13 @@ class FitMillModelTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.trial = Path(temporary.name)
         self.measurements = self.trial / "measurements.csv"
-        self.conditions = self.trial / "conditions.toml"
-        self.conditions.write_text(
-            'roll = "試験ロール"\nzero_reference = "試験ゼロ"\nload_unit = "ton"\n'
-            "[op]\np0 = 7\nreference_width_mm = 1000\n"
-            "[dr]\np0 = 8\nreference_width_mm = 1000\n",
-            encoding="utf-8",
-        )
+        self.conditions = {
+            "roll": "試験ロール",
+            "zero_reference": "試験ゼロ",
+            "load_unit": "ton",
+            "op": {"p0": 7, "reference_width_mm": 1000},
+            "dr": {"p0": 8, "reference_width_mm": 1000},
+        }
 
     def write_measurements(self, rows):
         with self.measurements.open("w", encoding="utf-8-sig", newline="") as stream:
@@ -47,8 +47,14 @@ class FitMillModelTests(unittest.TestCase):
             writer.writerows(rows)
 
     def run_fit(self):
+        command = (
+            "import runpy, sys\n"
+            "script = runpy.run_path(sys.argv[1])\n"
+            f"script['CONDITIONS'].update({self.conditions!r})\n"
+            "sys.exit(script['main']())"
+        )
         return subprocess.run(
-            [sys.executable, str(SCRIPT)],
+            [sys.executable, "-X", "utf8", "-c", command, str(SCRIPT)],
             cwd=self.trial,
             capture_output=True,
             encoding="utf-8",
@@ -102,6 +108,7 @@ class FitMillModelTests(unittest.TestCase):
             self.assertAlmostEqual(float(returned["error_mm"]), 0, places=10)
 
     def test_fits_widths_with_separate_measured_load_ranges(self):
+        del self.conditions["dr"]
         rows = []
         loads_by_width = {600: (10, 15, 20), 800: (25, 30, 35), 1000: (45, 50, 55)}
         for width, loads in loads_by_width.items():
@@ -117,6 +124,7 @@ class FitMillModelTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         result, comparison = self.read_outputs()
         model = result["op"]["model"]
+        self.assertIsNone(result["dr"]["p0"])
         self.assertEqual(model["width_range_mm"], [600, 1000])
         self.assertEqual(model["load_range"], [10, 55])
         self.assertAlmostEqual(model["c4"], 1)
@@ -129,7 +137,6 @@ class FitMillModelTests(unittest.TestCase):
         rows += [["dr", 1000, 25, 2, 2.2], ["dr", 1000, 25, 3, 3.2]]
         self.write_measurements(rows)
         original_input = self.measurements.read_bytes()
-        original_conditions = self.conditions.read_bytes()
 
         process = self.run_fit()
 
@@ -156,10 +163,8 @@ class FitMillModelTests(unittest.TestCase):
         self.assertEqual(retry.returncode, 0, retry.stderr)
         self.assertEqual(len(list(self.trial.glob("fit-*"))), 2)
         self.assertEqual(self.measurements.read_bytes(), original_input)
-        self.assertEqual(self.conditions.read_bytes(), original_conditions)
 
     def test_rejects_width_correction_that_turns_negative_between_measurements(self):
-        # kb = 16(x - 0.7)^2 - 0.44 is positive at the sampled widths.
         self.write_measurements(
             synthetic_rows("op", 7, (100, 20, 7.4, -22.4, 16), [400, 900, 1000])
         )
@@ -198,6 +203,16 @@ class FitMillModelTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 2)
                 self.assertEqual(process.stderr, "measurements.csv: 2行目が不正\n")
                 self.assertEqual(list(self.trial.glob("fit-*")), [])
+
+    def test_requires_conditions_for_each_measured_side(self):
+        del self.conditions["dr"]
+        self.write_measurements([["dr", 1000, 12, 1.5, 1.6]])
+
+        process = self.run_fit()
+
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(process.stderr, "CONDITIONS: dr の条件が不正\n")
+        self.assertEqual(list(self.trial.glob("fit-*")), [])
 
 
 if __name__ == "__main__":

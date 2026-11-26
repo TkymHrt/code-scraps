@@ -2,7 +2,6 @@ import csv
 import json
 import math
 import sys
-import tomllib
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,8 +9,12 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 MEASUREMENTS_FILE = Path("measurements.csv")
-CONDITIONS_FILE = Path("conditions.toml")
 OUTPUT_ROOT = Path(".")
+CONDITIONS = {
+    "roll": "",
+    "zero_reference": "",
+    "load_unit": "",
+}
 
 INPUT_COLUMNS = ["side", "width_mm", "load", "gap_mm", "measured_thickness_mm"]
 CONDITION_KEYS = ("roll", "zero_reference", "load_unit")
@@ -19,32 +22,25 @@ SIDES = ("op", "dr")
 FIT_TOLERANCE = math.sqrt(np.finfo(float).eps)
 
 
-def read_conditions(path, measured_sides):
-    source = path.read_text(encoding="utf-8-sig")
-    try:
-        conditions = tomllib.loads(source)
-    except ValueError:
-        raise ValueError("TOML形式不正") from None
+def validate_conditions(points_by_side):
     for key in CONDITION_KEYS:
-        value = conditions.get(key)
+        value = CONDITIONS.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{key} が不正")
     for side in SIDES:
-        if side not in conditions and side not in measured_sides:
+        if side not in CONDITIONS and not points_by_side[side]:
             continue
-        settings = conditions.get(side)
+        settings = CONDITIONS.get(side)
         if not isinstance(settings, dict):
-            raise ValueError(f"[{side}] が不正")
+            raise ValueError(f"{side} の条件が不正")
         for key in ("p0", "reference_width_mm"):
             value = settings.get(key)
             if (
                 type(value) not in (int, float)
-                or not math.isfinite(value)
+                or not -sys.float_info.max <= value <= sys.float_info.max
                 or (key == "reference_width_mm" and value <= 0)
             ):
                 raise ValueError(f"{side}.{key} が不正")
-            settings[key] = float(value)
-    return conditions
 
 
 def read_measurements(path):
@@ -178,7 +174,6 @@ def fit_width_model(model, by_width, p0):
         width_factor(reference, full_model), 1.0, rel_tol=FIT_TOLERANCE
     ):
         raise ValueError("基準幅のkbが1にならない")
-    # 測定幅の間でもkbが正である必要があるため、二次式の最小値を調べる。
     check_widths = [width_min, width_max]
     if c5 > 0:
         vertex = -c4 / c5 * 500
@@ -195,8 +190,8 @@ def fit_width_model(model, by_width, p0):
 
 
 def fit_side(points_by_width, settings):
-    p0 = settings.get("p0")
-    reference = settings.get("reference_width_mm")
+    p0 = float(settings["p0"]) if settings else None
+    reference = float(settings["reference_width_mm"]) if settings else None
     by_width = {}
     diagnostics = {
         "reference_width_mm": reference,
@@ -270,7 +265,6 @@ def compare_thickness(measurements, results):
             zero_stiffness = stiffness_at_load(p0, kb, model)
         except (ValueError, ArithmeticError):
             continue
-        # Sm(P)とSm(P0)を個別に引く際の桁落ちを避ける。
         predicted = gap + ((load - p0) / kb) * (2 / (stiffness + zero_stiffness))
         error = predicted - thickness
         if math.isfinite(predicted) and math.isfinite(error):
@@ -280,23 +274,24 @@ def compare_thickness(measurements, results):
 
 
 def main():
-    input_path = MEASUREMENTS_FILE
     try:
-        measurements, points_by_side = read_measurements(input_path)
-        input_path = CONDITIONS_FILE
-        measured_sides = {side for side, points in points_by_side.items() if points}
-        conditions = read_conditions(input_path, measured_sides)
-    except (OSError, UnicodeError, OverflowError):
-        print(f"{input_path}: 読込失敗", file=sys.stderr)
+        measurements, points_by_side = read_measurements(MEASUREMENTS_FILE)
+    except OSError:
+        print(f"{MEASUREMENTS_FILE}: 読込失敗", file=sys.stderr)
         return 2
     except ValueError as error:
-        print(f"{input_path}: {error}", file=sys.stderr)
+        print(f"{MEASUREMENTS_FILE}: {error}", file=sys.stderr)
+        return 2
+    try:
+        validate_conditions(points_by_side)
+    except ValueError as error:
+        print(f"CONDITIONS: {error}", file=sys.stderr)
         return 2
 
-    results = {key: conditions[key] for key in CONDITION_KEYS}
+    results = {key: CONDITIONS[key] for key in CONDITION_KEYS}
     with np.errstate(over="raise", invalid="raise", divide="raise"):
         for side in SIDES:
-            results[side] = fit_side(points_by_side[side], conditions.get(side, {}))
+            results[side] = fit_side(points_by_side[side], CONDITIONS.get(side, {}))
     comparison, errors = compare_thickness(measurements, results)
 
     try:

@@ -66,7 +66,7 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
 
 ## 手入力の測定値から係数を求める
 
-試行用のフォルダをリポジトリ外に作り、次の2ファイルを置きます。ロガーやカメラを接続せずに実行できます。
+試行用のフォルダをリポジトリ外に作り、測定CSVを置きます。ロガーやカメラを接続せずに実行できます。
 
 1. `measurements.csv` に、同じ側・位置で対応する板幅、片側荷重、ロール開き量、出側実測板厚を記入します。表計算ソフトから保存する場合はCSV UTF-8を選びます。下記のヘッダーと列順を使い、小数点は `.`、長さの単位はmmとします。
 
@@ -74,25 +74,20 @@ Webカメラ・動画・東芝テリー・ロガーで同じ `.venv` を使い�
    side,width_mm,load,gap_mm,measured_thickness_mm
    ```
 
-2. `conditions.toml` に実験時の条件を記入します。以下は記入例です。各値を手元の記録に置き換えます。基準幅にはその側の測定データの最大板幅を指定し、同じ幅の点では `width_mm` を揃えます。DR側の実測もある場合は同じ形式で `[dr]` を追加します。
-
-   ```toml
-   roll = "試験ロールA"
-   zero_reference = "試験時のゼロ設定A"
-   load_unit = "ton"
-
-   [op]
-   p0 = 7.0
-   reference_width_mm = 1000.0
-   ```
-
-3. `src/fit_mill_model.py` 冒頭の `MEASUREMENTS_FILE`、`CONDITIONS_FILE`、`OUTPUT_ROOT` を設定し、引数なしで実行します。相対パスはコマンドを実行するフォルダが基準です。
+2. `src/fit_mill_model.py` 冒頭で入出力先と実験条件を設定します。例の値を手元の記録に置き換え、測定した側の条件を `op` または `dr` に記入します。基準幅にはその側の測定データの最大板幅を指定し、同じ幅の点では `width_mm` を揃えます。相対パスはコマンドを実行するフォルダが基準です。
 
    ```python
    MEASUREMENTS_FILE = Path(r"C:\measurement\trial-01\measurements.csv")
-   CONDITIONS_FILE = Path(r"C:\measurement\trial-01\conditions.toml")
    OUTPUT_ROOT = Path(r"C:\measurement\trial-01")
+   CONDITIONS = {
+       "roll": "試験ロールA",
+       "zero_reference": "試験時のゼロ設定A",
+       "load_unit": "ton",
+       "op": {"p0": 7.0, "reference_width_mm": 1000.0},
+   }
    ```
+
+3. 引数なしで実行します。
 
    ```powershell
    uv run python src/fit_mill_model.py
