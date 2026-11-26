@@ -64,11 +64,6 @@ def main():
 
 
 def select_points(image, radius, length_radius):
-    backend = cv2.currentUIFramework()
-    if backend != "QT":
-        raise RuntimeError(
-            f"Qt版OpenCVが必要（現在: {backend}）。READMEのQt環境で起動してください"
-        )
     height, width = image.shape[:2]
     points = []
     pressed = False
@@ -114,15 +109,7 @@ def select_points(image, radius, length_radius):
         while True:
             preview = image.copy()
             for index, (x, y) in enumerate(points):
-                x_radius, y_radius = radii[index % 7]
-                color = (0, 255, 255) if index < 42 else (255, 255, 0)
-                cv2.rectangle(
-                    preview,
-                    (x - x_radius, y - y_radius),
-                    (x + x_radius, y + y_radius),
-                    color,
-                    1,
-                )
+                preview[y, x] = (0, 255, 255) if index < 42 else (255, 255, 0)
             if len(points) == 84:
                 title = "84/84 - ENTER: save calibration"
             else:

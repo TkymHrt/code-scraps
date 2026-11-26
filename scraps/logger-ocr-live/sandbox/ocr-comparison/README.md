@@ -31,10 +31,9 @@ $qtMamba = Join-Path $env:LOCALAPPDATA 'code-scraps/qt-tools/Library/bin/microma
 $qtRoot = Join-Path $env:LOCALAPPDATA 'code-scraps/mamba'
 $qtPrefix = Join-Path $env:LOCALAPPDATA 'code-scraps/logger-ocr-qt'
 & $qtMamba create --root-prefix $qtRoot --prefix $qtPrefix --file sandbox/ocr-comparison/environment-qt.yml --yes
-& $qtMamba run --prefix $qtPrefix python -c "import cv2; print(cv2.__version__, cv2.currentUIFramework())"
 ```
 
-`5.0.0 QT`のように`QT`が出ることを確認します。校正はQt以外では起動時にエラーにします。Qt環境にはpip版OpenCVを重ねて入れず、`uv sync`も実行しません。必要なDLLの検索先を設定するため、環境内の`python.exe`を直接実行せず、上の`micromamba run`経由で起動します。
+Qt環境にはpip版OpenCVを重ねて入れず、`uv sync`も実行しません。必要なDLLの検索先を設定するため、`micromamba run`経由で起動します。
 
 ## 1. 試験画像を用意する
 
@@ -119,7 +118,7 @@ SAMPLE_LENGTH_RADIUS = None
 1. 全セグメントの位置が分かる画像を使います。可能なら両計器の表示テストを利用します。
 2. **OP側を先に**、左から各桁の上→右上→右下→下→左下→左上→中央をクリックします。42点です。
 3. 続けて**DR側**を同じ順で42点指定します。画像の左にある計器がOPとは限りません。実機の対応を確認します。
-4. 校正画面は元画像の幅・高さで開きます。選択した読み取り範囲はOPが黄色、DRが水色の1画素幅の枠です。次に選ぶ側・桁・セグメントはタイトルバーに表示します。84点を確認し、Enterで保存します。
+4. 校正画面は元画像の幅・高さで開きます。選択済みの位置は元画像上の1画素で示し、OPは黄色、DRは水色です。次に選ぶ側・桁・セグメントはタイトルバーに表示します。84点を確認し、Enterで保存します。
 
 画像上の**ホイールでカーソル位置を中心に拡大縮小**し、拡大中の**左ドラッグで移動**します。Qt標準ツールバーの元のサイズへ戻すボタンで全体表示に戻せます。拡大・移動モードの切替は不要です。点は移動せずに左クリックを離したときだけ確定し、ドラッグ操作は点として登録しません。
 

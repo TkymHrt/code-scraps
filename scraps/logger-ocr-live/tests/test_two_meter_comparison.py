@@ -345,9 +345,7 @@ class TwoMeterCalibrationTests(unittest.TestCase):
 
         with patch.multiple(
             calibrate.cv2,
-            currentUIFramework=Mock(return_value="QT"),
             namedWindow=Mock(),
-            resizeWindow=Mock(),
             destroyAllWindows=Mock(),
             setMouseCallback=callback,
             setWindowTitle=title,
@@ -405,15 +403,6 @@ class TwoMeterCalibrationTests(unittest.TestCase):
             ]
         )
         self.assertEqual(actual, points)
-
-    def test_wrong_backend_is_reported_before_opening_a_window(self):
-        with (
-            patch.object(calibrate.cv2, "currentUIFramework", return_value="WIN32"),
-            patch.object(calibrate.cv2, "namedWindow") as window,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Qt版OpenCV"):
-                calibrate.select_points(np.zeros((320, 640, 3), dtype=np.uint8), 1, 3)
-            window.assert_not_called()
 
     def test_general_image_input_saves_both_sides_and_cancel_does_not_save(self):
         settings = calibration_settings()
