@@ -133,9 +133,9 @@ uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --wit
 | `models.json` | 使用条件、C1〜C5などの係数、感度分析の係数、分割ごとの行番号と現行法の失敗理由 |
 | `residuals.png`、`extension.png`、`validation.png` | 幅別板厚誤差、実測・予測伸び、除外方法別のMAE。比較対象をすべて予測できなかった棒には件数を表示 |
 
-本報告の出力は [集計CSV](results/study-20261126-224350-732569/metrics.csv)、[点別CSV](results/study-20261126-224350-732569/points.csv)、[検証結果のPNG](results/study-20261126-224350-732569/validation.png) から確認できる。
+片側5 tfで試算した参考結果を保存した。[除外検証の集計CSV](reference-results/metrics.csv)、[感度分析CSV](reference-results/sensitivity.csv)、[除外検証のMAE図](reference-results/validation.png)、[最初の3方式の集計CSV](reference-results/summary.csv)、[板幅別のMAE図](reference-results/mae_by_width.png) を参照。
 
-[比較スクリプト](compare_mill_models.py) は [現行スクリプト](../../src/fit_mill_model.py) を呼び出して比較する。現行スクリプトのコードと設定は維持した。実測CSVと生成物は作業ツリーに保存し、Gitのコミット対象から除外している。
+[比較スクリプト](compare_mill_models.py) は [現行スクリプト](../../src/fit_mill_model.py) を呼び出して比較する。現行スクリプトのコードと設定は維持した。実測CSVと実行ごとの出力フォルダは作業ツリーに保存し、Gitのコミット対象から除外している。
 
 ## 最初の板厚誤差比較だけを再表示する
 
