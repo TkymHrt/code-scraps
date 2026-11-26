@@ -24,41 +24,58 @@ DIGITS = {
     "1111011": "9",
     "0000000": " ",
 }
-OFF_FRACTION = 0.15
-ON_FRACTION = 0.65
 
 
-def read_display(binary, points, radius, length_radius):
+def read_display(binary, points, side):
     height, width = binary.shape
+    points = np.asarray(points)
+    if points.shape != (6, 7, 2) or points.dtype.kind not in "iu":
+        raise ValueError(f"{side}: 校正点は各42点の整数座標が必要")
+    columns, rows = points[:, :, 0], points[:, :, 1]
+    if np.any((columns < 0) | (columns >= width) | (rows < 0) | (rows >= height)):
+        raise ValueError(f"{side}: 校正点が画像外")
+
+    # shortcut: 各点は中心1画素。隣接画素とのばらつきで誤読する場合に範囲を広げる。
+    lit = binary[rows, columns] != 0
     display = ""
-    for digit in points:
-        pattern = ""
-        for segment, (x, y) in enumerate(digit):
-            rx, ry = radius, length_radius
-            if segment in (0, 3, 6):
-                rx, ry = length_radius, radius
-            if not (rx <= x < width - rx and ry <= y < height - ry):
-                raise ValueError(f"校正点の読み取り範囲が画像外（{x}, {y}）")
-            sample = binary[y - ry : y + ry + 1, x - rx : x + rx + 1]
-            fraction = np.mean(sample != 0)
-            if fraction >= ON_FRACTION:
-                pattern += "1"
-            elif fraction <= OFF_FRACTION:
-                pattern += "0"
-            else:
-                return "欠測 (ambiguous)"
-        if pattern not in DIGITS:
-            return "欠測 (invalid_pattern)"
-        display += DIGITS[pattern]
-    if not display.lstrip().isdigit():
-        return "欠測 (invalid_display)"
-    return f"{display!r} (ok)"
+    for digit in lit:
+        pattern = "".join("1" if segment else "0" for segment in digit)
+        decoded = DIGITS.get(pattern)
+        if decoded is None:
+            return None
+        display += decoded
+    return int(display) if display.lstrip().isdigit() else None
 
 
 def main():
     raw = np.load(FRAME, allow_pickle=False)
+    if (
+        not isinstance(raw, np.ndarray)
+        or raw.ndim != 2
+        or raw.dtype != np.uint8
+        or min(raw.shape) < 3
+    ):
+        raise ValueError(f"BayerBG8は縦横3画素以上の2次元uint8配列が必要（{FRAME}）")
+    if not 0 <= THRESHOLD <= 255:
+        raise ValueError(f"THRESHOLDは0～255（{THRESHOLD}）")
     gray = cv2.cvtColor(raw, cv2.COLOR_BayerBGGR2GRAY)
     _, binary = cv2.threshold(gray, THRESHOLD, 255, cv2.THRESH_BINARY)
+    readings = {}
+    if CALIBRATION is not None:
+        calibration = json.loads(CALIBRATION.read_text(encoding="utf-8-sig"))
+        if calibration["frame_size_px"] != list(binary.shape[::-1]):
+            raise ValueError(f"撮影と校正の画像サイズが不一致（{CALIBRATION}）")
+        reflection = calibration["reflection"]
+        aligned = binary
+        if reflection != "none":
+            aligned = cv2.flip(
+                binary, {"horizontal": 1, "vertical": 0, "both": -1}[reflection]
+            )
+        for side in ("op", "dr"):
+            readings[side] = read_display(
+                aligned, calibration[f"{side}_points_px"], side
+            )
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=False)
     for name, image in (("gray.png", gray), ("binary.png", binary)):
         path = OUTPUT_DIR / name
@@ -68,25 +85,8 @@ def main():
         path.write_bytes(encoded.tobytes())
         print(path)
 
-    if CALIBRATION is None:
-        return
-    calibration = json.loads(CALIBRATION.read_text(encoding="utf-8-sig"))
-    if calibration["frame_size_px"] != list(binary.shape[::-1]):
-        raise ValueError(f"撮影と校正の画像サイズが不一致（{CALIBRATION}）")
-    reflection = calibration["reflection"]
-    if reflection != "none":
-        binary = cv2.flip(
-            binary, {"horizontal": 1, "vertical": 0, "both": -1}[reflection]
-        )
-    radius = calibration["sample_radius_px"]
-    length_radius = calibration["sample_length_radius_px"]
-    if length_radius is None:
-        length_radius = radius
-    for side in ("op", "dr"):
-        reading = read_display(
-            binary, calibration[f"{side}_points_px"], radius, length_radius
-        )
-        print(f"{side.upper()} {reading}")
+    for side, value in readings.items():
+        print(f"{side.upper()} {'欠測' if value is None else value}")
 
 
 if __name__ == "__main__":

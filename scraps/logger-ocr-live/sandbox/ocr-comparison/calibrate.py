@@ -9,8 +9,6 @@ FOLDER = Path(__file__).resolve().parent
 SOURCE = FOLDER / "results/snapshot-01/binary.png"
 OUTPUT = FOLDER / "calibration.json"
 REFLECTION = "none"
-SAMPLE_RADIUS = 1
-SAMPLE_LENGTH_RADIUS = None
 
 SIDES = ("op", "dr")
 SEGMENT_NAMES = (
@@ -27,33 +25,31 @@ SEGMENT_NAMES = (
 def main():
     if OUTPUT.exists():
         raise FileExistsError(f"校正保存先が既に存在（{OUTPUT}）")
-    length_radius = SAMPLE_LENGTH_RADIUS
-    if length_radius is None:
-        length_radius = SAMPLE_RADIUS
-
     encoded = np.frombuffer(SOURCE.read_bytes(), dtype=np.uint8)
     image = None
     if encoded.size:
-        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    if image is None:
-        raise ValueError(f"校正画像を読めない（{SOURCE}）")
+        image = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
+    if (
+        image is None
+        or image.ndim != 2
+        or image.dtype != np.uint8
+        or np.any((image != 0) & (image != 255))
+    ):
+        raise ValueError(f"校正には固定しきい値で保存した二値画像が必要（{SOURCE}）")
     if REFLECTION != "none":
         image = cv2.flip(
             image, {"horizontal": 1, "vertical": 0, "both": -1}[REFLECTION]
         )
-    height, width = image.shape[:2]
+    height, width = image.shape
 
-    points = select_points(image, SAMPLE_RADIUS, length_radius)
+    points = select_points(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
     if points is None:
         print("校正中止。保存していません。", file=sys.stderr)
         return
 
     settings = {
-        "source_image": str(SOURCE.resolve()),
         "frame_size_px": [width, height],
         "reflection": REFLECTION,
-        "sample_radius_px": SAMPLE_RADIUS,
-        "sample_length_radius_px": SAMPLE_LENGTH_RADIUS,
         "op_points_px": np.array(points[:42]).reshape(6, 7, 2).tolist(),
         "dr_points_px": np.array(points[42:]).reshape(6, 7, 2).tolist(),
     }
@@ -63,15 +59,11 @@ def main():
     print(f"校正保存: {OUTPUT}")
 
 
-def select_points(image, radius, length_radius):
+def select_points(image):
     height, width = image.shape[:2]
     points = []
     pressed = False
     dragged = False
-    radii = [
-        (length_radius, radius) if segment in (0, 3, 6) else (radius, length_radius)
-        for segment in range(7)
-    ]
 
     def on_mouse(event, x, y, flags, _parameter):
         nonlocal pressed, dragged
@@ -95,9 +87,8 @@ def select_points(image, radius, length_radius):
         # Qtは左ドラッグで移動するため、押した瞬間ではなくクリック完了で点を選ぶ。
         if not select or len(points) == 84:
             return
-        x_radius, y_radius = radii[len(points) % 7]
-        if not (x_radius <= x < width - x_radius and y_radius <= y < height - y_radius):
-            print(f"読み取り範囲が画像外（{x}, {y}）。別の点を選択", file=sys.stderr)
+        if not (0 <= x < width and 0 <= y < height):
+            print(f"校正点が画像外（{x}, {y}）。別の点を選択", file=sys.stderr)
             return
         # Qtが拡大・移動を戻した元画像座標を渡すので、ここで再変換しない。
         points.append([x, y])
