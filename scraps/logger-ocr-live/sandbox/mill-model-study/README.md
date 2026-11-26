@@ -135,7 +135,7 @@ uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --wit
 
 片側5 tfで試算した参考結果を保存した。[除外検証の集計CSV](reference-results/metrics.csv)、[感度分析CSV](reference-results/sensitivity.csv)、[除外検証のMAE図](reference-results/validation.png)、[最初の3方式の集計CSV](reference-results/summary.csv)、[板幅別のMAE図](reference-results/mae_by_width.png) を参照。
 
-[比較スクリプト](compare_mill_models.py) は [現行スクリプト](../../src/fit_mill_model.py) を呼び出して比較する。現行スクリプトのコードと設定は維持した。実測CSVと実行ごとの出力フォルダは作業ツリーに保存し、Gitのコミット対象から除外している。
+[比較スクリプト](compare_mill_models.py) は [現行スクリプト](../../src/fit_mill_model.py) を呼び出して比較する。実行ごとの出力フォルダ `results/` はGitのコミット対象から除外している。
 
 ## 最初の板厚誤差比較だけを再表示する
 
@@ -153,4 +153,4 @@ uv run --no-project --python 3.13 python "$study/organize_errors.py" "$study/fir
 uv run --no-project --python 3.13 --with matplotlib==3.11.2 python "$study/plot_errors.py" "$tables"
 ```
 
-誤差は予測板厚−実測板厚。元の予測が空欄の点は比較表でも空欄で残し、集計の対象件数と予測できた件数を併記する。MAE図は全点を予測できた組だけ棒で表示する。比較は係数を求めたときと同じ測定点での誤差を表す。`first-comparison-points.csv` も実測値を含むため、Gitのコミット対象から除外している。
+誤差は予測板厚−実測板厚。元の予測が空欄の点は比較表でも空欄で残し、集計の対象件数と予測できた件数を併記する。MAE図は全点を予測できた組だけ棒で表示する。比較は係数を求めたときと同じ測定点での誤差を表す。
