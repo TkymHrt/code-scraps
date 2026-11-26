@@ -30,8 +30,6 @@ def checked_value(result, operation):
 def main(frame_count, output_dir):
     if frame_count < 1:
         raise ValueError("FRAME_COUNTは1以上")
-    if CAMERA_INDEX < 0:
-        raise ValueError("CAMERA_INDEXは0以上")
 
     if output_dir.exists():
         raise FileExistsError(f"保存先が既に存在（{output_dir}）")
@@ -41,7 +39,7 @@ def main(frame_count, output_dir):
     with ExitStack() as cleanup:
         system = pytelicam.get_camera_system(int(pytelicam.CameraType.Gev))
         cleanup.callback(system.terminate)
-        if CAMERA_INDEX >= system.get_num_of_cameras():
+        if not 0 <= CAMERA_INDEX < system.get_num_of_cameras():
             raise IndexError(f"カメラ番号範囲外（{CAMERA_INDEX}）")
         camera_info = system.get_camera_information(CAMERA_INDEX)
         device = system.create_device_object(CAMERA_INDEX)
@@ -79,11 +77,6 @@ def main(frame_count, output_dir):
                 control.get_balance_white_auto(), "BalanceWhiteAuto"
             ).name,
         }
-        if settings["exposure_control"] != "Manual" or settings["gain_auto"] != "Off":
-            raise ValueError("露光はManual、GainAutoはOffに設定")
-        if settings["white_balance_auto"] != "Off":
-            raise ValueError("BalanceWhiteAutoはOffに設定")
-
         session = {
             "model": camera_info.cam_model,
             "serial_number": camera_info.cam_serial_number,
@@ -115,8 +108,6 @@ def main(frame_count, output_dir):
             raise ValueError("カメラのReverseX・ReverseYはOffに設定")
         if any(offset % 2 for offset in session["offset"]):
             raise ValueError("OffsetX・OffsetYは偶数に設定")
-        if session["timestamp_tick_frequency_hz"] <= 0:
-            raise ValueError("GevTimestampTickFrequencyは正の値")
 
         output_dir.mkdir(parents=True)
         (output_dir / "session.json").write_text(

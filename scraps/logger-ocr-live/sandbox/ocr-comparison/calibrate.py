@@ -27,15 +27,9 @@ SEGMENT_NAMES = (
 def main():
     if OUTPUT.exists():
         raise FileExistsError(f"校正保存先が既に存在（{OUTPUT}）")
-    if type(SAMPLE_RADIUS) is not int or SAMPLE_RADIUS < 0:
-        raise ValueError(f"SAMPLE_RADIUSは0以上の整数（{SAMPLE_RADIUS}）")
     length_radius = SAMPLE_LENGTH_RADIUS
     if length_radius is None:
         length_radius = SAMPLE_RADIUS
-    if type(length_radius) is not int or length_radius < SAMPLE_RADIUS:
-        raise ValueError("SAMPLE_LENGTH_RADIUSはNoneかSAMPLE_RADIUS以上の整数")
-    if REFLECTION not in ("none", "horizontal", "vertical", "both"):
-        raise ValueError(f"REFLECTION不正（{REFLECTION}）")
 
     encoded = np.frombuffer(SOURCE.read_bytes(), dtype=np.uint8)
     image = None

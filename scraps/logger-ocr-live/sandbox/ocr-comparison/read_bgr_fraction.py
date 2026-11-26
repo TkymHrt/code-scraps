@@ -35,19 +35,11 @@ def prepare_samples(calibration, frame_size):
     if calibration["FRAME_SIZE"] != frame_size:
         raise ValueError("撮影と校正のFRAME_SIZEが不一致")
     reflection = calibration["REFLECTION"]
-    if reflection not in ("none", "horizontal", "vertical", "both"):
-        raise ValueError(f"REFLECTION不正（{reflection}）")
     radius = calibration["SAMPLE_RADIUS"]
     length_radius = calibration["SAMPLE_LENGTH_RADIUS"]
     if length_radius is None:
         length_radius = radius
-    if type(radius) is not int or radius < 0:
-        raise ValueError("SAMPLE_RADIUSは0以上の整数")
-    if type(length_radius) is not int or length_radius < radius:
-        raise ValueError("SAMPLE_LENGTH_RADIUSはSAMPLE_RADIUS以上の整数")
     points = np.asarray(calibration["SEGMENT_POINTS"])
-    if points.shape != (6, 7, 2) or not np.issubdtype(points.dtype, np.integer):
-        raise ValueError("SEGMENT_POINTSは6桁×7点の整数座標")
     width, height = frame_size
     sample_rows = []
     sample_columns = []
@@ -111,11 +103,6 @@ def recognize_display(image, sample_coordinates):
 
 
 def main(capture_dir, calibration_file):
-    if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
-        raise ValueError("0 <= OFF_FRACTION < ON_FRACTION <= 1")
-    if not (0 <= RED_MIN <= 255 and 0 < RED_MARGIN <= 255 and 0 <= WHITE_MIN <= 255):
-        raise ValueError("RED_MIN・WHITE_MINは0〜255、RED_MARGINは1〜255")
-
     session = json.loads((capture_dir / "session.json").read_text(encoding="utf-8-sig"))
     if session["pixel_format"] != "BayerBG8":
         raise ValueError("対応する保存形式はBayerBG8")
@@ -124,8 +111,6 @@ def main(capture_dir, calibration_file):
     if any(offset % 2 for offset in session["offset"]):
         raise ValueError("カメラのOffsetX・OffsetYは偶数の記録が必要")
     width, height = session["frame_size"]
-    if width < 4 or height < 4:
-        raise ValueError("画像サイズは4×4以上")
     calibration = json.loads(calibration_file.read_text(encoding="utf-8-sig"))
     sample_coordinates = prepare_samples(calibration, session["frame_size"])
 

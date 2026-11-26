@@ -36,19 +36,11 @@ PATTERN_TO_DIGIT = {
 def prepare_samples(calibration, side):
     width, height = calibration["frame_size_px"]
     reflection = calibration["reflection"]
-    if reflection not in ("none", "horizontal", "vertical", "both"):
-        raise ValueError(f"reflection不正（{reflection}）")
     radius = calibration["sample_radius_px"]
     length_radius = calibration["sample_length_radius_px"]
     if length_radius is None:
         length_radius = radius
-    if type(radius) is not int or radius < 0:
-        raise ValueError("sample_radius_pxは0以上の整数")
-    if type(length_radius) is not int or length_radius < radius:
-        raise ValueError("sample_length_radius_pxはnullかsample_radius_px以上の整数")
     points = np.asarray(calibration[f"{side}_points_px"])
-    if points.shape != (6, 7, 2) or not np.issubdtype(points.dtype, np.integer):
-        raise ValueError(f"{side}_points_pxは6桁×7点の整数座標")
 
     sample_rows, sample_columns = [], []
     for index, (x, y) in enumerate(points.reshape(42, 2)):
@@ -118,19 +110,6 @@ def read_image(path):
 def main():
     if OUTPUT_DIR.exists():
         raise FileExistsError(f"比較保存先が既に存在（{OUTPUT_DIR}）")
-    if not 0 <= OFF_FRACTION < ON_FRACTION <= 1:
-        raise ValueError("0 <= OFF_FRACTION < ON_FRACTION <= 1")
-    for side, values in THRESHOLDS.items():
-        if not 0 <= values["binary"] <= 255:
-            raise ValueError(f"{side}: binaryは0〜255")
-        block_size = values["block_size"]
-        if type(block_size) is not int or block_size < 3 or block_size % 2 == 0:
-            raise ValueError(f"{side}: block_sizeは3以上の奇数")
-        if not np.isfinite(values["c"]):
-            raise ValueError(f"{side}: cは有限値")
-        if not 0 <= values["off_red"] < values["on_red"] <= 255:
-            raise ValueError(f"{side}: 0 <= off_red < on_red <= 255")
-
     calibration = json.loads(CALIBRATION.read_text(encoding="utf-8-sig"))
     width, height = calibration["frame_size_px"]
     coordinates = {side: prepare_samples(calibration, side) for side in ("op", "dr")}

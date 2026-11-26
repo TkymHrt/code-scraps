@@ -9,7 +9,7 @@
 | `calibrate.py` | 保存した静止画像でOP／DR各42点を指定し、校正JSONを保存 |
 | `compare.py` | 同じ画像・校正点で固定二値化、適応二値化、Bayer赤画素の中央値を比較 |
 
-校正・比較にはNumPyとOpenCVを使います。校正画面は**Qt対応OpenCV**の標準機能で拡大・移動します。以下のコマンドは`logger-ocr-live`フォルダで実行します。スクリプトを別の場所に置く場合、`check_snapshot.py`と`compare.py`は同じフォルダに置きます。
+校正・比較にはNumPyとOpenCVを使います。校正画面は**Qt対応OpenCV**の標準機能で拡大・移動します。以下のコマンドは`logger-ocr-live`フォルダで実行します。各スクリプトは1ファイルで実行できます。別の場所へコピーしたら、先頭の変数に入力・出力のパスを指定します。
 
 ## WindowsのQt環境
 
@@ -49,7 +49,7 @@ $qtPrefix = Join-Path $env:LOCALAPPDATA 'code-scraps/logger-ocr-qt'
    .\.venv\Scripts\python.exe sandbox/ocr-comparison/check_snapshot.py
    ```
 
-2. `results/snapshot-01/gray.png` と `binary.png` を見比べます。点灯線の中央が白く、線同士の隙間が黒くなるかを確認します。しきい値を試すには `check_snapshot.py` の `THRESHOLD`（初期値50）と `OUTPUT_DIR` を変え、同じ `FRAME` で再実行します。
+2. 二値化の入力は反転なし・偶数オフセットのBayerBG8配列（2次元uint8の `.npy`）1枚です。`results/snapshot-01/gray.png` と `binary.png` を見比べます。点灯線の中央が白く、線同士の隙間が黒くなるかを確認します。しきい値を試すには `check_snapshot.py` の `THRESHOLD`（初期値50）と `OUTPUT_DIR` を変え、同じ `FRAME` で再実行します。
 3. 「2. OP／DRを校正する」の手順で、選んだ二値画像に両側各42点を指定し、`calibration.json` を保存します。初期値以外の画像を選んだ場合は `calibrate.py` の `SOURCE` を合わせます。
 4. カメラとROIを固定し、両側に異なる既知の値を表示して数字を控えます。以下の設定を変え、手順1の2コマンドをもう一度実行します。
 
@@ -185,7 +185,7 @@ OUTPUT_DIR = FOLDER / "results/run-01"
 - `ok`の件数を正解件数と扱わない。既知の表示や目視の正解と照合し、誤読と欠測を分ける。
 - 片側の白飛び・反射や表示切替中に、もう片側の読み取りが保たれるかを見る。
 
-形式名の網羅的な検証、位置の自動検出、校正ファイルの自動修復は行いません。読込失敗、画像サイズ・座標・Bayer配列の不一致、赤画素不足、判定閾値の不正、保存先の既存データはチェックします。撮影条件の固定、OP／DRの対応、画像の選択、取付け変更時の再校正は運用で確認します。
+露光・ゲイン・しきい値は撮影条件に合わせて設定します。カメラやROIを動かしたら読み取り位置を再校正します。
 
 ## 既存の1表示比較
 

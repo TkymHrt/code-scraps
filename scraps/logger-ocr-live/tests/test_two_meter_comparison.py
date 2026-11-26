@@ -217,6 +217,45 @@ class TwoMeterTests(unittest.TestCase):
                         mask[rows - top, columns - left], full[rows, columns]
                     )
 
+    def test_snapshot_runs_alone_with_raw_frame_and_optional_calibration(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "check_snapshot.py"
+            shutil.copy(FOLDER / script.name, script)
+            capture = root / "captures/run-01"
+            capture.mkdir(parents=True)
+            raw = make_raw("  0123", "456789", red_only=True)
+            np.save(capture / "frame-000000.npy", raw)
+            subprocess.run(
+                [sys.executable, "-I", script], check=True, capture_output=True
+            )
+            result = root / "results/snapshot-01"
+            gray = cv2.cvtColor(raw, cv2.COLOR_BayerBGGR2GRAY)
+            for name, expected in (("gray", gray), ("binary", (gray > 50) * 255)):
+                pixels = np.frombuffer((result / f"{name}.png").read_bytes(), np.uint8)
+                np.testing.assert_array_equal(
+                    cv2.imdecode(pixels, cv2.IMREAD_GRAYSCALE), expected
+                )
+            (root / "calibration.json").write_text(
+                json.dumps(calibration_settings("both")), encoding="utf-8"
+            )
+            script.write_text(
+                script.read_text(encoding="utf-8")
+                .replace(
+                    "CALIBRATION = None", 'CALIBRATION = FOLDER / "calibration.json"'
+                )
+                .replace("results/snapshot-01", "results/check"),
+                encoding="utf-8",
+            )
+            run = subprocess.run(
+                [sys.executable, "-I", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("OP '  0123' (ok)", run.stdout)
+            self.assertIn("DR '456789' (ok)", run.stdout)
+
     def test_standalone_comparison_needs_no_project_imports_or_sdk(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

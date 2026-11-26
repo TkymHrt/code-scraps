@@ -357,27 +357,20 @@ class CaptureTests(unittest.TestCase):
         device.close.assert_called_once()
         system.terminate.assert_called_once()
 
-    def test_auto_exposure_and_camera_reflection_are_rejected_before_capture(self):
-        for setting in ("auto", "mirror"):
-            sdk, system, device, _images = self.make_sdk()
-            if setting == "auto":
-                device.cam_control.get_exposure_time_control.return_value = (
-                    0,
-                    SimpleNamespace(name="Auto"),
-                )
-            else:
-                device.cam_control.get_reverse_x.return_value = (0, True)
-            with TemporaryDirectory() as directory:
-                folder = Path(directory) / "not-created"
-                with (
-                    patch.dict(sys.modules, {"pytelicam": sdk}),
-                    self.assertRaises(ValueError),
-                ):
-                    capture.main(1, folder)
-                self.assertFalse(folder.exists())
-            device.cam_stream.start.assert_not_called()
-            device.close.assert_called_once()
-            system.terminate.assert_called_once()
+    def test_camera_reflection_is_rejected_before_capture(self):
+        sdk, system, device, _images = self.make_sdk()
+        device.cam_control.get_reverse_x.return_value = (0, True)
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "not-created"
+            with (
+                patch.dict(sys.modules, {"pytelicam": sdk}),
+                self.assertRaises(ValueError),
+            ):
+                capture.main(1, folder)
+            self.assertFalse(folder.exists())
+        device.cam_stream.start.assert_not_called()
+        device.close.assert_called_once()
+        system.terminate.assert_called_once()
 
     def test_existing_output_folder_is_not_overwritten(self):
         with TemporaryDirectory() as directory:
