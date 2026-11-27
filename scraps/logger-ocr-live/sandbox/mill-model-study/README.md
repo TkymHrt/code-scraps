@@ -145,6 +145,13 @@ uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --wit
 
 `results/large-errors-日時/` に `refit_metrics.csv`（除外前後の全点・残した点・外した点の誤差）、`removed_points.csv`（全点から選ばれた除外候補）、`refit_coefficients.csv`、`loo_metrics.csv`（1点ずつ取り分けた誤差）、`loo_splits.csv`（分割ごとの検証行と除外行）、`fit_notes.csv`（予測不能・部分的に推定できた場合の理由）、`loo_mae.png` を保存する。
 
+除外ケースを一つ選び、同じ出力先に次の2図も保存する。冒頭の `PLOT_CASE = None` はロバスト版の誤差上位2点（`REMOVE_COUNTS` に2がなければ最初の点数）を選ぶ。`"manual"`、`"staged_top3"`、`"joint_robust_top2"` などを指定すると切り替えられる。
+
+- `error_by_load.png` は、選んだケースで再推定した後の荷重別・板幅別の誤差。学習から外した点も中抜きの丸で示す。
+- `mae_by_width.png` は、再推定の前後を同じ点で比較したMAE。全点、残した点、外した点の集計と、残した点の板幅別集計を表示する。
+
+この2図は全25点を基に選んだ除外ケースの比較で、1点ずつ取り分けた検証の結果は `loo_mae.png` に示す。
+
 ## 再現手順と保存データ
 
 Python 3.13とuvを使う。リポジトリルートから次を実行する。試算には NumPy 2.5.5、SciPy 1.18.1、Matplotlib 3.11.2 を使用した。

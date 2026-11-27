@@ -16,6 +16,7 @@ from compare_mill_models import (
     read_points,
     write_csv,
 )
+from matplotlib.lines import Line2D
 
 HERE = Path(__file__).resolve().parent
 INPUT_CSV = HERE / "historical.csv"
@@ -24,6 +25,7 @@ P0_TF = 5
 REMOVE_COUNTS = (1, 2, 3)
 # CSVのヘッダーを1行目とする。別の入力に替えた場合は対象行も見直す。
 MANUAL_LINES = (30,)
+PLOT_CASE = None
 
 MODELS = ("staged", "kb1", "joint_linear", "joint_robust")
 RANK_MODELS = ("staged", "joint_robust")
@@ -35,6 +37,126 @@ def largest_errors(predicted, measured, eligible, count):
     if len(errors) <= count or not np.isfinite(errors).all():
         return None
     return indexes[np.argsort(-errors, kind="stable")[:count]]
+
+
+def save_refit_plots(folder, case, widths, loads, measured, kept, before, after):
+    unique_widths = np.unique(widths)
+    rows = (len(unique_widths) + 1) // 2
+    fig, axes = plt.subplots(
+        rows,
+        2,
+        figsize=(10, 3 * rows + 0.6),
+        sharex=True,
+        sharey=True,
+        layout="constrained",
+    )
+    for width, axis in zip(
+        unique_widths, list(axes.flat)[: len(unique_widths)], strict=True
+    ):
+        kept_at_width = (widths == width) & kept
+        removed_at_width = (widths == width) & ~kept
+        for name in MODELS:
+            errors = after[name] - measured
+            axis.scatter(
+                loads[kept_at_width],
+                errors[kept_at_width],
+                color=COLORS[name],
+                s=22,
+                label=MODEL_LABELS[name],
+            )
+            axis.scatter(
+                loads[removed_at_width],
+                errors[removed_at_width],
+                facecolors="none",
+                edgecolors=COLORS[name],
+                s=65,
+            )
+        axis.axhline(0, color="#888888", linestyle="--", linewidth=0.8)
+        axis.set_title(f"{width:g} mm")
+        axis.grid(alpha=0.2)
+    for axis in list(axes.flat)[len(unique_widths) :]:
+        axis.set_visible(False)
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    handles.append(
+        Line2D(
+            [],
+            [],
+            marker="o",
+            color="#333333",
+            markerfacecolor="none",
+            linestyle="none",
+        )
+    )
+    labels.append("Excluded from fit")
+    fig.get_layout_engine().set(rect=(0, 0.14, 1, 0.86))
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncols=3,
+        frameon=False,
+    )
+    fig.suptitle(f"Thickness errors after refit · {case}")
+    fig.supxlabel("OP load (tf)", y=0.10)
+    fig.supylabel("Predicted − measured thickness (mm)")
+    fig.savefig(folder / "error_by_load.png", dpi=220)
+    plt.close(fig)
+
+    subsets = [
+        ("All points", np.ones(len(kept), dtype=bool)),
+        ("Kept", kept),
+        ("Excluded", ~kept),
+        *((f"{width:g} mm", kept & (widths == width)) for width in unique_widths),
+    ]
+    subsets = [(label, mask) for label, mask in subsets if mask.any()]
+    scores = {
+        (phase, label, name): (total, n, mae)
+        for phase, predictions in (("Before", before), ("After", after))
+        for _, label, name, total, n, _, mae, *_ in metric_rows(
+            phase, predictions, measured, subsets
+        )
+    }
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6.5), sharey=True, layout="constrained")
+    positions = np.arange(len(subsets))
+    for axis, name in zip(axes.flat, MODELS, strict=True):
+        for phase, offset, color in (
+            ("Before", -0.18, "#a5aab3"),
+            ("After", 0.18, COLORS[name]),
+        ):
+            rows = [scores[phase, label, name] for label, _ in subsets]
+            axis.bar(
+                positions + offset,
+                [mae if n == total else np.nan for total, n, mae in rows],
+                width=0.34,
+                color=color,
+                label=phase,
+            )
+            for position, (total, n, _) in zip(positions + offset, rows, strict=True):
+                if n != total:
+                    axis.text(
+                        position,
+                        0,
+                        f"{n}/{total}",
+                        rotation=90,
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
+        axis.set_xticks(
+            positions, [label for label, _ in subsets], rotation=25, ha="right"
+        )
+        axis.set_title(MODEL_LABELS[name])
+        axis.grid(axis="y", alpha=0.2)
+        axis.legend(frameon=False)
+    fig.suptitle(f"Thickness MAE before and after refit · {case}")
+    fig.supylabel("Mean absolute error (mm)")
+    fig.supxlabel(
+        "Width groups use kept points only. Fractions show incomplete prediction coverage.",
+        fontsize=9,
+    )
+    fig.savefig(folder / "mae_by_width.png", dpi=220)
+    plt.close(fig)
 
 
 def main():
@@ -78,12 +200,18 @@ def main():
     ]
     if MANUAL_LINES:
         full_cases.insert(0, ("manual", np.flatnonzero(np.isin(lines, MANUAL_LINES))))
+    plot_count = 2 if 2 in REMOVE_COUNTS else REMOVE_COUNTS[0]
+    plot_case = PLOT_CASE if PLOT_CASE is not None else f"joint_robust_top{plot_count}"
+    case_names = [case for case, _ in full_cases]
+    if plot_case not in case_names:
+        raise ValueError(f"PLOT_CASE must be one of {', '.join(case_names)}")
 
     sensitivity = list(
         metric_rows("baseline", models_before, measured, [("all", all_points)])
     )
     removed_points, coefficients = [], []
     skipped = []
+    plot_data = None
     for case, removed in full_cases:
         if removed is None:
             skipped.append([case, "", "ranking model cannot predict every candidate"])
@@ -96,6 +224,8 @@ def main():
         if reason := parameters["staged"]["fit"]["reason"]:
             skipped.append([case, "", reason])
         models_after = {name: predictions.get(name, unavailable) for name in MODELS}
+        if case == plot_case:
+            plot_data = kept, models_after
         subsets = [("all", all_points), ("kept", kept), ("removed", ~kept)]
         sensitivity.extend(
             metric_rows(f"{case}_before", models_before, measured, subsets)
@@ -238,6 +368,20 @@ def main():
         fig.suptitle("Leave-one-out validation after trimming training data")
         fig.savefig(folder / "loo_mae.png", dpi=220)
         plt.close(fig)
+        if plot_data is not None:
+            kept, models_after = plot_data
+            save_refit_plots(
+                folder,
+                plot_case,
+                widths,
+                loads,
+                measured,
+                kept,
+                models_before,
+                models_after,
+            )
+        else:
+            print(f"{plot_case}: refit plots unavailable; see fit_notes.csv")
         folder.rename(result_dir)
 
     for case, subset, name, total, n, _, mae, *_ in validation:
