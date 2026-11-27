@@ -123,8 +123,8 @@ def main(points_csv=POINTS_CSV, output_dir=TABLES_DIR):
             )
         )
         writer.writerows(summary)
-    print(output_dir.resolve())
 
 
 if __name__ == "__main__":
     main()
+    print(TABLES_DIR.resolve())

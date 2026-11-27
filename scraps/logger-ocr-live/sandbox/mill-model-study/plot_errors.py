@@ -7,17 +7,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from organize_errors import TABLES_DIR
 
+ERROR_YLIM = (-0.5, 0.2)
+MAE_YLIM = (0, 0.20)
 
-def main():
-    with (TABLES_DIR / "errors.csv").open(encoding="utf-8-sig", newline="") as stream:
+
+def main(tables_dir=TABLES_DIR):
+    with (tables_dir / "errors.csv").open(encoding="utf-8-sig", newline="") as stream:
         points = list(csv.DictReader(stream))
-    with (TABLES_DIR / "summary.csv").open(encoding="utf-8-sig", newline="") as stream:
+    with (tables_dir / "summary.csv").open(encoding="utf-8-sig", newline="") as stream:
         summary = list(csv.DictReader(stream))
     if not points or not summary:
         raise ValueError("errors.csv and summary.csv must contain rows")
 
-    residual_path = TABLES_DIR / "error_by_load.png"
-    mae_path = TABLES_DIR / "mae_by_width.png"
+    residual_path = tables_dir / "error_by_load.png"
+    mae_path = tables_dir / "mae_by_width.png"
     for path in (residual_path, mae_path):
         if path.exists():
             raise FileExistsError(f"{path} already exists")
@@ -60,6 +63,8 @@ def main():
         axis.grid(alpha=0.2)
     for axis in list(axes.flat)[len(widths) :]:
         axis.set_visible(False)
+    if ERROR_YLIM is not None:
+        axes.flat[0].set_ylim(*ERROR_YLIM)
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.get_layout_engine().set(rect=(0, 0.11, 1, 0.89))
     fig.legend(
@@ -107,6 +112,8 @@ def main():
     axis.set_xticks(range(len(labels)), labels)
     axis.set_title("Mean absolute thickness error by width")
     axis.set_ylabel("MAE (mm)")
+    if MAE_YLIM is not None:
+        axis.set_ylim(*MAE_YLIM)
     axis.set_xlabel("Fractions show prediction coverage when a bar is unavailable.")
     axis.grid(axis="y", alpha=0.2)
     fig.get_layout_engine().set(rect=(0, 0.13, 1, 0.87))
@@ -114,9 +121,8 @@ def main():
     with mae_path.open("xb") as stream:
         fig.savefig(stream, format="png", dpi=220)
     plt.close(fig)
-    print(residual_path.resolve())
-    print(mae_path.resolve())
 
 
 if __name__ == "__main__":
     main()
+    print(TABLES_DIR.resolve())

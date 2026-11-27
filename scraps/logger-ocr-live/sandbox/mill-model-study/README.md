@@ -145,12 +145,11 @@ uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --wit
 
 `results/large-errors-日時/` に `refit_metrics.csv`（除外前後の全点・残した点・外した点の誤差）、`removed_points.csv`（全点から選ばれた除外候補）、`refit_coefficients.csv`、`loo_metrics.csv`（1点ずつ取り分けた誤差）、`loo_splits.csv`（分割ごとの検証行と除外行）、`fit_notes.csv`（予測不能・部分的に推定できた場合の理由）、`loo_mae.png` を保存する。
 
-除外ケースを一つ選び、同じ出力先に次の2図も保存する。冒頭の `PLOT_CASE = None` はロバスト版の誤差上位2点（`REMOVE_COUNTS` に2がなければ最初の点数）を選ぶ。`"manual"`、`"staged_top3"`、`"joint_robust_top2"` などを指定すると切り替えられる。
+冒頭の `PLOT_CASE` で、最初の板幅誤差比較と同じ形式で描くケースを一つ選ぶ。`"full"` は全点、`"manual"` は手動で点を外した版。`"staged_top3"` や `"joint_robust_top2"` も選べる。既定の `None` はロバスト版の誤差上位2点を外す。`REMOVE_COUNTS` に2がなければ最初の点数を使う。
 
-- `error_by_load.png` は、選んだケースで再推定した後の荷重別・板幅別の誤差。学習から外した点も中抜きの丸で示す。
-- `mae_by_width.png` は、再推定の前後を同じ点で比較したMAE。全点、残した点、外した点の集計と、残した点の板幅別集計を表示する。
+出力先のケース名フォルダに `error_by_load.png` と `mae_by_width.png` を保存する。選んだケースに残った点だけで、旧剛性表・幅補正なし・現行幅補正を表示する。旧剛性表は `historical.csv` を使ったときの固定の比較基準。除外点の誤差は `refit_metrics.csv`、1点ずつ取り分けた検証は `loo_mae.png` を参照する。
 
-この2図は全25点を基に選んだ除外ケースの比較で、1点ずつ取り分けた検証の結果は `loo_mae.png` に示す。
+縦軸は [plot_errors.py](plot_errors.py) 冒頭の `ERROR_YLIM`（既定 −0.5～0.2 mm）と `MAE_YLIM`（既定 0～0.2 mm）で共通に設定する。`None` にすると自動で調整する。範囲外の値は図からはみ出すため、点別・集計CSVで確認できる。
 
 ## 再現手順と保存データ
 
