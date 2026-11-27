@@ -32,7 +32,11 @@ MANUAL_LINES = (30,)
 PLOT_CASE = None
 
 MODELS = ("staged", "kb1", "joint_linear", "joint_robust")
-RANK_MODELS = ("staged", "joint_robust")
+RANK_MODELS = {
+    "staged": "Current staged fit",
+    "joint_linear": "Least-squares fit",
+    "joint_robust": "Robust fit",
+}
 
 
 def largest_errors(predicted, measured, eligible, count):
@@ -224,7 +228,7 @@ def main():
 
         score = {(row[0], row[2]): row for row in validation if row[1] == "all"}
         fig, axes = plt.subplots(
-            1, len(RANK_MODELS), figsize=(10, 4.2), sharey=True, layout="constrained"
+            1, len(RANK_MODELS), figsize=(14, 4.2), sharey=True, layout="constrained"
         )
         counts = (0, *REMOVE_COUNTS)
         for axis, rank_model in zip(axes, RANK_MODELS, strict=True):
@@ -239,11 +243,7 @@ def main():
                     marker="o",
                     label=MODEL_LABELS[name],
                 )
-            axis.set_title(
-                "Ranked by current staged fit errors"
-                if rank_model == "staged"
-                else "Ranked by robust fit errors"
-            )
+            axis.set_title(f"Ranked by {RANK_MODELS[rank_model].lower()} errors")
             axis.set_xticks(counts)
             axis.set_xlabel("Training points removed")
             axis.grid(alpha=0.2)
