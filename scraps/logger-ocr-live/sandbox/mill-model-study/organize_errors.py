@@ -1,8 +1,11 @@
-import argparse
 import csv
 import math
 from pathlib import Path
 from statistics import fmean
+
+HERE = Path(__file__).resolve().parent
+POINTS_CSV = HERE / "first-comparison-points.csv"
+TABLES_DIR = HERE / "results" / "first-comparison"
 
 MODELS = {
     "fit_old_thickness_mm": "Historical stiffness",
@@ -21,20 +24,9 @@ POINT_COLUMNS = (
 )
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Organize the first three thickness comparisons."
-    )
-    parser.add_argument(
-        "points_csv", type=Path, help="points.csv from compare_mill_models.py"
-    )
-    parser.add_argument(
-        "output_dir", type=Path, help="new directory for the two tables"
-    )
-    args = parser.parse_args()
-
+def main(points_csv=POINTS_CSV, output_dir=TABLES_DIR):
     points = []
-    with args.points_csv.open(encoding="utf-8-sig", newline="") as stream:
+    with points_csv.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream, strict=True)
         missing = [
             key
@@ -42,7 +34,7 @@ def main():
             if key not in (reader.fieldnames or [])
         ]
         if missing:
-            parser.error(f"{args.points_csv}: missing columns: {', '.join(missing)}")
+            raise ValueError(f"{points_csv}: missing columns: {', '.join(missing)}")
         for row in reader:
             try:
                 source_line = int(row["source_line"])
@@ -68,11 +60,11 @@ def main():
                         (source_line, width, load, model, measured, predicted, error)
                     )
             except (ValueError, TypeError, AttributeError):
-                parser.error(
-                    f"{args.points_csv}:{reader.line_num}: invalid OP measurement or prediction"
-                )
+                raise ValueError(
+                    f"{points_csv}:{reader.line_num}: invalid OP measurement or prediction"
+                ) from None
     if not points:
-        parser.error(f"{args.points_csv}: no measurements")
+        raise ValueError(f"{points_csv}: no measurements")
 
     widths = sorted({point[1] for point in points})
     bands = {
@@ -107,14 +99,14 @@ def main():
                 (group, label, model, len(model_rows), len(errors), bias, mae, maximum)
             )
 
-    args.output_dir.mkdir(parents=True, exist_ok=False)
-    with (args.output_dir / "errors.csv").open(
+    output_dir.mkdir(parents=True, exist_ok=False)
+    with (output_dir / "errors.csv").open(
         "x", encoding="utf-8-sig", newline=""
     ) as stream:
         writer = csv.writer(stream)
         writer.writerow(POINT_COLUMNS)
         writer.writerows(points)
-    with (args.output_dir / "summary.csv").open(
+    with (output_dir / "summary.csv").open(
         "x", encoding="utf-8-sig", newline=""
     ) as stream:
         writer = csv.writer(stream)
@@ -131,7 +123,7 @@ def main():
             )
         )
         writer.writerows(summary)
-    print(args.output_dir.resolve())
+    print(output_dir.resolve())
 
 
 if __name__ == "__main__":

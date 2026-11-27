@@ -1,6 +1,5 @@
 import csv
-import subprocess
-import sys
+import runpy
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,11 +24,7 @@ class MillErrorTablesTest(unittest.TestCase):
                 "3,op,178,40,20,20,20.50,19.75\n",
                 encoding="utf-8",
             )
-            subprocess.run(
-                [sys.executable, ORGANIZER, source, tables],
-                check=True,
-                capture_output=True,
-            )
+            runpy.run_path(str(ORGANIZER))["main"](source, tables)
             with (tables / "errors.csv").open(
                 encoding="utf-8-sig", newline=""
             ) as stream:

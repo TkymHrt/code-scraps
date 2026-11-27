@@ -113,6 +113,38 @@
 
 ロバスト版を検証候補とし、幅一次・二乗和版、幅補正なし、旧剛性表を同じパスで比較する。4幅で共通に測れるOP荷重を選び、可能なら20・35・50・65 tf付近などを別パスで反復する。68 tf超を使う場合は対象幅ごとにその荷重域も測る。OP／DRそれぞれのゼロ荷重・開き量・荷重・対応位置の実測板厚を記録し、同一パスの観測を学習と検証に分けない。荷重帯ごとのMAEに加え、最大絶対誤差と予測できた件数を確認する。
 
+## 誤差の大きい点を外して係数を求め直す
+
+[study_large_errors.py](study_large_errors.py) で、片側5 tf・過去25点について次を比較した。
+
+- 全点を使ったときの絶対誤差で点を並べ、現行幅補正または幅一次ロバスト版の上位1・2・3点を学習から外した。残した点と外した点のそれぞれで、除外前後の予測を**同じ測定点**で比較した。指定行だけを外す試算には、前に確認候補とした557 mm・31.8 tf（CSVの30行目）を使った。
+- 別に、25点を1点ずつ検証用に取り分け、その点を使わず残り24点で係数推定と誤差順位付けを行った。上位の点をさらに外して再推定し、最初に取り分けた1点で評価した。順位は分割ごとに変わる。手動指定行の試算は、全点を見た後の感度確認として扱った。
+
+| 学習点の除外方法 | 幅補正なし | 現行幅補正 | 幅一次・二乗和 | 幅一次・ロバスト |
+|---|---:|---:|---:|---:|
+| 除外なし | 0.050 | 0.092 | 0.046 | 0.040 |
+| 現行幅補正の誤差 上位1点 | 0.050 | 0.075 | 0.042 | 0.037 |
+| 同 上位2点 | 0.051 | 0.068 | 0.042 | 0.035 |
+| 同 上位3点 | 0.054 | 0.061 | 0.042 | 0.035 |
+| 幅一次ロバスト版の誤差 上位1点 | 0.039 | 0.058 | 0.043 | 0.041 |
+| 同 上位2点 | 0.039 | 0.041 | 0.037 | 0.038 |
+| 同 上位3点 | 0.038 | 0.040 | 0.041 | 0.042 |
+
+表は1点ずつ取り分けた検証でのMAE（mm）。すべて25/25点を予測できた。
+
+- 現行幅補正の順位で全25点から上位3点を外すと、対象は393 mm・114.5 tf、302 mm・93.5 tf、393 mm・96.05 tfに集中した。同じ残り22点で現行法のMAEは0.052 → 0.036 mm、外した3点では0.331 → 0.182 mmだった。各幅の高荷重域を薄くするため、除外後の残りだけで精度を判断すると見落としがある。
+- ロバスト版の順位で全点から上位2点を外した場合は557 mm・31.8 tfと393 mm・114.5 tf。現行法のMAEは残した23点で0.066 → 0.025 mm、外した2点では0.309 → 0.227 mmだった。1点ずつ取り分けた検証での現行法の最大絶対誤差は0.369 → 0.207 mm。幅別MAEは302 mmで0.126 → 0.041 mm、393 mmで0.153 → 0.053 mmだった。
+- 557 mm・31.8 tfの1点を指定して外すと、現行法の係数はC1が49.60 → 60.62、C2が34.15 → 24.07に変わった。同じ残り24点でMAEは0.082 → 0.055 mm、外した点の絶対誤差は0.161 → 0.206 mm。まず元の荷重、開き量、板厚の対応を確認する価値がある。
+- 除外なしのロバスト版もMAE 0.040 mmで、点を外した現行法と同程度。誤差順位は当てはめ方で変わり、最大荷重側の測定も候補に入る。原因が確認できた点だけを除外する運用と、全点を使うロバスト版を、別パスで比較する。この25点で比較を繰り返しているため、最良の除外ルールを選んだ後の精度は独立したデータで未確認。
+
+リポジトリルートから次を実行する。入力と保存先は冒頭の `INPUT_CSV`・`OUTPUT_ROOT`、条件は `P0_TF`・`REMOVE_COUNTS`・`MANUAL_LINES` で変更する。手動除外を使わなければ `MANUAL_LINES = ()`。行番号はCSVヘッダーを1行目とする。
+
+```powershell
+uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --with matplotlib==3.11.2 python scraps/logger-ocr-live/sandbox/mill-model-study/study_large_errors.py
+```
+
+`results/large-errors-日時/` に `refit_metrics.csv`（除外前後の全点・残した点・外した点の誤差）、`removed_points.csv`（全点から選ばれた除外候補）、`refit_coefficients.csv`、`loo_metrics.csv`（1点ずつ取り分けた誤差）、`loo_splits.csv`（分割ごとの検証行と除外行）、`fit_notes.csv`（予測不能・部分的に推定できた場合の理由）、`loo_mae.png` を保存する。
+
 ## 再現手順と保存データ
 
 Python 3.13とuvを使う。リポジトリルートから次を実行する。試算には NumPy 2.5.5、SciPy 1.18.1、Matplotlib 3.11.2 を使用した。
@@ -121,7 +153,7 @@ Python 3.13とuvを使う。リポジトリルートから次を実行する。�
 uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --with matplotlib==3.11.2 python scraps/logger-ocr-live/sandbox/mill-model-study/compare_mill_models.py
 ```
 
-[historical.csv](historical.csv) は提示された36行を、空欄も含めて転記した作業用データ。元の剛性表・式は本報告と比較コードに記録した。入力を差し替える場合は `--input`、保存先を変える場合は `--output` を使う。入力のヘッダーは `width_mm,gap_mm,reported_extension_mm,reported_sum_load_t,measured_thickness_mm`。荷重列にはOPの2倍値を入れる。元データの伸び列は空欄でもよく、計算では実測板厚とギャップから伸びを再計算する。任意の入力には旧剛性表や557 mm・31.8 tfの除外検証を自動適用しない。ゼロ荷重の既定値は `--p0 5`、荷重帯の境界は `--load-breaks 25 68`。
+[historical.csv](historical.csv) は提示された36行を、空欄も含めて転記した作業用データ。元の剛性表・式は本報告と比較コードに記録した。比較スクリプト冒頭の `INPUT_CSV`、`OUTPUT_ROOT`、`P0_TF`（既定5 tf）、`LOAD_BREAKS_TF`（既定25・68 tf）で設定を変更できる。入力のヘッダーは `width_mm,gap_mm,reported_extension_mm,reported_sum_load_t,measured_thickness_mm`。荷重列にはOPの2倍値を入れる。元データの伸び列は空欄でもよく、計算では実測板厚とギャップから伸びを再計算する。任意の入力には旧剛性表や557 mm・31.8 tfの除外検証を自動適用しない。
 
 実行ごとに `results/study-日時/` を作り、次を保存する。
 
@@ -141,16 +173,15 @@ uv run --no-project --python 3.13 --with numpy==2.5.5 --with scipy==1.18.1 --wit
 
 最初の全点比較で使った旧剛性表、幅補正なし、現行の幅補正の3方式を取り出す。係数や予測板厚は、比較スクリプトが保存した値を使う。
 
-1. [organize_errors.py](organize_errors.py) に [first-comparison-points.csv](first-comparison-points.csv) と新しい出力先を渡す。このCSVは過去25点の計算結果から必要な8列を取り出したもの。`errors.csv` は元データの行番号・板幅・OP荷重・実測板厚・予測板厚・誤差を1点・1方式につき1行で出力する。`summary.csv` は全体・板幅別・荷重帯別・共通荷重域の件数、平均誤差、平均絶対誤差（MAE）、最大絶対誤差をまとめる。
-2. [plot_errors.py](plot_errors.py) に出力先を渡す。2つの表を読み、幅別の荷重と誤差の散布図 `error_by_load.png` と、全体・幅別のMAE比較 `mae_by_width.png` を作る。
+1. [organize_errors.py](organize_errors.py) は冒頭の `POINTS_CSV` で [first-comparison-points.csv](first-comparison-points.csv) を読む。このCSVは過去25点の計算結果から必要な8列を取り出したもの。`TABLES_DIR` に、点別誤差の `errors.csv` と、全体・板幅別・荷重帯別・共通荷重域の件数や誤差を集計した `summary.csv` を作る。
+2. [plot_errors.py](plot_errors.py) は同じ `TABLES_DIR` の2表を読み、幅別の荷重と誤差の散布図 `error_by_load.png` と、全体・幅別のMAE比較 `mae_by_width.png` を作る。
 
-リポジトリルートから実行する。手元の過去データで誤差整理と作図を試す場合、係数計算を先に実行する必要はない。計算し直した結果を使う場合は、入力CSVを比較スクリプトが出力した `points.csv` に差し替える。
+リポジトリルートから順に実行する。計算し直した結果を使う場合は `POINTS_CSV` を比較スクリプトが出力した `points.csv` に差し替える。再実行して別の結果を残すときは、`TABLES_DIR` を新しいフォルダに変える。
 
 ```powershell
 $study = 'scraps/logger-ocr-live/sandbox/mill-model-study'
-$tables = "$study/results/first-comparison-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-uv run --no-project --python 3.13 python "$study/organize_errors.py" "$study/first-comparison-points.csv" "$tables"
-uv run --no-project --python 3.13 --with matplotlib==3.11.2 python "$study/plot_errors.py" "$tables"
+uv run --no-project --python 3.13 python "$study/organize_errors.py"
+uv run --no-project --python 3.13 --with matplotlib==3.11.2 python "$study/plot_errors.py"
 ```
 
 誤差は予測板厚−実測板厚。元の予測が空欄の点は比較表でも空欄で残し、集計の対象件数と予測できた件数を併記する。MAE図は全点を予測できた組だけ棒で表示する。比較は係数を求めたときと同じ測定点での誤差を表す。

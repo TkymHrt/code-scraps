@@ -1,4 +1,3 @@
-import argparse
 import csv
 import json
 import math
@@ -18,6 +17,11 @@ from scipy.optimize import least_squares
 
 HERE = Path(__file__).resolve().parent
 HISTORICAL = HERE / "historical.csv"
+INPUT_CSV = HISTORICAL
+OUTPUT_ROOT = HERE / "results"
+P0_TF = 5
+LOAD_BREAKS_TF = (25, 68)
+
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 import fit_mill_model as legacy  # noqa: E402
 
@@ -50,6 +54,18 @@ COLORS = dict(
 )
 HISTORICAL_MODELS = {"old", "old_printed", "old_refit", "old_ratio"}
 ROBUST_SCALE_MM = 0.05
+METRIC_HEADER = (
+    "evaluation",
+    "subset",
+    "model",
+    "rows",
+    "predicted_rows",
+    "bias_mm",
+    "mae_mm",
+    "rmse_mm",
+    "max_abs_mm",
+    "within_0.10_mm",
+)
 
 
 def read_points(path):
@@ -386,28 +402,13 @@ def save_plots(folder, data, predictions, scores, p0):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Compare mill models on historical-format OP measurements."
-    )
-    parser.add_argument("--input", type=Path, default=HISTORICAL)
-    parser.add_argument("--output", type=Path, default=HERE / "results")
-    parser.add_argument(
-        "--p0", type=float, default=5, help="OP zero adjustment load in tf"
-    )
-    parser.add_argument(
-        "--load-breaks", type=float, nargs=2, default=(25, 68), metavar=("LOW", "HIGH")
-    )
-    args = parser.parse_args()
-    low, high = args.load_breaks
-    if not all(map(math.isfinite, (args.p0, low, high))) or not (
-        0 <= args.p0 and 0 < low < high
+    low, high = LOAD_BREAKS_TF
+    if not all(map(math.isfinite, (P0_TF, low, high))) or not (
+        0 <= P0_TF and 0 < low < high
     ):
-        parser.error("requires finite P0 >= 0 and 0 < LOW < HIGH")
-    try:
-        data, excluded = read_points(args.input)
-    except (ValueError, OSError, csv.Error) as error:
-        parser.error(str(error))
-    historical = args.input.resolve() == HISTORICAL.resolve()
+        raise ValueError("requires finite P0 >= 0 and 0 < LOW < HIGH")
+    data, excluded = read_points(INPUT_CSV)
+    historical = INPUT_CSV.resolve() == HISTORICAL.resolve()
     lines, width, load, gap, thickness, recorded = data.T
     widths = np.unique(width)
     whole = np.ones(len(data), dtype=bool)
@@ -427,7 +428,7 @@ def main():
         ("common_load", common),
         *((label + " common_load", mask & common) for label, mask in by_width),
     ]
-    predictions, parameters = fit_predictions(data, whole, args.p0, historical)
+    predictions, parameters = fit_predictions(data, whole, P0_TF, historical)
     validation_models = [name for name in MODEL_LABELS if name not in HISTORICAL_MODELS]
     for name in validation_models:
         predictions.setdefault(name, np.full(len(data), np.nan))
@@ -454,7 +455,7 @@ def main():
         pred, folds[name] = validate(
             data,
             cases,
-            args.p0,
+            P0_TF,
             historical,
             validation_models,
         )
@@ -470,7 +471,7 @@ def main():
         )
 
     sensitivity, sensitivity_parameters = [], {}
-    for p0 in sorted({0, 3, 5, 7, 10, args.p0}):
+    for p0 in sorted({0, 3, 5, 7, 10, P0_TF}):
         pred, sensitivity_parameters[f"P0={p0:g}"] = fit_predictions(
             data, whole, p0, historical
         )
@@ -479,7 +480,7 @@ def main():
         flagged = (width == 557) & np.isclose(load, 31.8)
         if flagged.any() and (~flagged).any():
             pred, sensitivity_parameters["without flagged point"] = fit_predictions(
-                data, ~flagged, args.p0, historical
+                data, ~flagged, P0_TF, historical
             )
             for label, values, mask in (
                 ("full fit on remaining points", predictions, ~flagged),
@@ -490,21 +491,9 @@ def main():
                     metric_rows(label, values, thickness, [("all", mask)])
                 )
 
-    result_dir = args.output.resolve() / f"study-{datetime.now():%Y%m%d-%H%M%S-%f}"
-    args.output.mkdir(parents=True, exist_ok=True)
-    metric_header = [
-        "evaluation",
-        "subset",
-        "model",
-        "rows",
-        "predicted_rows",
-        "bias_mm",
-        "mae_mm",
-        "rmse_mm",
-        "max_abs_mm",
-        "within_0.10_mm",
-    ]
-    with TemporaryDirectory(prefix=".study-", dir=args.output) as staging:
+    result_dir = OUTPUT_ROOT.resolve() / f"study-{datetime.now():%Y%m%d-%H%M%S-%f}"
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".study-", dir=OUTPUT_ROOT) as staging:
         folder = Path(staging) / result_dir.name
         folder.mkdir()
         write_csv(
@@ -555,13 +544,13 @@ def main():
                 for i in range(len(data))
             ),
         )
-        write_csv(folder / "metrics.csv", metric_header, scores)
-        write_csv(folder / "sensitivity.csv", metric_header, sensitivity)
+        write_csv(folder / "metrics.csv", METRIC_HEADER, scores)
+        write_csv(folder / "sensitivity.csv", METRIC_HEADER, sensitivity)
         (folder / "models.json").write_text(
             json.dumps(
                 {
-                    "input": str(args.input),
-                    "p0_tf": args.p0,
+                    "input": str(INPUT_CSV),
+                    "p0_tf": P0_TF,
                     "side": "op",
                     "reference_width_mm": max(widths),
                     "common_load_tf": [common_low, common_high]
@@ -584,7 +573,7 @@ def main():
             + "\n",
             encoding="utf-8",
         )
-        save_plots(folder, data, predictions, scores, args.p0)
+        save_plots(folder, data, predictions, scores, P0_TF)
         folder.rename(result_dir)
 
     print(f"OP: {len(data)} included, {len(excluded)} excluded")

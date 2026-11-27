@@ -1,38 +1,26 @@
-import argparse
 import csv
 from math import ceil
-from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from organize_errors import TABLES_DIR
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Plot the measured thickness errors from organize_errors.py."
-    )
-    parser.add_argument(
-        "tables_dir", type=Path, help="directory containing errors.csv and summary.csv"
-    )
-    args = parser.parse_args()
-    with (args.tables_dir / "errors.csv").open(
-        encoding="utf-8-sig", newline=""
-    ) as stream:
+    with (TABLES_DIR / "errors.csv").open(encoding="utf-8-sig", newline="") as stream:
         points = list(csv.DictReader(stream))
-    with (args.tables_dir / "summary.csv").open(
-        encoding="utf-8-sig", newline=""
-    ) as stream:
+    with (TABLES_DIR / "summary.csv").open(encoding="utf-8-sig", newline="") as stream:
         summary = list(csv.DictReader(stream))
     if not points or not summary:
-        parser.error("errors.csv and summary.csv must contain rows")
+        raise ValueError("errors.csv and summary.csv must contain rows")
 
-    residual_path = args.tables_dir / "error_by_load.png"
-    mae_path = args.tables_dir / "mae_by_width.png"
+    residual_path = TABLES_DIR / "error_by_load.png"
+    mae_path = TABLES_DIR / "mae_by_width.png"
     for path in (residual_path, mae_path):
         if path.exists():
-            parser.error(f"{path} already exists")
+            raise FileExistsError(f"{path} already exists")
 
     models = list(dict.fromkeys(row["model"] for row in points))
     styles = dict(
